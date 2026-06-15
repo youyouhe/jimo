@@ -1,0 +1,1 @@
+ALTER TABLE "sys_users" ADD COLUMN "role" varchar(32) DEFAULT 'viewer' NOT NULL;

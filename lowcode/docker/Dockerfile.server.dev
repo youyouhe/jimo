@@ -1,0 +1,29 @@
+FROM node:20-alpine
+
+RUN npm install -g pnpm@9
+
+WORKDIR /app
+
+# Copy workspace config
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* .npmrc ./
+COPY tsconfig.base.json ./
+
+# Copy package.json files for all workspaces (for dependency install layer caching)
+COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
+COPY apps/server/package.json apps/server/tsconfig.json apps/server/nest-cli.json ./apps/server/
+
+# Install all dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code (packages/shared and apps/server/src are mounted as volumes in dev)
+COPY packages/shared/src ./packages/shared/src
+COPY apps/server/src ./apps/server/src
+COPY apps/server/drizzle.config.ts ./apps/server/
+COPY apps/server/migrations ./apps/server/migrations
+
+WORKDIR /app/apps/server
+
+# Run migrations then start with hot reload
+CMD sh -c "npx drizzle-kit migrate && pnpm run db:seed && pnpm run dev"
+
+EXPOSE 8888

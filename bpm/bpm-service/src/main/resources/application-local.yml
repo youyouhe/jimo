@@ -1,0 +1,37 @@
+# ============================================================
+# 本地开发环境 (H2 数据库, 无需安装 MySQL)
+# 启动方式: mvn spring-boot:run -Dspring-boot.run.profiles=local
+# ============================================================
+server:
+  port: 8090
+  servlet:
+    context-path: /bpm
+
+spring:
+  datasource:
+    # H2 文件模式, 数据持久化到磁盘 (纯 H2, 不用 MySQL mode, Flowable 自己检测)
+    url: jdbc:h2:file:./data/bpm-service;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/h2-schema.sql
+      data-locations: classpath:db/h2-seed.sql
+  # H2 Web 控制台 (浏览器访问 http://localhost:8090/bpm/h2)
+  h2:
+    console:
+      enabled: true
+      path: /h2
+      settings:
+        web-allow-others: true
+
+flowable:
+  database-schema-update: true
+  async-executor-activate: false
+
+logging:
+  level:
+    com.example.bpm: INFO
+    org.flowable: WARN

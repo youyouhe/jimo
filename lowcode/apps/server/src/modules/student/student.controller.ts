@@ -1,0 +1,94 @@
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+} from '@nestjs/swagger';
+import { StudentService } from './student.service';
+import { CreateStudentDto } from './dto/create-student.dto';
+import { UpdateStudentDto } from './dto/update-student.dto';
+import { QueryStudentDto } from './dto/query-student.dto';
+import { BatchDeleteDto } from '../../common/dto/batch-delete.dto';
+import {
+  ApiResponse as ApiResp,
+  PaginatedResponse,
+} from '@lowcode/shared';
+import { Student } from '../../db/schema/student';
+
+@ApiTags('lc/student')
+@ApiBearerAuth()
+@Controller('lc/student')
+export class StudentController {
+  constructor(private readonly studentService: StudentService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'Get paginated list of student' })
+  @ApiResponse({ status: 200, description: 'Returns paginated student' })
+  async findAll(@Query() query: QueryStudentDto): Promise<PaginatedResponse<Student>> {
+    const data = await this.studentService.findAll(query);
+    return { code: 0, msg: 'success', data };
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get student by id' })
+  @ApiResponse({ status: 200, description: 'Returns the student' })
+  @ApiResponse({ status: 404, description: 'Student not found' })
+  async findOne(@Param('id') id: string): Promise<ApiResp<Student>> {
+    const data = await this.studentService.findOne(id);
+    return { code: 0, msg: 'success', data };
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create a new student' })
+  @ApiResponse({ status: 201, description: 'Student created successfully' })
+  @ApiResponse({ status: 409, description: 'Unique constraint conflict' })
+  async create(@Body() dto: CreateStudentDto): Promise<ApiResp<Student>> {
+    const data = await this.studentService.create(dto);
+    return { code: 0, msg: 'success', data };
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update student by id' })
+  @ApiResponse({ status: 200, description: 'Student updated successfully' })
+  @ApiResponse({ status: 404, description: 'Student not found' })
+  @ApiResponse({ status: 409, description: 'Unique constraint conflict' })
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateStudentDto,
+  ): Promise<ApiResp<Student>> {
+    const data = await this.studentService.update(id, dto);
+    return { code: 0, msg: 'success', data };
+  }
+
+  @Delete('batch')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Batch delete student by ids' })
+  @ApiResponse({ status: 200, description: 'Student deleted successfully' })
+  async batchRemove(@Body() dto: BatchDeleteDto): Promise<ApiResp<{ count: number }>> {
+    const data = await this.studentService.batchRemove(dto.ids);
+    return { code: 0, msg: 'success', data };
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete student by id' })
+  @ApiResponse({ status: 200, description: 'Student deleted successfully' })
+  @ApiResponse({ status: 404, description: 'Student not found' })
+  async remove(@Param('id') id: string): Promise<ApiResp<null>> {
+    await this.studentService.remove(id);
+    return { code: 0, msg: 'success', data: null };
+  }
+}

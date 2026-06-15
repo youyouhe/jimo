@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:flowable="http://flowable.org/bpmn"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+             targetNamespace="http://flowable.org/bpmn">
+
+    <process id="contractApprovalDynamic" name="合同审批流程(动态指派)" isExecutable="true">
+
+        <startEvent id="start" name="开始"/>
+
+        <!-- 发起人填合同，固定指派给发起人自己 -->
+        <userTask id="submitContract" name="提交合同"
+                  flowable:assignee="${initiator}"/>
+
+        <!-- 部门负责人审批，由 listener 动态解析，不硬编码 -->
+        <userTask id="managerReview" name="部门负责人审批">
+            <extensionElements>
+                <flowable:taskListener event="create"
+                    delegateExpression="${dynamicAssigneeListener}"/>
+            </extensionElements>
+        </userTask>
+
+        <exclusiveGateway id="gateway" name="审批结果"/>
+
+        <userTask id="approvedNotice" name="合同已通过"
+                  flowable:assignee="${initiator}"/>
+        <userTask id="rejectedNotice" name="合同已驳回"
+                  flowable:assignee="${initiator}"/>
+
+        <endEvent id="endApproved" name="通过结束"/>
+        <endEvent id="endRejected" name="驳回结束"/>
+
+        <sequenceFlow id="flow1" sourceRef="start" targetRef="submitContract"/>
+        <sequenceFlow id="flow2" sourceRef="submitContract" targetRef="managerReview"/>
+        <sequenceFlow id="flow3" sourceRef="managerReview" targetRef="gateway"/>
+
+        <sequenceFlow id="flowApproved" sourceRef="gateway" targetRef="approvedNotice" name="通过">
+            <conditionExpression xsi:type="tFormalExpression">${approved}</conditionExpression>
+        </sequenceFlow>
+        <sequenceFlow id="flowRejected" sourceRef="gateway" targetRef="rejectedNotice" name="驳回">
+            <conditionExpression xsi:type="tFormalExpression">${!approved}</conditionExpression>
+        </sequenceFlow>
+
+        <sequenceFlow id="flow4" sourceRef="approvedNotice" targetRef="endApproved"/>
+        <sequenceFlow id="flow5" sourceRef="rejectedNotice" targetRef="endRejected"/>
+
+    </process>
+
+    <bpmndi:BPMNDiagram id="BPMNDiagram_dynamic">
+        <bpmndi:BPMNPlane id="BPMNPlane_dynamic" bpmnElement="contractApprovalDynamic">
+            <bpmndi:BPMNShape id="shape_d_start" bpmnElement="start">
+                <omgdc:Bounds x="180" y="80" width="36" height="36"/>
+                <bpmndi:BPMNLabel><omgdc:Bounds x="183" y="120" width="30" height="14"/></bpmndi:BPMNLabel>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="shape_d_submit" bpmnElement="submitContract">
+                <omgdc:Bounds x="160" y="160" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="shape_d_manager" bpmnElement="managerReview">
+                <omgdc:Bounds x="160" y="280" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="shape_d_gateway" bpmnElement="gateway">
+                <omgdc:Bounds x="175" y="400" width="50" height="50"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="shape_d_approved" bpmnElement="approvedNotice">
+                <omgdc:Bounds x="60" y="520" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="shape_d_rejected" bpmnElement="rejectedNotice">
+                <omgdc:Bounds x="260" y="520" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="shape_d_endApproved" bpmnElement="endApproved">
+                <omgdc:Bounds x="82" y="640" width="36" height="36"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="shape_d_endRejected" bpmnElement="endRejected">
+                <omgdc:Bounds x="282" y="640" width="36" height="36"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNEdge id="edge_d1" bpmnElement="flow1">
+                <omgdi:waypoint x="198" y="116"/><omgdi:waypoint x="200" y="160"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_d2" bpmnElement="flow2">
+                <omgdi:waypoint x="200" y="220"/><omgdi:waypoint x="200" y="280"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_d3" bpmnElement="flow3">
+                <omgdi:waypoint x="200" y="340"/><omgdi:waypoint x="200" y="400"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_dApproved" bpmnElement="flowApproved">
+                <omgdi:waypoint x="175" y="425"/><omgdi:waypoint x="100" y="425"/><omgdi:waypoint x="100" y="520"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_dRejected" bpmnElement="flowRejected">
+                <omgdi:waypoint x="225" y="425"/><omgdi:waypoint x="300" y="425"/><omgdi:waypoint x="300" y="520"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_d4" bpmnElement="flow4">
+                <omgdi:waypoint x="100" y="580"/><omgdi:waypoint x="100" y="640"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_d5" bpmnElement="flow5">
+                <omgdi:waypoint x="300" y="580"/><omgdi:waypoint x="300" y="640"/>
+            </bpmndi:BPMNEdge>
+        </bpmndi:BPMNPlane>
+    </bpmndi:BPMNDiagram>
+</definitions>

@@ -1,0 +1,36 @@
+diff --git a/bin.cjs b/bin.cjs
+index 07274ea6f53fd54a129b3d338892feda6e995cff..85427c928c70e9578873f51df0f4ec7c4f1d073d 100755
+--- a/bin.cjs
++++ b/bin.cjs
+@@ -1447,6 +1447,9 @@ var require_hanji = __commonJS({
+         return;
+       }
+       if (!process.stdin.isTTY || !process.stdout.isTTY) {
++        if (process.env.DRIZZLE_SILENT === '1') {
++          return Promise.resolve({ status: 'submitted', data: null });
++        }
+         return Promise.reject(new Error("Interactive prompts require a TTY terminal (process.stdin.isTTY or process.stdout.isTTY is false). This can happen when running in CI, piped input, or non-interactive shells."));
+       }
+       const closable = (0, readline_1.createClosable)();
+@@ -32749,6 +32752,10 @@ var init_migrate = __esm({
+           deleted: missingItems
+         };
+       }
++      if (process.env.DRIZZLE_SILENT === '1') {
++        console.log(`[drizzle-kit silent] ${entity}: ${newItems.length} created, ${missingItems.length} unknown kept (not dropped)`);
++        return { created: newItems, renamed: [], deleted: [] };
++      }
+       const result = { created: [], renamed: [], deleted: [] };
+       let index6 = 0;
+       let leftMissing = [...missingItems];
+@@ -32800,6 +32807,10 @@ var init_migrate = __esm({
+           deleted: missingItems
+         };
+       }
++      if (process.env.DRIZZLE_SILENT === '1') {
++        console.log(`[drizzle-kit silent] ${entity}: ${newItems.length} created, ${missingItems.length} unknown kept (not dropped)`);
++        return { created: newItems, renamed: [], moved: [], deleted: [] };
++      }
+       const result = { created: [], renamed: [], moved: [], deleted: [] };
+       let index6 = 0;
+       let leftMissing = [...missingItems];

@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:flowable="http://flowable.org/bpmn"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+             targetNamespace="http://flowable.org/bpmn">
+
+    <!-- 多级审批链：提交 -> 部门负责人 -> 分管领导 -> 总裁 -> 归档
+         每个审批人通过引用 DB 中的规则名来解析，不写死任何人       -->
+
+    <process id="contractApprovalChain" name="合同审批链(多级)" isExecutable="true">
+
+        <startEvent id="start" name="开始"/>
+
+        <!-- 发起 -->
+        <userTask id="submitContract" name="提交合同"
+                  flowable:assignee="${initiator}"/>
+
+        <!-- 第1级：部门负责人 | 规则名 deptHead -->
+        <userTask id="level1DeptHead" name="部门负责人审批"
+                  flowable:assignee="${assigneeResolver.resolve('deptHead', initiator)}"/>
+
+        <!-- 第2级：分管领导 | 规则名 divHead -->
+        <userTask id="level2DivHead" name="分管领导审批"
+                  flowable:assignee="${assigneeResolver.resolve('divHead', initiator)}"/>
+
+        <!-- 第3级：公司总裁 | 规则名 ceo -->
+        <userTask id="level3Ceo" name="总裁审批"
+                  flowable:assignee="${assigneeResolver.resolve('ceo', initiator)}"/>
+
+        <endEvent id="endApproved" name="审批完成"/>
+
+        <sequenceFlow id="f1" sourceRef="start" targetRef="submitContract"/>
+        <sequenceFlow id="f2" sourceRef="submitContract" targetRef="level1DeptHead"/>
+        <sequenceFlow id="f3" sourceRef="level1DeptHead" targetRef="level2DivHead"/>
+        <sequenceFlow id="f4" sourceRef="level2DivHead" targetRef="level3Ceo"/>
+        <sequenceFlow id="f5" sourceRef="level3Ceo" targetRef="endApproved"/>
+
+    </process>
+
+    <bpmndi:BPMNDiagram id="diagram_chain">
+        <bpmndi:BPMNPlane id="plane_chain" bpmnElement="contractApprovalChain">
+            <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+                <omgdc:Bounds x="180" y="40" width="36" height="36"/>
+                <bpmndi:BPMNLabel><omgdc:Bounds x="183" y="80" width="30" height="14"/></bpmndi:BPMNLabel>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_submit" bpmnElement="submitContract">
+                <omgdc:Bounds x="160" y="110" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_dept" bpmnElement="level1DeptHead">
+                <omgdc:Bounds x="160" y="220" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_div" bpmnElement="level2DivHead">
+                <omgdc:Bounds x="160" y="330" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_ceo" bpmnElement="level3Ceo">
+                <omgdc:Bounds x="160" y="440" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_end" bpmnElement="endApproved">
+                <omgdc:Bounds x="180" y="560" width="36" height="36"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNEdge id="e1" bpmnElement="f1">
+                <omgdi:waypoint x="198" y="76"/><omgdi:waypoint x="200" y="110"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e2" bpmnElement="f2">
+                <omgdi:waypoint x="200" y="170"/><omgdi:waypoint x="200" y="220"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e3" bpmnElement="f3">
+                <omgdi:waypoint x="200" y="280"/><omgdi:waypoint x="200" y="330"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e4" bpmnElement="f4">
+                <omgdi:waypoint x="200" y="390"/><omgdi:waypoint x="200" y="440"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e5" bpmnElement="f5">
+                <omgdi:waypoint x="200" y="500"/><omgdi:waypoint x="198" y="560"/>
+            </bpmndi:BPMNEdge>
+        </bpmndi:BPMNPlane>
+    </bpmndi:BPMNDiagram>
+</definitions>

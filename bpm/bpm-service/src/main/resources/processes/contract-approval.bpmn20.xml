@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:flowable="http://flowable.org/bpmn"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+             targetNamespace="http://flowable.org/bpmn">
+
+    <process id="contractApproval" name="合同审批流程" isExecutable="true">
+
+        <startEvent id="start" name="开始" flowable:formFieldValidation="true"/>
+        <userTask id="submitContract" name="提交合同" flowable:assignee="${initiator}"/>
+        <userTask id="managerReview" name="经理审批" flowable:assignee="${manager}"/>
+        <exclusiveGateway id="gateway" name="审批结果"/>
+        <userTask id="approvedNotice" name="合同已通过" flowable:assignee="${initiator}"/>
+        <userTask id="rejectedNotice" name="合同已驳回" flowable:assignee="${initiator}"/>
+        <endEvent id="endApproved" name="通过结束"/>
+        <endEvent id="endRejected" name="驳回结束"/>
+
+        <sequenceFlow id="flow1" sourceRef="start" targetRef="submitContract"/>
+        <sequenceFlow id="flow2" sourceRef="submitContract" targetRef="managerReview"/>
+        <sequenceFlow id="flow3" sourceRef="managerReview" targetRef="gateway"/>
+
+        <sequenceFlow id="flowApproved" sourceRef="gateway" targetRef="approvedNotice" name="通过">
+            <conditionExpression xsi:type="tFormalExpression">${approved}</conditionExpression>
+        </sequenceFlow>
+        <sequenceFlow id="flowRejected" sourceRef="gateway" targetRef="rejectedNotice" name="驳回">
+            <conditionExpression xsi:type="tFormalExpression">${!approved}</conditionExpression>
+        </sequenceFlow>
+
+        <sequenceFlow id="flow4" sourceRef="approvedNotice" targetRef="endApproved"/>
+        <sequenceFlow id="flow5" sourceRef="rejectedNotice" targetRef="endRejected"/>
+
+    </process>
+
+    <bpmndi:BPMNDiagram id="BPMNDiagram_contractApproval">
+        <bpmndi:BPMNPlane id="BPMNPlane_contractApproval" bpmnElement="contractApproval">
+            <!-- startEvent -->
+            <bpmndi:BPMNShape id="shape_start" bpmnElement="start">
+                <omgdc:Bounds x="180" y="100" width="36" height="36"/>
+                <bpmndi:BPMNLabel>
+                    <omgdc:Bounds x="183" y="140" width="30" height="14"/>
+                </bpmndi:BPMNLabel>
+            </bpmndi:BPMNShape>
+            <!-- submitContract -->
+            <bpmndi:BPMNShape id="shape_submit" bpmnElement="submitContract">
+                <omgdc:Bounds x="160" y="200" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <!-- managerReview -->
+            <bpmndi:BPMNShape id="shape_manager" bpmnElement="managerReview">
+                <omgdc:Bounds x="160" y="320" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <!-- gateway -->
+            <bpmndi:BPMNShape id="shape_gateway" bpmnElement="gateway">
+                <omgdc:Bounds x="175" y="440" width="50" height="50"/>
+            </bpmndi:BPMNShape>
+            <!-- approvedNotice -->
+            <bpmndi:BPMNShape id="shape_approved" bpmnElement="approvedNotice">
+                <omgdc:Bounds x="60" y="560" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <!-- rejectedNotice -->
+            <bpmndi:BPMNShape id="shape_rejected" bpmnElement="rejectedNotice">
+                <omgdc:Bounds x="260" y="560" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <!-- endApproved -->
+            <bpmndi:BPMNShape id="shape_endApproved" bpmnElement="endApproved">
+                <omgdc:Bounds x="82" y="680" width="36" height="36"/>
+            </bpmndi:BPMNShape>
+            <!-- endRejected -->
+            <bpmndi:BPMNShape id="shape_endRejected" bpmnElement="endRejected">
+                <omgdc:Bounds x="282" y="680" width="36" height="36"/>
+            </bpmndi:BPMNShape>
+
+            <!-- flows -->
+            <bpmndi:BPMNEdge id="edge_flow1" bpmnElement="flow1">
+                <omgdi:waypoint x="198" y="136"/>
+                <omgdi:waypoint x="200" y="200"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_flow2" bpmnElement="flow2">
+                <omgdi:waypoint x="200" y="260"/>
+                <omgdi:waypoint x="200" y="320"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_flow3" bpmnElement="flow3">
+                <omgdi:waypoint x="200" y="380"/>
+                <omgdi:waypoint x="200" y="440"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_flowApproved" bpmnElement="flowApproved">
+                <omgdi:waypoint x="175" y="465"/>
+                <omgdi:waypoint x="100" y="465"/>
+                <omgdi:waypoint x="100" y="560"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_flowRejected" bpmnElement="flowRejected">
+                <omgdi:waypoint x="225" y="465"/>
+                <omgdi:waypoint x="300" y="465"/>
+                <omgdi:waypoint x="300" y="560"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_flow4" bpmnElement="flow4">
+                <omgdi:waypoint x="100" y="620"/>
+                <omgdi:waypoint x="100" y="680"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="edge_flow5" bpmnElement="flow5">
+                <omgdi:waypoint x="300" y="620"/>
+                <omgdi:waypoint x="300" y="680"/>
+            </bpmndi:BPMNEdge>
+        </bpmndi:BPMNPlane>
+    </bpmndi:BPMNDiagram>
+</definitions>
