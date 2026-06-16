@@ -363,6 +363,66 @@ export class AutocodeService {
     } catch {
       this.logger.log(` mock: inserted ${inserted} rows into '${tableName}'`);
     }
+
+    // 5) One-to-many child (detail) tables — insert `count` detail rows per main row,
+    //    linked back via FK. Mirrors the main-table escaping/chunking.
+    const oneToManyFields = activeFields(dto.fields).filter(
+      (f) => f.type === 'relation' && f.relationType === 'one-to-many' && (f.detailFields || []).length > 0,
+    );
+    if (oneToManyFields.length > 0) {
+      // Fetch the main ids we just inserted (latest `count` rows) for FK linkage.
+      let mainIds: string[] = [];
+      try {
+        const idRes = await this.db.execute(
+          sql.raw(`SELECT id FROM "${tableName}" WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ${count}`),
+        );
+        mainIds = (idRes as unknown as any[]).map((r) => r.id);
+      } catch (err: unknown) {
+        this.logger.warn(` mock: failed to fetch main ids for child mock: ${(err as Error).message}`);
+      }
+
+      for (const f of oneToManyFields) {
+        const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
+        const singularMain = singularize(dto.tableName);
+        const singularField = singularize(f.name);
+        const childTable = isExisting ? `lc_${f.relationTable}` : `lc_${singularMain}_${singularField}`;
+        const fkColumn = isExisting ? (f.relationFkColumn || `${singularMain}_id`) : `${singularMain}_id`;
+        // Child business columns: detailFields minus system cols and the self-referential FK.
+        const childFields = (f.detailFields || []).filter(
+          (df) => isBusinessColumn(df.name) && !(df.type === 'relation' && df.relationTable === dto.tableName),
+        );
+        if (childFields.length === 0 || mainIds.length === 0) continue;
+
+        const childRows: Record<string, string | number | boolean | null>[] = [];
+        for (const mainId of mainIds) {
+          for (let j = 0; j < count; j += 1) {
+            const row: Record<string, string | number | boolean | null> = { [fkColumn]: mainId };
+            for (const cf of childFields) {
+              row[cf.name] = generateMockValue(cf, ctx);
+            }
+            childRows.push(row);
+          }
+        }
+
+        const childColNames = [fkColumn, ...childFields.map((cf) => cf.name)];
+        const childCols = childColNames.map((c) => `"${c}"`).join(', ');
+        let childInserted = 0;
+        for (let i = 0; i < childRows.length; i += CHUNK_SIZE) {
+          const chunk = childRows.slice(i, i + CHUNK_SIZE);
+          const valuesSql = chunk
+            .map((row) => `(${childColNames.map((c) => escapeValue(row[c] ?? null)).join(', ')})`)
+            .join(', ');
+          const insertSql = `INSERT INTO "${childTable}" (${childCols}) VALUES ${valuesSql} ON CONFLICT DO NOTHING`;
+          try {
+            await this.db.execute(sql.raw(insertSql));
+            childInserted += chunk.length;
+          } catch (err: unknown) {
+            this.logger.warn(` mock: child chunk insert failed for '${childTable}': ${(err as Error).message}`);
+          }
+        }
+        this.logger.log(` mock: inserted ${childInserted} detail rows into '${childTable}' (${count} per main row)`);
+      }
+    }
   }
 
   async generate(dto: AutoCodeDto): Promise<{ createdFiles: string[] }> {
