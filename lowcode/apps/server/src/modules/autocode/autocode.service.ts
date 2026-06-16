@@ -386,7 +386,10 @@ export class AutocodeService {
         const singularMain = singularize(dto.tableName);
         const singularField = singularize(f.name);
         const childTable = isExisting ? `lc_${f.relationTable}` : `lc_${singularMain}_${singularField}`;
-        const fkColumn = isExisting ? (f.relationFkColumn || `${singularMain}_id`) : `${singularMain}_id`;
+        // FK column must match the generator's naming: toCamelCase(singularMain)_id
+        // (e.g. material_orders -> materialOrder_id, not snake_case material_order_id)
+        const camelMain = singularMain.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+        const fkColumn = isExisting ? (f.relationFkColumn || `${camelMain}_id`) : `${camelMain}_id`;
         // Child business columns: detailFields minus system cols and the self-referential FK.
         const childFields = (f.detailFields || []).filter(
           (df) => isBusinessColumn(df.name) && !(df.type === 'relation' && df.relationTable === dto.tableName),
@@ -2185,7 +2188,7 @@ export class AutocodeService {
     for (const f of dto.fields) {
       if (f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields?.length) {
         const childTable = `lc_${singularize(n.tableName.replace(/^lc_/, ''))}_${singularize(f.name)}`;
-        const fkCol = `${singularize(n.tableName.replace(/^lc_/, ''))}_id`;
+        const fkCol = `${singularize(n.tableName.replace(/^lc_/, '')).replace(/_([a-z])/g, (_, c) => c.toUpperCase())}_id`;
         const childSql = buildCreateTableSql(childTable, f.detailFields, fkCol, n.tableName);
         await this.db.execute(sql.raw(childSql));
       }
