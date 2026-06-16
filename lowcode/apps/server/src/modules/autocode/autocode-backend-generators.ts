@@ -434,7 +434,7 @@ export function generateService(dto: AutoCodeDto): string {
     let childRelJoins = '';
     for (const crf of childRelFields) {
       const crfTarget = deriveNames(crf.relationTable!);
-      const crfDisplay = crf.relationDisplayField || 'name';
+      const crfDisplay = crf.relationDisplayField || 'id';
       childRelImports += `import { ${crfTarget.schemaVar} } from '../../db/schema/${crfTarget.kebabName}';\n`;
       childRelSelectFields += `\n      ${crf.name}_display: ${crfTarget.schemaVar}.${crfDisplay},`;
       childRelJoins += `\n        .leftJoin(${crfTarget.schemaVar}, eq(${childSchemaVar}.${crf.name}, ${crfTarget.schemaVar}.id))`;
@@ -456,7 +456,7 @@ export function generateService(dto: AutoCodeDto): string {
     if (details.length === 0) return;
     const values = details.map((d) => ({
       ${fkColName},
-      ${detailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : null` : `${c.name}: d.${c.name}`).join(',\n      ')},
+      ${detailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : ${c.required ? 'new Date()' : 'null'}` : `${c.name}: d.${c.name}`).join(',\n      ')},
     }));
     await this.db.insert(${childSchemaVar}).values(values);
   }
@@ -480,7 +480,7 @@ export function generateService(dto: AutoCodeDto): string {
       await this.db
         .update(${childSchemaVar})
         .set({
-          ${detailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : null` : `${c.name}: d.${c.name}`).join(',\n          ')},
+          ${detailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : ${c.required ? 'new Date()' : 'null'}` : `${c.name}: d.${c.name}`).join(',\n          ')},
           updatedAt: sql\`NOW()\`,
         })
         .where(eq(${childSchemaVar}.id, d.id));
@@ -521,7 +521,7 @@ ${oneToManyFields.map((field) => {
       let childBatchRelJoins2 = '';
       for (const crf2 of childBatchRelFields2) {
         const crf2Target = deriveNames(crf2.relationTable!);
-        const crf2Display = crf2.relationDisplayField || 'name';
+        const crf2Display = crf2.relationDisplayField || 'id';
         childBatchRelSelect2 += `\n          ${crf2.name}_display: ${crf2Target.schemaVar}.${crf2Display},`;
         childBatchRelJoins2 += `\n            .leftJoin(${crf2Target.schemaVar}, eq(${childSchemaVar}.${crf2.name}, ${crf2Target.schemaVar}.id))`;
       }
@@ -571,12 +571,12 @@ ${oneToManyFields.map((field) => `        await this.remove${toPascalCase(field.
   for (const f of manyToOneFields) {
     if (!f.relationTable) continue;
     if (f.relationTable === dto.tableName) {
-      selfRefSelects += `\n      ${f.name}_display: parent_alias.name,`;
+      selfRefSelects += `\n      ${f.name}_display: parent_alias.${f.relationDisplayField || 'id'},`;
       selfRefJoins += `\n        .leftJoin(parent_alias, eq(${n.schemaVar}.${f.name}, parent_alias.id))`;
       continue;
     }
     const targetNames = deriveNames(f.relationTable);
-    const displayField = f.relationDisplayField || 'name';
+    const displayField = f.relationDisplayField || 'id';
     manyToOneSchemaImports += `import { ${targetNames.schemaVar} } from '../../db/schema/${targetNames.kebabName}';\n`;
     manyToOneSelectFields += `\n      ${f.name}_display: ${targetNames.schemaVar}.${displayField},`;
     manyToOneJoins += `\n        .leftJoin(${targetNames.schemaVar}, eq(${n.schemaVar}.${f.name}, ${targetNames.schemaVar}.id))`;
@@ -669,7 +669,7 @@ ${uniqueChecks}${hasCodeFields ? codeFields.map(f => `    const ${f.name} = awai
       const rows = await tx
         .insert(${n.schemaVar})
         .values({
-${creatableFields.map(f => f.type === 'decimal' ? `          ${f.name}: String(dto.${f.name}),` : f.type === 'timestamp' ? `          ${f.name}: dto.${f.name} ? new Date(dto.${f.name}) : null,` : `          ${f.name}: dto.${f.name},`).join('\n')}${hasCodeFields ? '\n' + codeFields.map(f => `          ${f.name},`).join('\n') : ''}
+${creatableFields.map(f => f.type === 'decimal' ? `          ${f.name}: String(dto.${f.name}),` : f.type === 'timestamp' ? `          ${f.name}: dto.${f.name} ? new Date(dto.${f.name}) : ${f.required ? 'new Date()' : 'null'},` : `          ${f.name}: dto.${f.name},`).join('\n')}${hasCodeFields ? '\n' + codeFields.map(f => `          ${f.name},`).join('\n') : ''}
         })
         .returning();
       const created = rows[0]!;
@@ -687,7 +687,7 @@ ${oneToManyFields.map((field) => {
         await tx.insert(${childSchemaVar}).values(
           (dto.${field.name} as any[]).map((d: any) => ({
             ${fkColName}: created.id,
-            ${detailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : null` : `${c.name}: d.${c.name}`).join(',\n            ')},
+            ${detailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : ${c.required ? 'new Date()' : 'null'}` : `${c.name}: d.${c.name}`).join(',\n            ')},
           })),
         );
       }`;
@@ -700,7 +700,7 @@ ${manyToManyFields.map((f) => `      if (dto.${f.name} && dto.${f.name}.length >
     const rows = await this.db
       .insert(${n.schemaVar})
       .values({
-${creatableFields.map(f => f.type === 'decimal' ? `        ${f.name}: String(dto.${f.name}),` : f.type === 'timestamp' ? `        ${f.name}: dto.${f.name} ? new Date(dto.${f.name}) : null,` : `        ${f.name}: dto.${f.name},`).join('\n')}${hasCodeFields ? '\n' + codeFields.map(f => `        ${f.name},`).join('\n') : ''}
+${creatableFields.map(f => f.type === 'decimal' ? `        ${f.name}: String(dto.${f.name}),` : f.type === 'timestamp' ? `        ${f.name}: dto.${f.name} ? new Date(dto.${f.name}) : ${f.required ? 'new Date()' : 'null'},` : `        ${f.name}: dto.${f.name},`).join('\n')}${hasCodeFields ? '\n' + codeFields.map(f => `        ${f.name},`).join('\n') : ''}
       })
       .returning();
 ${manyToManyFields.length > 0 ? `
