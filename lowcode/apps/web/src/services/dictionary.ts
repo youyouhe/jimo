@@ -237,6 +237,6 @@ export async function deleteDetail(id: string): Promise<void> {
  */
 export async function getDictDetailsByType(type: string): Promise<Array<{ label: string; value: string }>> {
   if (!type) return [];
-  const res = await request.get(`/dictionary-details/by-type/${type}`);
+  const res: any = await request.get(`/dictionary-details/by-type/${type}`);
   return (res || []).map((item: any) => ({ label: item.label, value: item.value }));
 }
