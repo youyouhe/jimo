@@ -5,20 +5,20 @@ RUN npm install -g pnpm@9
 WORKDIR /app
 
 # Copy workspace config
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* .npmrc ./
-COPY tsconfig.base.json ./
+COPY release/lowcode/pnpm-workspace.yaml release/lowcode/package.json release/lowcode/pnpm-lock.yaml* release/lowcode/.npmrc ./
+COPY release/lowcode/tsconfig.base.json ./
 
 # Copy package.json files for dependency layer caching
-COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
-COPY packages/shared/src ./packages/shared/src
-COPY apps/web/package.json apps/web/tsconfig.json ./apps/web/
+COPY release/lowcode/packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
+COPY release/lowcode/packages/shared/src ./packages/shared/src
+COPY release/lowcode/apps/web/package.json apps/web/tsconfig.json ./apps/web/
 
 # Install all dependencies
 RUN pnpm install --frozen-lockfile
 
 # Copy source (apps/web/src and .umirc.ts are mounted as volumes in dev)
-COPY apps/web/src ./apps/web/src
-COPY apps/web/.umirc.ts ./apps/web/
+COPY release/lowcode/apps/web/src ./apps/web/src
+COPY release/lowcode/apps/web/.umirc.ts ./apps/web/
 
 WORKDIR /app/apps/web
 

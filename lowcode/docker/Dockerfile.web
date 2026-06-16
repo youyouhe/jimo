@@ -5,18 +5,18 @@ RUN npm install -g pnpm@9
 
 WORKDIR /app
 
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* .npmrc ./
-COPY tsconfig.base.json ./
+COPY release/lowcode/pnpm-workspace.yaml release/lowcode/package.json release/lowcode/pnpm-lock.yaml* release/lowcode/.npmrc ./
+COPY release/lowcode/tsconfig.base.json ./
 
-COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
-COPY packages/shared/src ./packages/shared/src
+COPY release/lowcode/packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
+COPY release/lowcode/packages/shared/src ./packages/shared/src
 
-COPY apps/web/package.json apps/web/tsconfig.json ./apps/web/
+COPY release/lowcode/apps/web/package.json apps/web/tsconfig.json ./apps/web/
 
 RUN pnpm install --frozen-lockfile
 
-COPY apps/web/src ./apps/web/src
-COPY apps/web/.umirc.ts ./apps/web/
+COPY release/lowcode/apps/web/src ./apps/web/src
+COPY release/lowcode/apps/web/.umirc.ts ./apps/web/
 
 WORKDIR /app/apps/web
 RUN pnpm run build

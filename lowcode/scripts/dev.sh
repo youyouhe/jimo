@@ -23,6 +23,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WEB_DIR="$PROJECT_ROOT/apps/web"
 SERVER_DIR="$PROJECT_ROOT/apps/server"
+SHARED_DIR="$PROJECT_ROOT/packages/shared"
+ENV_FILE="$PROJECT_ROOT/.env"
 PID_DIR="$PROJECT_ROOT/.tmp/pids"
 LOG_DIR="$PROJECT_ROOT/.tmp/logs"
 
@@ -91,6 +93,35 @@ wait_for_port() {
   return 1
 }
 
+# ── 加载环境变量 ──
+load_env() {
+  if [ -f "$ENV_FILE" ]; then
+    set -a
+    source "$ENV_FILE"
+    set +a
+    return 0
+  else
+    warn ".env 文件不存在 ($ENV_FILE)，后端可能因缺少 DATABASE_URL 等变量启动失败"
+    warn "请执行: cp release/lowcode/.env.example release/lowcode/.env"
+    return 1
+  fi
+}
+
+# ── 确保 shared 包已编译 ──
+ensure_shared() {
+  if [ -f "$SHARED_DIR/dist/index.js" ]; then
+    return 0
+  fi
+  log "shared 包未编译，正在构建..."
+  cd "$SHARED_DIR" && pnpm run build
+  if [ -f "$SHARED_DIR/dist/index.js" ]; then
+    log "shared 包编译完成 ✓"
+  else
+    err "shared 包编译失败"
+    return 1
+  fi
+}
+
 # ── 启动后端 ──
 start_backend() {
   local pid
@@ -100,9 +131,26 @@ start_backend() {
   fi
 
   if check_port "$BACKEND_PORT"; then
-    err "端口 $BACKEND_PORT 已被占用，请先释放或更改 PORT 环境变量"
-    return 1
+    # 端口被占用但 PID 文件不存在 → 僵尸进程,自动清理后继续
+    local port_pid
+    port_pid=$(fuser "$BACKEND_PORT/tcp" 2>/dev/null | tr -d ' ' || true)
+    if [ -n "$port_pid" ]; then
+      warn "端口 $BACKEND_PORT 被僵尸进程占用 (PID: $port_pid)，自动释放..."
+      fuser -k "$BACKEND_PORT/tcp" 2>/dev/null || true
+      sleep 1
+      if check_port "$BACKEND_PORT"; then
+        err "端口 $BACKEND_PORT 释放失败，请手动处理: kill -9 $port_pid"
+        return 1
+      fi
+      log "端口 $BACKEND_PORT 已释放 ✓"
+    else
+      err "端口 $BACKEND_PORT 已被占用，请先释放或更改 PORT 环境变量"
+      return 1
+    fi
   fi
+
+  load_env || return 1
+  ensure_shared || return 1
 
   log "启动后端 (NestJS) → 端口 $BACKEND_PORT"
   cd "$SERVER_DIR"
@@ -245,22 +293,8 @@ cleanup_zombies() {
     cleaned=1
   fi
 
-  # 3. 清理旧 gin-vue-admin 的 vite 进程（web/ 目录，非 apps/web/）
-  local vite_pids
-  vite_pids=$(ps aux 2>/dev/null \
-    | grep -E "node.*vite" \
-    | grep -v grep \
-    | grep -v "apps/web" \
-    | grep "$PROJECT_ROOT" \
-    | awk '{print $2}' \
-    || true)
-  if [ -n "$vite_pids" ]; then
-    warn "发现残留 vite 进程，正在清理..."
-    echo "$vite_pids" | xargs kill -9 2>/dev/null || true
-    cleaned=1
-  fi
 
-  # 4. 确保端口彻底释放（仅在 stop 场景下，start 前调用时端口应该已经被 stop 释放了）
+  # 3. 确保端口彻底释放（仅在 stop 场景下，start 前调用时端口应该已经被 stop 释放了）
   if [ "${1:-}" = "--with-ports" ]; then
     fuser -k "$BACKEND_PORT/tcp" 2>/dev/null || true
     fuser -k "$FRONTEND_PORT/tcp" 2>/dev/null || true
@@ -382,6 +416,8 @@ main() {
 
   case "$cmd" in
     start)
+      # 启动前自动修复编译产物不一致(stale routes/modules/schemas)
+      bash "$SCRIPT_DIR/sync-cleanup.sh" --fix --quiet 2>/dev/null || true
       # 启动前先清理可能阻塞端口的僵尸进程
       cleanup_zombies
       case "$target" in
@@ -409,6 +445,7 @@ main() {
       ;;
     status) show_status ;;
     clean)  cleanup_zombies ;;
+    sync)   bash "$SCRIPT_DIR/sync-cleanup.sh" ${2:+$2} ;;
     logs)   show_logs "$target" ;;
     help|-h|--help) show_help ;;
     *)      err "未知命令: $cmd"; show_help; exit 1 ;;

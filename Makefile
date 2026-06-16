@@ -1,75 +1,40 @@
 SHELL = /bin/bash
 
-#SCRIPT_DIR         = $(shell pwd)/etc/script
-#请选择golang版本
-BUILD_IMAGE_SERVER  = golang:1.22
-#请选择node版本
-BUILD_IMAGE_WEB     = node:20
-#项目名称
-PROJECT_NAME        = github.com/flipped-aurora/gin-vue-admin/server
-#配置文件目录
-CONFIG_FILE         = config.yaml
-#镜像仓库命名空间
-IMAGE_NAME          = gva
-#镜像地址
-REPOSITORY          = registry.cn-hangzhou.aliyuncs.com/${IMAGE_NAME}
-#镜像版本
-TAGS_OPT           ?= latest
-PLUGIN             ?= email
+# =============================================================
+# Low-Code Platform Build + Deploy
+# =============================================================
+# Run from repo root: make -f release/Makefile <target>
+# =============================================================
 
-#容器环境前后端共同打包
-build: build-web build-server
-	docker run --name build-local --rm -v $(shell pwd):/go/src/${PROJECT_NAME} -w /go/src/${PROJECT_NAME} ${BUILD_IMAGE_SERVER} make build-local
+LOWCODE_DIR = release/lowcode
+INFRA_DIR  = release/infrastructure
 
-#容器环境打包前端
-build-web:
-	docker run --name build-web-local --rm -v $(shell pwd):/go/src/${PROJECT_NAME} -w /go/src/${PROJECT_NAME} ${BUILD_IMAGE_WEB} make build-web-local
+# ---- Low-Code Platform ----
 
-#容器环境打包后端
-build-server:
-	docker run --name build-server-local --rm -v $(shell pwd):/go/src/${PROJECT_NAME} -w /go/src/${PROJECT_NAME} ${BUILD_IMAGE_SERVER} make build-server-local
+.PHONY: lowcode-install lowcode-build lowcode-dev-server lowcode-dev-web lowcode-dev
 
-#构建web镜像
-build-image-web:
-	@cd web/ && docker build -t ${REPOSITORY}/web:${TAGS_OPT} .
+lowcode-install:
+	@cd ${LOWCODE_DIR} && pnpm install
 
-#构建server镜像
-build-image-server:
-	@cd server/ && docker build -t ${REPOSITORY}/server:${TAGS_OPT} .
+lowcode-build:
+	@cd ${LOWCODE_DIR}/apps/server && pnpm run build
+	@cd ${LOWCODE_DIR}/apps/web && pnpm run build
 
-#本地环境打包前后端
-build-local:
-	if [ -d "build" ];then rm -rf build; else echo "OK!"; fi \
-	&& if [ -f "/.dockerenv" ];then echo "OK!"; else  make build-web-local && make build-server-local; fi \
-	&& mkdir build && cp -r web/dist build/ && cp server/server build/ && cp -r server/resource build/resource
+lowcode-dev-server:
+	@cd ${LOWCODE_DIR}/apps/server && pnpm run dev
 
-#本地环境打包前端
-build-web-local:
-	@cd web/ && if [ -d "dist" ];then rm -rf dist; else echo "OK!"; fi \
-	&& yarn config set registry http://mirrors.cloud.tencent.com/npm/ && yarn install && yarn build
+lowcode-dev-web:
+	@cd ${LOWCODE_DIR}/apps/web && pnpm run serve
 
-#本地环境打包后端
-build-server-local:
-	@cd server/ && if [ -f "server" ];then rm -rf server; else echo "OK!"; fi \
-	&& go env -w GO111MODULE=on && go env -w GOPROXY=https://goproxy.cn,direct \
-	&& go env -w CGO_ENABLED=0 && go env  && go mod tidy \
-	&& go build -ldflags "-B 0x$(shell head -c20 /dev/urandom|od -An -tx1|tr -d ' \n') -X main.Version=${TAGS_OPT}" -v
+lowcode-dev:
+	@echo "Lowcode dev: server → localhost:8888 | web → localhost:8000"
 
-#打包前后端二合一镜像
-image: build
-	docker build -t ${REPOSITORY}/gin-vue-admin:${TAGS_OPT} -f deploy/docker/Dockerfile .
+# ---- Docker Compose (run from repo root) ----
 
-#尝鲜版
-images: build build-image-web build-image-server
-	docker build -t ${REPOSITORY}/all:${TAGS_OPT} -f deploy/docker/Dockerfile .
+.PHONY: dev down
 
-#swagger 文档生成
-doc:
-	@cd server && swag init
+dev:
+	docker compose -f ${INFRA_DIR}/docker-compose.dev.yml up -d
 
-#插件快捷打包： make plugin PLUGIN="这里是插件文件夹名称,默认为email"
-plugin:
-	if [ -d ".plugin" ];then rm -rf .plugin ; else echo "OK!"; fi && mkdir -p .plugin/${PLUGIN}/{server/plugin,web/plugin} \
-	&& if [ -d "server/plugin/${PLUGIN}" ];then cp -r server/plugin/${PLUGIN} .plugin/${PLUGIN}/server/plugin/ ; else echo "OK!"; fi \
-	&& if [ -d "web/src/plugin/${PLUGIN}" ];then cp -r web/src/plugin/${PLUGIN} .plugin/${PLUGIN}/web/plugin/ ; else echo "OK!"; fi \
-	&& cd .plugin && zip -r ${PLUGIN}.zip ${PLUGIN} && mv ${PLUGIN}.zip ../ && cd ..
+down:
+	docker compose -f ${INFRA_DIR}/docker-compose.dev.yml down

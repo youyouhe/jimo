@@ -5,19 +5,19 @@ RUN npm install -g pnpm@9
 
 WORKDIR /app
 
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* .npmrc ./
-COPY tsconfig.base.json ./
+COPY release/lowcode/pnpm-workspace.yaml release/lowcode/package.json release/lowcode/pnpm-lock.yaml* release/lowcode/.npmrc ./
+COPY release/lowcode/tsconfig.base.json ./
 
-COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
-COPY packages/shared/src ./packages/shared/src
+COPY release/lowcode/packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
+COPY release/lowcode/packages/shared/src ./packages/shared/src
 
-COPY apps/server/package.json apps/server/tsconfig.json apps/server/nest-cli.json ./apps/server/
+COPY release/lowcode/apps/server/package.json apps/server/tsconfig.json apps/server/nest-cli.json ./apps/server/
 
 RUN pnpm install --frozen-lockfile
 
-COPY apps/server/src ./apps/server/src
-COPY apps/server/drizzle.config.ts ./apps/server/
-COPY apps/server/migrations ./apps/server/migrations
+COPY release/lowcode/apps/server/src ./apps/server/src
+COPY release/lowcode/apps/server/drizzle.config.ts ./apps/server/
+COPY release/lowcode/apps/server/migrations ./apps/server/migrations
 
 WORKDIR /app/apps/server
 RUN pnpm run build
