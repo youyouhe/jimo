@@ -13,12 +13,10 @@ import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import {
   sysAutoCodeHistories,
   type SysAutoCodeHistory,
-  type NewSysAutoCodeHistory,
 } from '../../db/schema/auto-code-histories';
 import {
   sysAutoCodePackages,
   type SysAutoCodePackage,
-  type NewSysAutoCodePackage,
 } from '../../db/schema/auto-code-packages';
 import { sysMenus } from '../../db/schema/menus';
 import { sysRoleMenus } from '../../db/schema/role-menus';
@@ -26,411 +24,49 @@ import { sysRoles } from '../../db/schema/roles';
 import { sysAuthorityBtns } from '../../db/schema/authority-btns';
 import { sysApis } from '../../db/schema/apis';
 import { CASBIN_SERVICE_TOKEN, ICasbinService } from '../role/role.service';
+import { DictionaryDetailService } from '../dictionary-detail/dictionary-detail.service';
+import { EncodingRuleService } from '../encoding-rule/encoding-rule.service';
+import { fakerZH_CN as faker } from '@faker-js/faker';
 import { AutoCodeDto, AutoCodeField } from './dto/autocode.dto';
 import { UpdateModuleDto } from './dto/update-module.dto';
 import { CreatePackageDto, UpdatePackageDto, SaveFromConfigDto } from './dto/package.dto';
+import { buildErGraph, type ErGraph, type ErHistoryInput } from './er-graph.util';
 
-// ---------------------------------------------------------------------------
-// Name conversion helpers
-// ---------------------------------------------------------------------------
+// Re-export job types for backward compatibility with autocode.controller.ts
+export type { GenerateJobStatus, GenerateStep, GenerateStepStatus } from './autocode-field-utils';
 
-function toPascalCase(name: string): string {
-  if (!name) return '';
-  return name
-    .split('_')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join('');
-}
+// Pure helpers
+import {
+  toKebabCase,
+  singularize,
+  activeFields,
+  buildCreateTableSql,
+  deriveNames,
+  generateMockValue,
+  isBusinessColumn,
+  type DerivedNames,
+  type GenerateJobStatus,
+  type GenerateStep,
+  type GenerateStepStatus,
+  type MockCtx,
+} from './autocode-field-utils';
 
-function toCamelCase(name: string): string {
-  if (!name) return '';
-  const pascal = toPascalCase(name);
-  return pascal.charAt(0).toLowerCase() + pascal.slice(1);
-}
+// Backend code generators
+import {
+  generateSchema,
+  generateCreateDto,
+  generateQueryDto,
+  generateUpdateDto,
+  generateService,
+  generateController,
+  generateModule,
+} from './autocode-backend-generators';
 
-function toKebabCase(name: string): string {
-  if (name.includes('_')) {
-    return name.toLowerCase().replace(/_/g, '-');
-  }
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-    .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
-    .toLowerCase();
-}
-
-function singularize(word: string): string {
-  if (!word) return '';
-  if (word.endsWith('ies')) return word.slice(0, -3) + 'y';
-  if (word.endsWith('ses')) return word.slice(0, -2);
-  if (word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1);
-  return word;
-}
-
-// ---------------------------------------------------------------------------
-// Type mapper
-// ---------------------------------------------------------------------------
-
-function toTsType(field: AutoCodeField): string {
-  switch (field.type) {
-    case 'varchar':
-    case 'text':
-    case 'timestamp':
-    case 'uuid':
-    case 'image':
-    case 'file':
-    case 'relation':
-    case 'dict':
-      return 'string';
-    case 'integer':
-    case 'bigint':
-      return 'number';
-    case 'decimal':
-      return 'string';
-    case 'boolean':
-      return 'boolean';
-    default:
-      return 'string';
-  }
-}
-
-function toDrizzleType(field: AutoCodeField): string {
-  switch (field.type) {
-    case 'varchar':
-      return `varchar('${field.name}', { length: ${field.length || 255} })`;
-    case 'image':
-    case 'file':
-      return `varchar('${field.name}', { length: 512 })`;
-    case 'dict':
-      return `varchar('${field.name}', { length: ${field.length || 64} })`;
-    case 'text':
-      return `text('${field.name}')`;
-    case 'integer':
-      return `integer('${field.name}')`;
-    case 'bigint':
-      return `bigint('${field.name}', { mode: 'number' })`;
-    case 'decimal':
-      return `numeric('${field.name}', { precision: 12, scale: 2 })`;
-    case 'boolean':
-      return `boolean('${field.name}')`;
-    case 'timestamp':
-      return `timestamp('${field.name}', { withTimezone: true })`;
-    case 'uuid':
-    case 'relation':
-      return `uuid('${field.name}')`;
-    default:
-      return `varchar('${field.name}')`;
-  }
-}
-
-function toDefaultValue(field: AutoCodeField): string {
-  if (!field.required) {
-    switch (field.type) {
-      case 'boolean':
-        return '.default(false)';
-      case 'integer':
-      case 'bigint':
-        return '.default(0)';
-      case 'decimal':
-        return ".default('0')";
-      case 'varchar':
-      case 'text':
-      case 'image':
-      case 'file':
-      case 'dict':
-        return `.default('')`;
-      default:
-        return '';
-    }
-  }
-  return '';
-}
-
-function toRequired(field: AutoCodeField): string {
-  return field.required ? '.notNull()' : '';
-}
-
-/**
- * Filter out removed fields for business code generation.
- * Removed fields are kept in schema (DB column preserved) but excluded from
- * DTOs, services, controllers, and frontend code.
- */
-function activeFields(fields: AutoCodeField[]): AutoCodeField[] {
-  return fields.filter((f) => !f.removed);
-}
-
-// ---------------------------------------------------------------------------
-// Direct SQL DDL helpers (replaces drizzle-kit push to avoid TTY requirement)
-// ---------------------------------------------------------------------------
-
-function toSqlColumnDef(field: AutoCodeField): string {
-  let colType: string;
-  switch (field.type) {
-    case 'varchar':
-    case 'image':
-    case 'file':
-      colType = `varchar(${field.length || (field.type !== 'varchar' ? 512 : 255)})`;
-      break;
-    case 'dict':
-      colType = `varchar(${field.length || 64})`;
-      break;
-    case 'text':
-      colType = 'text';
-      break;
-    case 'integer':
-      colType = 'integer';
-      break;
-    case 'bigint':
-      colType = 'bigint';
-      break;
-    case 'decimal':
-      colType = 'numeric(12,2)';
-      break;
-    case 'boolean':
-      colType = 'boolean';
-      break;
-    case 'timestamp':
-      colType = 'timestamptz';
-      break;
-    case 'uuid':
-      colType = 'uuid';
-      break;
-    case 'relation':
-      if (field.relationType === 'one-to-many') return '';
-      colType = 'uuid';
-      break;
-    default:
-      colType = 'varchar(255)';
-  }
-  const notNull = field.required ? ' NOT NULL' : '';
-  return `  "${field.name}" ${colType}${notNull}`;
-}
-
-function buildCreateTableSql(tableName: string, fields: AutoCodeField[], fkName?: string, fkRef?: string): string {
-  const cols: string[] = [`  "id" uuid DEFAULT gen_random_uuid() PRIMARY KEY`];
-  for (const f of fields) {
-    if (f.removed || f.type === 'relation') continue;
-    const colDef = toSqlColumnDef(f);
-    if (colDef) cols.push(colDef);
-  }
-  // many-to-one FK columns
-  for (const f of fields) {
-    if (f.type === 'relation' && f.relationType === 'many-to-one' && f.name) {
-      cols.push(`  "${f.name}" uuid`);
-    }
-  }
-  if (fkName && fkRef) {
-    cols.push(`  "${fkName}" uuid NOT NULL REFERENCES "${fkRef}"("id")`);
-  }
-  cols.push(`  "created_at" timestamptz NOT NULL DEFAULT now()`);
-  cols.push(`  "updated_at" timestamptz NOT NULL DEFAULT now()`);
-  cols.push(`  "deleted_at" timestamptz`);
-  cols.push(`  "created_by" uuid`);
-  cols.push(`  "updated_by" uuid`);
-  return `CREATE TABLE IF NOT EXISTS "${tableName}" (\n${cols.join(',\n')}\n)`;
-}
-
-// ---------------------------------------------------------------------------
-// Derived names for a table definition
-// ---------------------------------------------------------------------------
-
-interface DerivedNames {
-  tableName: string;
-  pascalName: string;
-  pascalSingular: string;
-  camelName: string;
-  camelSingular: string;
-  kebabName: string;
-  kebabSingular: string;
-  routePath: string;
-  schemaVar: string;
-  schemaType: string;
-}
-
-function deriveNames(tableName: string): DerivedNames {
-  const pascalName = toPascalCase(tableName);
-  const pascalSingular = toPascalCase(singularize(tableName));
-  const camelName = toCamelCase(tableName);
-  const camelSingular = toCamelCase(singularize(tableName));
-  const kebabName = toKebabCase(tableName);
-  const kebabSingular = toKebabCase(singularize(tableName));
-  const routePath = `/lc/${kebabName}`;
-
-  return {
-    tableName,
-    pascalName,
-    pascalSingular,
-    camelName,
-    camelSingular,
-    kebabName,
-    kebabSingular,
-    routePath,
-    schemaVar: camelName,
-    schemaType: pascalName,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Drizzle column type names for import filtering
-// ---------------------------------------------------------------------------
-
-function getDrizzleImportNames(field: AutoCodeField): string {
-  switch (field.type) {
-    case 'varchar': return 'varchar';
-    case 'image': return 'varchar';
-    case 'file': return 'varchar';
-    case 'dict': return 'varchar';
-    case 'text': return 'text';
-    case 'integer': return 'integer';
-    case 'bigint': return 'bigint';
-    case 'decimal': return 'numeric';
-    case 'boolean': return 'boolean';
-    case 'timestamp': return 'timestamp';
-    case 'uuid': return 'uuid';
-    case 'relation': return 'uuid';
-    default: return 'varchar';
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Class-validator decorators for DTO fields
-// ---------------------------------------------------------------------------
-
-function getValidatorDecorators(field: AutoCodeField, forCreate: boolean): string {
-  const lines: string[] = [];
-
-  if (forCreate && field.required) {
-    lines.push('  @IsNotEmpty()');
-  } else {
-    lines.push('  @IsOptional()');
-  }
-
-  switch (field.type) {
-    case 'varchar':
-    case 'text':
-    case 'image':
-    case 'file':
-    case 'dict':
-      lines.push('  @IsString()');
-      break;
-    case 'integer':
-    case 'bigint':
-    case 'decimal':
-      lines.push('  @IsNumber()');
-      lines.push('  @Type(() => Number)');
-      break;
-    case 'boolean':
-      lines.push('  @IsBoolean()');
-      lines.push('  @Type(() => Boolean)');
-      break;
-    case 'uuid':
-    case 'relation':
-      lines.push('  @IsUUID()');
-      break;
-    case 'timestamp':
-      lines.push('  @IsString()');
-      break;
-  }
-
-  if (field.type === 'varchar' && field.length) {
-    lines.push(`  @MaxLength(${field.length})`);
-  }
-
-  if (field.type === 'image' || field.type === 'file') {
-    lines.push('  @MaxLength(512)');
-  }
-
-  return lines.join('\n');
-}
-
-// ---------------------------------------------------------------------------
-// Swagger decorators for DTO fields
-// ---------------------------------------------------------------------------
-
-function getSwaggerProp(field: AutoCodeField, forCreate: boolean): string {
-  const parts: string[] = [];
-  const decorator = forCreate && field.required ? '@ApiProperty' : '@ApiPropertyOptional';
-
-  const opts: string[] = [];
-  opts.push(`description: '${field.description || field.name}'`);
-
-  if (field.type === 'varchar' && field.length) {
-    opts.push(`maxLength: ${field.length}`);
-  }
-
-  if (field.type === 'image' || field.type === 'file') {
-    opts.push(`maxLength: 512`);
-  }
-
-  parts.push(`  ${decorator}({ ${opts.join(', ')} })`);
-  return parts.join('\n');
-}
-
-// ---------------------------------------------------------------------------
-// Form field configuration for frontend page
-// ---------------------------------------------------------------------------
-
-function getProFormComponent(field: AutoCodeField): string {
-  switch (field.type) {
-    case 'text':
-      return 'ProFormTextArea';
-    case 'boolean':
-      return 'ProFormSwitch';
-    case 'image':
-    case 'file':
-      return 'Upload';
-    case 'integer':
-    case 'bigint':
-    case 'decimal':
-      return 'ProFormDigit';
-    case 'relation':
-    case 'dict':
-      return 'ProFormSelect';
-    default:
-      return 'ProFormText';
-  }
-}
-
-function getValueType(field: AutoCodeField): string {
-  switch (field.type) {
-    case 'timestamp':
-      return 'dateTime';
-    case 'boolean':
-      return 'switch';
-    case 'image':
-      return 'image';
-    case 'file':
-      return 'text';
-    case 'relation':
-      return 'text';
-    case 'dict':
-      return 'select';
-    default:
-      return 'text';
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Async generate job types
-// ---------------------------------------------------------------------------
-
-export type GenerateStepStatus = 'pending' | 'running' | 'completed' | 'failed';
-
-export interface GenerateStep {
-  key: string;
-  label: string;
-  status: GenerateStepStatus;
-}
-
-export interface GenerateJobStatus {
-  jobId: string;
-  status: 'processing' | 'completed' | 'failed';
-  steps: GenerateStep[];
-  progress: number; // 0-100
-  currentStepLabel: string;
-  result?: Record<string, any>;
-  error?: string;
-  completedAt?: string;
-}
+// Frontend code generators
+import {
+  generateFrontendService,
+  generateFrontendPage,
+} from './autocode-frontend-generators';
 
 // ---------------------------------------------------------------------------
 // Service
@@ -443,1972 +79,9 @@ export class AutocodeService {
   constructor(
     @Inject(DATABASE_CONNECTION) private readonly db: DrizzleDb,
     @Inject(CASBIN_SERVICE_TOKEN) private readonly casbin: ICasbinService,
+    private readonly dictionaryDetailService: DictionaryDetailService,
+    private readonly encodingRuleService: EncodingRuleService,
   ) {}
-
-  // =========================================================================
-  // File generators — each returns a string of TypeScript/TSX code
-  // =========================================================================
-
-  /**
-   * Generate Drizzle pgTable schema definition.
-   */
-  generateSchema(dto: AutoCodeDto): string {
-    const n = deriveNames(dto.tableName);
-    const fieldLines: string[] = ["    id: uuid('id').defaultRandom().primaryKey(),"];
-
-    // Collect relation fields for generating references
-    const relationFields = dto.fields.filter((f) => f.type === 'relation');
-    const manyToOneFields = relationFields.filter((f) => f.relationType === 'many-to-one');
-    const manyToManyFields = relationFields.filter((f) => f.relationType === 'many-to-many');
-    const oneToManyFields = relationFields.filter((f) => f.relationType === 'one-to-many');
-
-    for (const field of dto.fields) {
-      // Skip one-to-many fields -- no column in the main table
-      if (field.type === 'relation' && field.relationType === 'one-to-many') {
-        continue;
-      }
-      // Skip 'id' field — already defined as uuid primary key above
-      if (field.name === 'id') {
-        continue;
-      }
-
-      // Soft-removed fields: keep column as comment to preserve DB structure
-      if (field.removed) {
-        const drizzleType = toDrizzleType(field);
-        const required = toRequired(field);
-        const defaultVal = toDefaultValue(field);
-        fieldLines.push(`    // [removed] ${field.name}: ${drizzleType}${required}${defaultVal},`);
-        continue;
-      }
-
-      const drizzleType = toDrizzleType(field);
-      const required = toRequired(field);
-      const defaultVal = toDefaultValue(field);
-
-      // Add .references() for many-to-one relation fields
-      let referencesClause = '';
-      if (field.type === 'relation' && (field.relationType === 'many-to-one' || field.relationType === 'many-to-many') && field.relationTable) {
-        const targetNames = deriveNames(field.relationTable);
-        referencesClause = `.references(() => ${targetNames.schemaVar}.id)`;
-      }
-
-      fieldLines.push(`    ${field.name}: ${drizzleType}${required}${defaultVal}${referencesClause},`);
-    }
-
-    fieldLines.push("    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),");
-    fieldLines.push("    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),");
-    fieldLines.push("    deletedAt: timestamp('deleted_at', { withTimezone: true }),");
-    fieldLines.push("    createdBy: uuid('created_by'),");
-    fieldLines.push("    updatedBy: uuid('updated_by'),");
-
-    const uniqueFields = dto.fields.filter((f) => f.unique && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
-    let extraClause = '';
-    if (uniqueFields.length > 0) {
-      const uniqueIndexes = uniqueFields.map((f) => {
-        return `    uniqueIndex('idx_${dto.tableName}_${f.name}_active')\n      .on(t.${f.name})\n      .where(sql\`\${t.deletedAt} IS NULL\`),`;
-      });
-      extraClause = `\n  (t) => [\n${uniqueIndexes.join('\n')}\n  ],`;
-    }
-
-    // Collect unique drizzle types to import
-    const usedTypes = new Set<string>();
-    usedTypes.add('uuid');
-    for (const field of dto.fields) {
-      if (field.type === 'relation' && field.relationType === 'one-to-many') continue;
-      usedTypes.add(getDrizzleImportNames(field));
-    }
-    // Collect drizzle types from one-to-many detailFields
-    for (const field of oneToManyFields) {
-      for (const df of field.detailFields || []) {
-        usedTypes.add(getDrizzleImportNames(df));
-      }
-    }
-    usedTypes.add('timestamp');
-    const sortedTypes = Array.from(usedTypes).sort();
-    const typeImports = sortedTypes.map((t) => `  ${t},`).join('\n');
-
-    const sqlImport = uniqueFields.length > 0 ? 'import { sql } from \'drizzle-orm\';\n' : '';
-    const uniqueIndexImport = uniqueFields.length > 0 ? '  uniqueIndex,\n' : '';
-
-    // Build imports for target table schemas (many-to-one + many-to-many references)
-    const relationImports: string[] = [];
-    for (const field of [...manyToOneFields, ...manyToManyFields]) {
-      if (field.relationTable) {
-        const targetNames = deriveNames(field.relationTable);
-        relationImports.push(`import { ${targetNames.schemaVar} } from './${targetNames.kebabName}';`);
-      }
-    }
-
-    // Build child table schemas for one-to-many relations
-    let childTableSchemas = '';
-    let existingTableSchemaImports = '';
-    for (const field of oneToManyFields) {
-      if (!field.detailFields || field.detailFields.length === 0) continue;
-      const singularMain = singularize(dto.tableName);
-
-      // When relationExistingTable is true, reference an existing table instead of creating a new one
-      const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
-      if (isExisting) {
-        const targetNames = deriveNames(field.relationTable!);
-        existingTableSchemaImports += `import { ${targetNames.schemaVar} } from './${targetNames.kebabName}';\n`;
-        // FK already defined on the existing table — skip pgTable generation
-        continue;
-      }
-
-      const singularField = singularize(field.name);
-      const childTableName = `${singularMain}_${singularField}`;
-      const childSchemaVar = toCamelCase(childTableName);
-      const childPascalType = toPascalCase(childTableName);
-      const fkColName = `${toCamelCase(singularMain)}_id`;
-
-      const childFieldLines = ["    id: uuid('id').defaultRandom().primaryKey(),"];
-      for (const df of field.detailFields) {
-        if (!df.name || df.name === 'id') continue;
-        const drizzleType = toDrizzleType(df);
-        const required = toRequired(df);
-        const defaultVal = toDefaultValue(df);
-        childFieldLines.push(`    ${df.name}: ${drizzleType}${required}${defaultVal},`);
-      }
-      // FK back to master
-      childFieldLines.push(`    ${fkColName}: uuid('${fkColName}').notNull().references(() => ${n.schemaVar}.id),`);
-      childFieldLines.push("    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),");
-      childFieldLines.push("    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),");
-      childFieldLines.push("    deletedAt: timestamp('deleted_at', { withTimezone: true }),");
-
-      childTableSchemas += `
-
-export const ${childSchemaVar} = pgTable(
-  'lc_${childTableName}',
-  {
-${childFieldLines.join('\n')}
-  },
-);
-
-export type ${childPascalType} = typeof ${childSchemaVar}.$inferSelect;
-export type New${childPascalType} = typeof ${childSchemaVar}.$inferInsert;
-`;
-    }
-
-    // Combine all imports (include existing-table schema imports for one-to-many)
-    const allRelationImports = [...new Set([...relationImports, existingTableSchemaImports])].join('\n');
-    const relationImportBlock = allRelationImports ? '\n' + allRelationImports : '';
-
-    return `${sqlImport}import {
-  pgTable,
-${typeImports}
-${uniqueIndexImport}} from 'drizzle-orm/pg-core';
-${relationImportBlock}
-
-export const ${n.schemaVar} = pgTable(
-  'lc_${dto.tableName}',
-  {
-${fieldLines.join('\n')}
-  },${extraClause}
-);
-
-export type ${n.schemaType} = typeof ${n.schemaVar}.$inferSelect;
-export type New${n.schemaType} = typeof ${n.schemaVar}.$inferInsert;
-${childTableSchemas}`;
-  }
-
-  /**
-   * Generate Create DTO class.
-   */
-  generateCreateDto(dto: AutoCodeDto): string {
-    const n = deriveNames(dto.tableName);
-    const creatableFields = dto.fields.filter((f) => f.creatable);
-
-    const fieldStrings = creatableFields.map((f) => {
-      const swagger = getSwaggerProp(f, true);
-      const validators = getValidatorDecorators(f, true);
-      // In DTO layer: decimal is number (from JSON request body)
-      // relation fields are UUID strings
-      const dtoType = f.type === 'boolean' ? 'boolean' : f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal' ? 'number' : 'string';
-      const typeInit = f.type === 'boolean' ? 'false' : f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal' ? '0' : "''";
-
-      // For one-to-many relation fields, use array of objects (detail rows)
-      if (f.type === 'relation' && f.relationType === 'one-to-many') {
-        const arraySwagger = `  @ApiPropertyOptional({ description: '${f.description || f.name}', type: [Object] })`;
-        const arrayValidator = '  @IsOptional()\n  @IsArray()';
-        return `${arraySwagger}\n${arrayValidator}\n  ${f.name}: any[] = [];`;
-      }
-
-      return `${swagger}\n${validators}\n  ${f.name}: ${dtoType} = ${typeInit};`;
-    });
-
-    const needsNumber = creatableFields.some((f) => f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal');
-    const needsBoolean = creatableFields.some((f) => f.type === 'boolean');
-    const needsUuid = creatableFields.some((f) => f.type === 'uuid' || f.type === 'relation');
-    const needsArray = creatableFields.some((f) => f.type === 'relation' && (f.relationType === 'one-to-many'));
-    const needsType = needsNumber || needsBoolean;
-
-    // Build single consolidated class-validator import
-    const validatorNames: string[] = [];
-    // Always include these
-    if (creatableFields.some((f) => f.required)) {
-      validatorNames.push('IsNotEmpty');
-    }
-    if (creatableFields.some((f) => !f.required)) {
-      validatorNames.push('IsOptional');
-    }
-    if (creatableFields.some((f) => f.type === 'varchar' || f.type === 'text' || f.type === 'timestamp' || f.type === 'image' || f.type === 'file' || f.type === 'dict')) {
-      validatorNames.push('IsString');
-    }
-    if (needsNumber) {
-      validatorNames.push('IsNumber');
-    }
-    if (needsBoolean) {
-      validatorNames.push('IsBoolean');
-    }
-    if (needsUuid) {
-      validatorNames.push('IsUUID');
-    }
-    if (needsArray) {
-      validatorNames.push('IsArray');
-    }
-    // MaxLength for varchar fields and image/file fields
-    if (creatableFields.some((f) => (f.type === 'varchar' && f.length) || f.type === 'image' || f.type === 'file')) {
-      validatorNames.push('MaxLength');
-    }
-
-    const imports: string[] = [];
-    imports.push(`import { ${validatorNames.join(', ')} } from 'class-validator';`);
-    if (needsType) {
-      imports.push("import { Type } from 'class-transformer';");
-    }
-    imports.push("import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';");
-    imports.push('');
-
-    return `${imports.join('\n')}
-export class Create${n.pascalSingular}Dto {
-${fieldStrings.join('\n\n')}
-}
-`;
-  }
-
-  /**
-   * Generate Query DTO class.
-   */
-  generateQueryDto(dto: AutoCodeDto): string {
-    const n = deriveNames(dto.tableName);
-    const searchableFields = dto.fields.filter((f) => f.searchable);
-
-    const isNumericType = (f: AutoCodeField) => f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal';
-
-    const fieldStrings = searchableFields.flatMap((f) => {
-      if (f.type === 'relation') {
-        return [`  @ApiPropertyOptional()\n  @IsOptional()\n  @IsUUID()\n  ${f.name}?: string;`];
-      }
-      // Numeric types → min/max range
-      if (isNumericType(f)) {
-        const numValidator = f.type === 'decimal' ? '@IsNumber()' : '@IsInt()';
-        return [
-          `  @ApiPropertyOptional({ description: '${f.description || f.name}最小值' })\n  @IsOptional()\n  @Type(() => Number)\n  ${numValidator}\n  ${f.name}Min?: number;`,
-          `  @ApiPropertyOptional({ description: '${f.description || f.name}最大值' })\n  @IsOptional()\n  @Type(() => Number)\n  ${numValidator}\n  ${f.name}Max?: number;`,
-        ];
-      }
-      return [`  @ApiPropertyOptional()\n  @IsOptional()\n  @IsString()\n  ${f.name}?: string;`];
-    });
-
-    const needsUuid = searchableFields.some((f) => f.type === 'relation');
-    const needsArray = searchableFields.some((f) => f.type === 'relation' && f.relationType === 'one-to-many');
-    const needsNumeric = searchableFields.some((f) => isNumericType(f));
-    const needsDecimal = searchableFields.some((f) => f.type === 'decimal');
-    const validatorNames: string[] = ['IsOptional', 'IsString'];
-    if (needsUuid) validatorNames.push('IsUUID');
-    if (needsArray) validatorNames.push('IsArray');
-    if (needsNumeric && !needsDecimal) validatorNames.push('IsInt');
-    if (needsNumeric && needsDecimal) validatorNames.push('IsInt', 'IsNumber');
-    const needsType = needsNumeric;
-
-    return `import { ${validatorNames.join(', ')} } from 'class-validator';
-${needsType ? "import { Type } from 'class-transformer';\n" : ''}import { ApiPropertyOptional } from '@nestjs/swagger';
-import { PaginationDto } from '../../../common/dto/pagination.dto';
-
-export class Query${n.pascalSingular}Dto extends PaginationDto {
-${fieldStrings.join('\n\n')}
-}
-`;
-  }
-
-  /**
-   * Generate Update DTO class.
-   */
-  generateUpdateDto(dto: AutoCodeDto): string {
-    const n = deriveNames(dto.tableName);
-
-    return `import { PartialType } from '@nestjs/swagger';
-import { Create${n.pascalSingular}Dto } from './create-${n.kebabSingular}.dto';
-
-export class Update${n.pascalSingular}Dto extends PartialType(Create${n.pascalSingular}Dto) {}
-`;
-  }
-
-  /**
-   * Generate NestJS CRUD service.
-   */
-  generateService(dto: AutoCodeDto): string {
-    const n = deriveNames(dto.tableName);
-    const searchableFields = dto.fields.filter((f) => f.searchable);
-    const uniqueFields = dto.fields.filter((f) => f.unique && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
-    const relationFields = dto.fields.filter((f) => f.type === 'relation');
-    const manyToManyFields: AutoCodeField[] = []; // M2M merged into manyToOneFields
-    const oneToManyFields = relationFields.filter((f) => f.relationType === 'one-to-many');
-    const manyToOneFields = relationFields.filter((f) => f.relationType === 'many-to-one' || f.relationType === 'many-to-many');
-    // Pre-compute schema var names imported from many-to-one target tables to detect destructuring collisions
-    const manyToOneSchemaVars = new Set(manyToOneFields.filter(f => f.relationTable).map(f => deriveNames(f.relationTable!).schemaVar));
-
-    // Query filter generation
-    // If a field name collides with the schema table variable name, rename it in destructuring
-    const isNumericField = (f: AutoCodeField) => f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal';
-    const fieldAlias = (name: string) => (name === n.schemaVar || manyToOneSchemaVars.has(name)) ? `${name}Filter` : name;
-    let queryFilters = '';
-    for (const field of searchableFields) {
-      if (field.type === 'relation' && field.relationType === 'one-to-many') {
-        continue;
-      }
-      const alias = fieldAlias(field.name);
-      if (isNumericField(field)) {
-        const numWrap = field.type === 'decimal' ? 'String' : '';
-        const minVal = numWrap ? `String(${alias}Min)` : alias + 'Min';
-        const maxVal = numWrap ? `String(${alias}Max)` : alias + 'Max';
-        queryFilters += `    if (${alias}Min) {\n      conditions.push(gte(${n.schemaVar}.${field.name}, ${minVal}));\n    }\n`;
-        queryFilters += `    if (${alias}Max) {\n      conditions.push(lte(${n.schemaVar}.${field.name}, ${maxVal}));\n    }\n`;
-      } else if (field.type === 'varchar' || field.type === 'text') {
-        queryFilters += `    if (${alias}) {\n      conditions.push(like(${n.schemaVar}.${field.name}, \`%\$\{${alias}\}%\`));\n    }\n`;
-      } else {
-        queryFilters += `    if (${alias}) {\n      conditions.push(eq(${n.schemaVar}.${field.name}, ${alias}));\n    }\n`;
-      }
-    }
-
-    // Update data builder
-    const updateFields = dto.fields.filter((f) => f.editable && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
-    let updateDataBuilder = '';
-    for (const field of updateFields) {
-      const valueExpr = field.type === 'decimal' ? `String(dto.${field.name})` : `dto.${field.name}`;
-      updateDataBuilder += `    if (dto.${field.name} !== undefined) updateData.${field.name} = ${valueExpr};\n`;
-    }
-
-    // Conflict checks for unique fields on create
-    let uniqueChecks = '';
-    for (const field of uniqueFields) {
-      if (field.required) {
-        uniqueChecks += `    // Check unique: ${field.name}
-    const existingBy${toPascalCase(field.name)} = await this.db
-      .select()
-      .from(${n.schemaVar})
-      .where(and(eq(${n.schemaVar}.${field.name}, dto.${field.name}), isNull(${n.schemaVar}.deletedAt)))
-      .limit(1);
-
-    if (existingBy${toPascalCase(field.name)}.length > 0) {
-      throw new ConflictException({
-        code: ApiErrorCode.PARAM_ERROR,
-        message: \`${toPascalCase(field.name)} '\$\{dto.${field.name}\}' is already taken\`,
-      });
-    }
-`;
-      } else {
-        uniqueChecks += `    // Check unique: ${field.name} (only if value provided)
-    if (dto.${field.name}) {
-      const existingBy${toPascalCase(field.name)} = await this.db
-        .select()
-        .from(${n.schemaVar})
-        .where(and(eq(${n.schemaVar}.${field.name}, dto.${field.name}!), isNull(${n.schemaVar}.deletedAt)))
-        .limit(1);
-
-      if (existingBy${toPascalCase(field.name)}.length > 0) {
-        throw new ConflictException({
-          code: ApiErrorCode.PARAM_ERROR,
-          message: \`${toPascalCase(field.name)} '\$\{dto.${field.name}\}' is already taken\`,
-        });
-      }
-    }
-`;
-      }
-    }
-
-    // Conflict checks for unique fields on update
-    let updateUniqueChecks = '';
-    for (const field of updateFields.filter((f) => f.unique)) {
-      updateUniqueChecks += `    if (dto.${field.name} && dto.${field.name} !== existing.${field.name}) {
-      const ${field.name}Conflict = await this.db
-        .select()
-        .from(${n.schemaVar})
-        .where(and(eq(${n.schemaVar}.${field.name}, dto.${field.name}), isNull(${n.schemaVar}.deletedAt)))
-        .limit(1);
-
-      if (${field.name}Conflict.length > 0) {
-        throw new ConflictException({
-          code: ApiErrorCode.PARAM_ERROR,
-          message: \`${toPascalCase(field.name)} '\$\{dto.${field.name}\}' is already taken\`,
-        });
-      }
-    }
-`;
-    }
-
-    // Creatable fields for create values (exclude many-to-many and one-to-many)
-    const creatableFields = dto.fields.filter((f) => f.creatable && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
-
-    // Editable fields for update type definition (exclude many-to-many and one-to-many)
-    const editableFields = dto.fields.filter((f) => f.editable && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
-    // Build child table methods for one-to-many
-    let childImports = '';
-    let childMethods = '';
-    for (const field of oneToManyFields) {
-      if (!field.detailFields || field.detailFields.length === 0) continue;
-      const singularMain = singularize(dto.tableName);
-      const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
-
-      let childSchemaVar: string;
-      let fkColName: string;
-      if (isExisting) {
-        childSchemaVar = deriveNames(field.relationTable!).schemaVar;
-        fkColName = field.relationFkColumn!;
-        childImports += `import { ${childSchemaVar} } from '../../db/schema/${deriveNames(field.relationTable!).kebabName}';\n`;
-      } else {
-        const singularField = singularize(field.name);
-        childSchemaVar = toCamelCase(`${singularMain}_${singularField}`);
-        fkColName = `${toCamelCase(singularMain)}_id`;
-        childImports += `import { ${childSchemaVar} } from '../../db/schema/${n.kebabName}';\n`;
-      }
-      const detailCols = field.detailFields.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName));
-      const childRelFields = (field.detailFields || []).filter(df => df.name !== 'id' && df.type === 'relation' && df.relationTable && df.relationTable !== dto.tableName);
-
-      // Build leftJoin for child's own FK fields (e.g. score.course → course.name)
-      let childRelImports = '';
-      let childRelSelectFields = '';
-      let childRelJoins = '';
-      for (const crf of childRelFields) {
-        const crfTarget = deriveNames(crf.relationTable!);
-        const crfDisplay = crf.relationDisplayField || 'name';
-        childRelImports += `import { ${crfTarget.schemaVar} } from '../../db/schema/${crfTarget.kebabName}';\n`;
-        childRelSelectFields += `\n      ${crf.name}_display: ${crfTarget.schemaVar}.${crfDisplay},`;
-        childRelJoins += `\n        .leftJoin(${crfTarget.schemaVar}, eq(${childSchemaVar}.${crf.name}, ${crfTarget.schemaVar}.id))`;
-      }
-      if (childRelImports) childImports += childRelImports;
-
-      // When there are display joins, list all raw columns explicitly
-      const getSelectExpr = childRelSelectFields
-        ? `{\n      ${detailCols.map((c: any) => `${c.name}: ${childSchemaVar}.${c.name},\n      `).join('')}${childRelSelectFields}\n    }`
-        : '';
-      childMethods += `
-  async get${toPascalCase(field.name)}(${fkColName}: string): Promise<any[]> {
-    return this.db
-      .select(${getSelectExpr || ''})
-      .from(${childSchemaVar})${childRelJoins}
-      .where(and(eq(${childSchemaVar}.${fkColName}, ${fkColName}), isNull(${childSchemaVar}.deletedAt)));
-  }
-
-  async create${toPascalCase(field.name)}(${fkColName}: string, details: any[]): Promise<void> {
-    if (details.length === 0) return;
-    const values = details.map((d) => ({
-      ${fkColName},
-      ${detailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : null` : `${c.name}: d.${c.name}`).join(',\n      ')},
-    }));
-    await this.db.insert(${childSchemaVar}).values(values);
-  }
-
-  async update${toPascalCase(field.name)}(${fkColName}: string, details: any[]): Promise<void> {
-    const existing = await this.get${toPascalCase(field.name)}(${fkColName});
-    const existingIds = new Set(existing.map((r) => r.id));
-    const incomingIds = new Set(details.filter((d) => d.id).map((d) => d.id));
-
-    // Soft-delete rows no longer present
-    const toDelete = existing.filter((r) => !incomingIds.has(r.id));
-    if (toDelete.length > 0) {
-      await this.db
-        .update(${childSchemaVar})
-        .set({ deletedAt: sql\`NOW()\` })
-        .where(and(inArray(${childSchemaVar}.id, toDelete.map((r) => r.id)), isNull(${childSchemaVar}.deletedAt)));
-    }
-
-    // Update existing rows
-    for (const d of details.filter((d) => d.id && existingIds.has(d.id))) {
-      await this.db
-        .update(${childSchemaVar})
-        .set({
-          ${detailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : null` : `${c.name}: d.${c.name}`).join(',\n          ')},
-          updatedAt: sql\`NOW()\`,
-        })
-        .where(eq(${childSchemaVar}.id, d.id));
-    }
-
-    // Insert new rows (no id or temp id)
-    const newRows = details.filter((d) => !d.id);
-    if (newRows.length > 0) {
-      await this.create${toPascalCase(field.name)}(${fkColName}, newRows);
-    }
-  }
-
-  async remove${toPascalCase(field.name)}(${fkColName}: string): Promise<void> {
-    await this.db
-      .update(${childSchemaVar})
-      .set({ deletedAt: sql\`NOW()\` })
-      .where(and(eq(${childSchemaVar}.${fkColName}, ${fkColName}), isNull(${childSchemaVar}.deletedAt)));
-  }
-`;
-    }
-
-    // Build 1:N batch-attach code for findAll
-    const oneToManyAttachInFindAll = oneToManyFields.length > 0 ? `
-    // Batch-attach child detail rows
-    if (rows.length > 0) {
-      const masterIds = rows.map((r) => r.id);
-${oneToManyFields.map((field) => {
-  const singularMain = singularize(dto.tableName);
-  const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
-  const childSchemaVar = isExisting
-    ? deriveNames(field.relationTable!).schemaVar
-    : toCamelCase(`${singularMain}_${singularize(field.name)}`);
-  const fkColName = isExisting
-    ? field.relationFkColumn!
-    : `${toCamelCase(singularMain)}_id`;
-      // Build leftJoin + _display select for child FK fields in batch-attach
-      const detailCols = (field.detailFields || []).filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName));
-      const childBatchRelFields2 = (field.detailFields || []).filter(df => df.name !== 'id' && df.type === 'relation' && df.relationTable && df.relationTable !== dto.tableName);
-      let childBatchRelSelect2 = '';
-      let childBatchRelJoins2 = '';
-      for (const crf2 of childBatchRelFields2) {
-        const crf2Target = deriveNames(crf2.relationTable!);
-        const crf2Display = crf2.relationDisplayField || 'name';
-        childBatchRelSelect2 += `\n          ${crf2.name}_display: ${crf2Target.schemaVar}.${crf2Display},`;
-        childBatchRelJoins2 += `\n            .leftJoin(${crf2Target.schemaVar}, eq(${childSchemaVar}.${crf2.name}, ${crf2Target.schemaVar}.id))`;
-      }
-      // When there are display joins, list all needed raw columns explicitly
-      const batchSelectExpr = childBatchRelSelect2
-        ? `{\n          id: ${childSchemaVar}.id,\n          ${fkColName}: ${childSchemaVar}.${fkColName},${detailCols.map((c: any) => `\n          ${c.name}: ${childSchemaVar}.${c.name},`).join('')}${childBatchRelSelect2}\n        }`
-        : '';
-	  return `      const ${field.name}Rows = await this.db
-        .select(${batchSelectExpr || ''})
-        .from(${childSchemaVar})${childBatchRelJoins2}
-        .where(and(inArray(${childSchemaVar}.${fkColName}, masterIds), isNull(${childSchemaVar}.deletedAt)));
-      const ${field.name}ByMaster = new Map<string, any[]>();
-      for (const row of ${field.name}Rows) {
-        if (row.${fkColName} == null) continue;
-        const arr = ${field.name}ByMaster.get(row.${fkColName}) || [];
-        arr.push(row);
-        ${field.name}ByMaster.set(row.${fkColName}, arr);
-      }
-      for (const row of rows) {
-        (row as any).${field.name} = ${field.name}ByMaster.get(row.id) || [];
-      }`;
-}).join('\n')}
-    }
-` : '';
-
-    // Build 1:N attach code for findOne
-    const oneToManyAttachInFindOne = oneToManyFields.map((field) => `    (rows[0] as any).${field.name} = await this.get${toPascalCase(field.name)}(id);`).join('\n');
-
-    // Build 1:N child cleanup in remove
-    const oneToManyRemoveCleanup = oneToManyFields.map((field) => `    await this.remove${toPascalCase(field.name)}(id);
-`).join('');
-
-    // Build 1:N child cleanup in batchRemove
-    const oneToManyBatchRemoveCleanup = oneToManyFields.length > 0 ? `    // Remove child detail rows for each id
-    for (const id of ids) {
-      try {
-${oneToManyFields.map((field) => `        await this.remove${toPascalCase(field.name)}(id);`).join('\n')}
-      } catch {
-        // Record may not exist, ignore
-      }
-    }
-` : '';
-
-    // Build many-to-one join helpers
-    const hasManyToOne = manyToOneFields.length > 0;
-    let manyToOneSchemaImports = '';
-    let manyToOneSelectFields = '';
-    let manyToOneJoins = '';
-    for (const f of manyToOneFields) {
-      if (!f.relationTable) continue;
-      const targetNames = deriveNames(f.relationTable);
-      const displayField = f.relationDisplayField || 'name';
-      manyToOneSchemaImports += `import { ${targetNames.schemaVar} } from '../../db/schema/${targetNames.kebabName}';\n`;
-      manyToOneSelectFields += `\n      ${f.name}_display: ${targetNames.schemaVar}.${displayField},`;
-      manyToOneJoins += `\n        .leftJoin(${targetNames.schemaVar}, eq(${n.schemaVar}.${f.name}, ${targetNames.schemaVar}.id))`;
-    }
-
-    return `import {
-  Injectable,
-  Inject,
-  NotFoundException,
-  ConflictException,
-} from '@nestjs/common';
-import { eq, and, isNull, like, sql, count, inArray, gte, lte, desc${hasManyToOne ? ', getTableColumns' : ''} } from 'drizzle-orm';
-import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
-import { ${n.schemaVar}, ${n.schemaType} } from '../../db/schema/${n.kebabName}';
-${manyToOneSchemaImports}${childImports}import { Create${n.pascalSingular}Dto } from './dto/create-${n.kebabSingular}.dto';
-import { Update${n.pascalSingular}Dto } from './dto/update-${n.kebabSingular}.dto';
-import { Query${n.pascalSingular}Dto } from './dto/query-${n.kebabSingular}.dto';
-import { ApiErrorCode, PaginatedData } from '@lowcode/shared';
-import { SQL } from 'drizzle-orm';
-
-@Injectable()
-export class ${n.pascalSingular}Service {
-  constructor(
-    @Inject(DATABASE_CONNECTION) private readonly db: DrizzleDb,
-  ) {}
-
-  async findAll(query: Query${n.pascalSingular}Dto): Promise<PaginatedData<${n.schemaType}>> {
-    const { page, pageSize${(() => {
-      const names = searchableFields
-        .filter(f => !(f.type === 'relation' && (f.relationType === 'one-to-many')))
-        .flatMap(f => isNumericField(f) ? [`${f.name}Min`, `${f.name}Max`] : [f.name]);
-      if (names.length === 0) return '';
-      const parts = names.map(name => {
-        const base = name.replace(/Min$|Max$/, '');
-        const suffix = name.endsWith('Min') ? 'Min' : name.endsWith('Max') ? 'Max' : '';
-        return (base === n.schemaVar || manyToOneSchemaVars.has(base)) ? `${name}: ${base}Filter${suffix}` : name;
-      });
-      return ', ' + parts.join(', ');
-    })()} } = query;
-    const offset = (page - 1) * pageSize;
-
-    const conditions: SQL[] = [isNull(${n.schemaVar}.deletedAt)];
-
-${queryFilters}
-    const whereClause = and(...conditions);
-
-    const [rows, totalRows] = await Promise.all([
-      this.db
-        .select(${hasManyToOne ? `{
-          ...getTableColumns(${n.schemaVar}),${manyToOneSelectFields}
-        }` : ``})
-        .from(${n.schemaVar})${manyToOneJoins}
-        .where(whereClause)
-        .orderBy(desc(${n.schemaVar}.createdAt))
-        .limit(pageSize)
-        .offset(offset),
-      this.db
-        .select({ count: count() })
-        .from(${n.schemaVar})
-        .where(whereClause),
-    ]);
-
-    const total = totalRows[0]?.count ?? 0;
-${oneToManyAttachInFindAll}
-    return { list: rows, total, page, pageSize };
-  }
-
-  async findOne(id: string): Promise<${n.schemaType}> {
-    const rows = await this.db
-      .select(${hasManyToOne ? `{
-        ...getTableColumns(${n.schemaVar}),${manyToOneSelectFields}
-      }` : ``})
-      .from(${n.schemaVar})${manyToOneJoins}
-      .where(and(eq(${n.schemaVar}.id, id), isNull(${n.schemaVar}.deletedAt)))
-      .limit(1);
-
-    if (rows.length === 0) {
-      throw new NotFoundException({
-        code: ApiErrorCode.RESOURCE_NOT_FOUND,
-        message: \`${n.pascalSingular} with id \$\{id\} not found\`,
-      });
-    }
-${oneToManyAttachInFindOne}
-    return rows[0]!;
-  }
-
-  async create(dto: Create${n.pascalSingular}Dto): Promise<${n.schemaType}> {
-${uniqueChecks}${oneToManyFields.length > 0 ? `
-    return this.db.transaction(async (tx) => {
-      const rows = await tx
-        .insert(${n.schemaVar})
-        .values({
-${creatableFields.map(f => f.type === 'decimal' ? `          ${f.name}: String(dto.${f.name}),` : `          ${f.name}: dto.${f.name},`).join('\n')}
-        })
-        .returning();
-      const created = rows[0]!;
-${oneToManyFields.map((field) => {
-  const singularMain = singularize(dto.tableName);
-  const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
-  const childSchemaVar = isExisting
-    ? deriveNames(field.relationTable!).schemaVar
-    : toCamelCase(`${singularMain}_${singularize(field.name)}`);
-  const fkColName = isExisting
-    ? field.relationFkColumn!
-    : `${toCamelCase(singularMain)}_id`;
-  const detailCols = (field.detailFields || []).filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName));
-  return `      if (dto.${field.name} && (dto.${field.name} as any[]).length > 0) {
-        await tx.insert(${childSchemaVar}).values(
-          (dto.${field.name} as any[]).map((d: any) => ({
-            ${fkColName}: created.id,
-            ${detailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : null` : `${c.name}: d.${c.name}`).join(',\n            ')},
-          })),
-        );
-      }`;
-}).join('\n')}
-${manyToManyFields.map((f) => `      if (dto.${f.name} && dto.${f.name}.length > 0) {
-        await this.add${toPascalCase(f.name)}(created.id, dto.${f.name});
-      }`).join('\n')}
-      return created;
-    });` : `
-    const rows = await this.db
-      .insert(${n.schemaVar})
-      .values({
-${creatableFields.map(f => f.type === 'decimal' ? `        ${f.name}: String(dto.${f.name}),` : `        ${f.name}: dto.${f.name},`).join('\n')}
-      })
-      .returning();
-${manyToManyFields.length > 0 ? `
-    // Handle many-to-many relations after creation
-    const created = rows[0]!;
-` + manyToManyFields.map((f) => {
-      return `    if (dto.${f.name} && dto.${f.name}.length > 0) {
-      await this.add${toPascalCase(f.name)}(created.id, dto.${f.name});
-    }`;
-    }).join('\n') + `\n    return created;` : `    return rows[0]!;`}
-`}
-  }
-
-  async update(id: string, dto: Update${n.pascalSingular}Dto): Promise<${n.schemaType}> {
-    const existing = await this.findOne(id);
-
-${updateUniqueChecks}
-    type ${n.pascalSingular}UpdateFields = {
-${editableFields.map(f => {
-      const tsType = f.type === 'boolean' ? 'boolean' : f.type === 'integer' || f.type === 'bigint' ? 'number' : 'string';
-      return `      ${f.name}?: ${tsType};`;
-    }).join('\n')}
-      updatedAt?: Date;
-    };
-
-    const updateData: ${n.pascalSingular}UpdateFields = {
-      updatedAt: new Date(),
-    };
-
-${updateDataBuilder}
-    const rows = await this.db
-      .update(${n.schemaVar})
-      .set(updateData)
-      .where(and(eq(${n.schemaVar}.id, id), isNull(${n.schemaVar}.deletedAt)))
-      .returning();
-${manyToManyFields.length > 0 ? '\n' + manyToManyFields.map((f) => {
-      return `    if (dto.${f.name} !== undefined) {
-      // Replace all relations: remove existing, then add new ones
-      const existing${toPascalCase(f.name)} = await this.get${toPascalCase(f.name)}(id);
-      const existingIds = existing${toPascalCase(f.name)}.map((r) => r.id);
-      if (existingIds.length > 0) {
-        await this.remove${toPascalCase(f.name)}(id, existingIds);
-      }
-      if (dto.${f.name}!.length > 0) {
-        await this.add${toPascalCase(f.name)}(id, dto.${f.name}!);
-      }
-    }`;
-    }).join('\n') : ''}
-${oneToManyFields.map((field) => `    if (dto.${field.name} !== undefined) {
-      await this.update${toPascalCase(field.name)}(id, dto.${field.name} as any[]);
-    }`).join('\n')}
-    return rows[0]!;
-  }
-
-  async remove(id: string): Promise<void> {
-    await this.findOne(id);
-
-${oneToManyRemoveCleanup}${manyToManyFields.length > 0 ? manyToManyFields.map((f) => `    // Remove all ${f.name} relations before deleting
-    const existing${toPascalCase(f.name)} = await this.get${toPascalCase(f.name)}(id);
-    const existing${toPascalCase(f.name)}Ids = existing${toPascalCase(f.name)}.map((r) => r.id);
-    if (existing${toPascalCase(f.name)}Ids.length > 0) {
-      await this.remove${toPascalCase(f.name)}(id, existing${toPascalCase(f.name)}Ids);
-    }
-`).join('') : ''}
-    await this.db
-      .update(${n.schemaVar})
-      .set({ deletedAt: sql\`NOW()\` })
-      .where(and(eq(${n.schemaVar}.id, id), isNull(${n.schemaVar}.deletedAt)));
-  }
-
-  async batchRemove(ids: string[]): Promise<{ count: number }> {
-${oneToManyBatchRemoveCleanup}${manyToManyFields.length > 0 ? `    // Remove all many-to-many relations for each id
-    for (const id of ids) {
-${manyToManyFields.map((f) => `      try {
-        const existing${toPascalCase(f.name)} = await this.get${toPascalCase(f.name)}(id);
-        const existing${toPascalCase(f.name)}Ids = existing${toPascalCase(f.name)}.map((r) => r.id);
-        if (existing${toPascalCase(f.name)}Ids.length > 0) {
-          await this.remove${toPascalCase(f.name)}(id, existing${toPascalCase(f.name)}Ids);
-        }
-      } catch {
-        // Record may not exist, ignore
-      }
-`).join('')}    }
-` : ''}
-    const rows = await this.db
-      .update(${n.schemaVar})
-      .set({ deletedAt: sql\`NOW()\` })
-      .where(and(inArray(${n.schemaVar}.id, ids), isNull(${n.schemaVar}.deletedAt)))
-      .returning({ id: ${n.schemaVar}.id });
-
-    return { count: rows.length };
-  }
-${childMethods}
-}
-`;
-  }
-
-  /**
-   * Generate NestJS controller with REST endpoints.
-   */
-  generateController(dto: AutoCodeDto): string {
-    const n = deriveNames(dto.tableName);
-
-    return `import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Delete,
-  Body,
-  Param,
-  Query,
-  HttpCode,
-  HttpStatus,
-} from '@nestjs/common';
-import {
-  ApiTags,
-  ApiBearerAuth,
-  ApiOperation,
-  ApiResponse,
-} from '@nestjs/swagger';
-import { ${n.pascalSingular}Service } from './${n.kebabSingular}.service';
-import { Create${n.pascalSingular}Dto } from './dto/create-${n.kebabSingular}.dto';
-import { Update${n.pascalSingular}Dto } from './dto/update-${n.kebabSingular}.dto';
-import { Query${n.pascalSingular}Dto } from './dto/query-${n.kebabSingular}.dto';
-import { BatchDeleteDto } from '../../common/dto/batch-delete.dto';
-import {
-  ApiResponse as ApiResp,
-  PaginatedResponse,
-} from '@lowcode/shared';
-import { ${n.schemaType} } from '../../db/schema/${n.kebabName}';
-
-@ApiTags('lc/${n.kebabName}')
-@ApiBearerAuth()
-@Controller('lc/${n.kebabName}')
-export class ${n.pascalSingular}Controller {
-  constructor(private readonly ${n.camelSingular}Service: ${n.pascalSingular}Service) {}
-
-  @Get()
-  @ApiOperation({ summary: 'Get paginated list of ${n.kebabName}' })
-  @ApiResponse({ status: 200, description: 'Returns paginated ${n.kebabName}' })
-  async findAll(@Query() query: Query${n.pascalSingular}Dto): Promise<PaginatedResponse<${n.schemaType}>> {
-    const data = await this.${n.camelSingular}Service.findAll(query);
-    return { code: 0, msg: 'success', data };
-  }
-
-  @Get(':id')
-  @ApiOperation({ summary: 'Get ${n.kebabSingular} by id' })
-  @ApiResponse({ status: 200, description: 'Returns the ${n.kebabSingular}' })
-  @ApiResponse({ status: 404, description: '${n.pascalSingular} not found' })
-  async findOne(@Param('id') id: string): Promise<ApiResp<${n.schemaType}>> {
-    const data = await this.${n.camelSingular}Service.findOne(id);
-    return { code: 0, msg: 'success', data };
-  }
-
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Create a new ${n.kebabSingular}' })
-  @ApiResponse({ status: 201, description: '${n.pascalSingular} created successfully' })
-  @ApiResponse({ status: 409, description: 'Unique constraint conflict' })
-  async create(@Body() dto: Create${n.pascalSingular}Dto): Promise<ApiResp<${n.schemaType}>> {
-    const data = await this.${n.camelSingular}Service.create(dto);
-    return { code: 0, msg: 'success', data };
-  }
-
-  @Patch(':id')
-  @ApiOperation({ summary: 'Update ${n.kebabSingular} by id' })
-  @ApiResponse({ status: 200, description: '${n.pascalSingular} updated successfully' })
-  @ApiResponse({ status: 404, description: '${n.pascalSingular} not found' })
-  @ApiResponse({ status: 409, description: 'Unique constraint conflict' })
-  async update(
-    @Param('id') id: string,
-    @Body() dto: Update${n.pascalSingular}Dto,
-  ): Promise<ApiResp<${n.schemaType}>> {
-    const data = await this.${n.camelSingular}Service.update(id, dto);
-    return { code: 0, msg: 'success', data };
-  }
-
-  @Delete('batch')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Batch delete ${n.kebabName} by ids' })
-  @ApiResponse({ status: 200, description: '${n.pascalName} deleted successfully' })
-  async batchRemove(@Body() dto: BatchDeleteDto): Promise<ApiResp<{ count: number }>> {
-    const data = await this.${n.camelSingular}Service.batchRemove(dto.ids);
-    return { code: 0, msg: 'success', data };
-  }
-
-  @Delete(':id')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Delete ${n.kebabSingular} by id' })
-  @ApiResponse({ status: 200, description: '${n.pascalSingular} deleted successfully' })
-  @ApiResponse({ status: 404, description: '${n.pascalSingular} not found' })
-  async remove(@Param('id') id: string): Promise<ApiResp<null>> {
-    await this.${n.camelSingular}Service.remove(id);
-    return { code: 0, msg: 'success', data: null };
-  }
-}
-`;
-  }
-
-  /**
-   * Generate NestJS module file.
-   */
-  generateModule(dto: AutoCodeDto): string {
-    const n = deriveNames(dto.tableName);
-
-    return `import { Module } from '@nestjs/common';
-import { ${n.pascalSingular}Controller } from './${n.kebabSingular}.controller';
-import { ${n.pascalSingular}Service } from './${n.kebabSingular}.service';
-
-@Module({
-  controllers: [${n.pascalSingular}Controller],
-  providers: [${n.pascalSingular}Service],
-  exports: [${n.pascalSingular}Service],
-})
-export class ${n.pascalSingular}Module {}
-`;
-  }
-
-  /**
-   * Generate frontend API service file.
-   */
-  generateFrontendService(dto: AutoCodeDto, relationDictTypes: Map<string, string | null> = new Map()): string {
-    const n = deriveNames(dto.tableName);
-    const oneToManyFields = dto.fields.filter((f) => f.type === 'relation' && f.relationType === 'one-to-many');
-
-    // Generate child detail interfaces for one-to-many
-    const childInterfaces: string[] = [];
-    for (const f of oneToManyFields) {
-      if (!f.detailFields || f.detailFields.length === 0) continue;
-      const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
-      const childPascalType = isExisting
-        ? deriveNames(f.relationTable!).schemaType
-        : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
-      const childFieldLines = f.detailFields.map((df) => {
-        const tsType = toTsType(df);
-        const nullable = !df.required && df.type !== 'boolean' ? ' | null' : '';
-        return `  ${df.name}: ${tsType}${nullable};`;
-      });
-      childInterfaces.push(`
-export interface ${childPascalType} {
-  id: string;
-${childFieldLines.join('\n')}
-  createdAt: string;
-  updatedAt: string;
-}
-`);
-    }
-
-    const fieldInterfaces = dto.fields.map((f) => {
-      // one-to-many fields are arrays of child objects
-      if (f.type === 'relation' && f.relationType === 'one-to-many') {
-        const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
-        const childPascalType = isExisting
-          ? deriveNames(f.relationTable!).schemaType
-          : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
-        const nullable = !f.required ? ' | null' : '';
-        return `  ${f.name}: ${childPascalType}[]${nullable};`;
-      }
-      const tsType = toTsType(f);
-      const nullable = !f.required && f.type !== 'boolean' ? ' | null' : '';
-      if (f.type === 'relation' && (f.relationType === 'many-to-one' || f.relationType === 'many-to-many')) {
-        return `  ${f.name}: ${tsType}${nullable};\n  ${f.name}_display: string | null;`;
-      }
-      return `  ${f.name}: ${tsType}${nullable};`;
-    });
-
-    const createFields = dto.fields
-      .filter((f) => f.creatable)
-      .map((f) => {
-        if (f.type === 'relation' && f.relationType === 'one-to-many') {
-          const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
-          const childPascalType = isExisting
-            ? deriveNames(f.relationTable!).schemaType
-            : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
-          return `  ${f.name}?: ${childPascalType}[];`;
-        }
-        const tsType = toTsType(f);
-        const opt = f.required ? '' : '?';
-        return `  ${f.name}${opt}: ${tsType};`;
-      });
-
-    const updateFields = dto.fields
-      .filter((f) => f.editable)
-      .map((f) => {
-        if (f.type === 'relation' && f.relationType === 'one-to-many') {
-          const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
-          const childPascalType = isExisting
-            ? deriveNames(f.relationTable!).schemaType
-            : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
-          return `  ${f.name}?: ${childPascalType}[];`;
-        }
-        const tsType = toTsType(f);
-        return `  ${f.name}?: ${tsType};`;
-      });
-
-    const isNumericF = (f: AutoCodeField) => f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal';
-    const queryFields = dto.fields
-      .filter((f) => f.searchable)
-      .flatMap((f) => {
-        if (f.type === 'relation' && (f.relationType === 'one-to-many')) {
-          return [`  ${f.name}?: string[];`];
-        }
-        if (isNumericF(f)) {
-          return [`  ${f.name}Min?: string;`, `  ${f.name}Max?: string;`];
-        }
-        return [`  ${f.name}?: string;`];
-      });
-
-    // Generate relation option interfaces and fetch functions
-    const relationFields = dto.fields.filter((f) => f.type === 'relation');
-    const relationOptionInterfaces: string[] = [];
-    const relationFetchFunctions: string[] = [];
-
-    for (const f of relationFields) {
-      if (!f.relationTable) continue;
-      const targetNames = deriveNames(f.relationTable);
-      const displayField = f.relationDisplayField || 'name';
-      const optionInterfaceName = `${toPascalCase(singularize(f.relationTable))}Option`;
-      const fetchFunctionName = `get${toPascalCase(singularize(f.relationTable))}Options`;
-
-      relationOptionInterfaces.push(`
-export interface ${optionInterfaceName} {
-  id: string;
-  ${displayField}: string;
-}
-`);
-
-      const isMulti = f.relationType === 'many-to-many';
-      const dictType = relationDictTypes.get(f.name);
-      if (dictType) {
-        relationFetchFunctions.push(`
-/**
- * Get ${targetNames.kebabName} options for select dropdown${isMulti ? ' (multi-select)' : ''}.
- * \`${displayField}\` is a dict code from ${dictType} — resolved to human-readable label.
- */
-export async function ${fetchFunctionName}(): Promise<${optionInterfaceName}[]> {
-  const [res, dictItems] = await Promise.all([
-    request.get('/lc/${targetNames.kebabName}', { params: { pageSize: 100 } }),
-    getDictDetailsByType('${dictType}'),
-  ]);
-  const dictMap: Record<string, string> = {};
-  dictItems.forEach((d: { label: string; value: string }) => { dictMap[d.value] = d.label; });
-  const list: any[] = res.list || res.data || [];
-  return list.map((item: any) => ({ ...item, ${displayField}: dictMap[item.${displayField}] ?? item.${displayField} }));
-}
-`);
-      } else {
-        relationFetchFunctions.push(`
-/**
- * Get ${targetNames.kebabName} options for select dropdown${isMulti ? ' (multi-select)' : ''}.
- */
-export async function ${fetchFunctionName}(): Promise<${optionInterfaceName}[]> {
-  const res = await request.get('/lc/${targetNames.kebabName}', { params: { pageSize: 100 } });
-  return res.list || res.data || [];
-}
-`);
-      }
-    }
-
-    // Generate options fetchers for FK fields inside O2M child tables
-    const oneToManyFieldsForService = dto.fields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields);
-    const seenFetchers = new Set(relationFields.map(f => f.relationTable).filter(Boolean));
-    for (const o2m of oneToManyFieldsForService) {
-      for (const df of (o2m.detailFields || [])) {
-        if (df.type !== 'relation' || !df.relationTable || df.relationTable === dto.tableName) continue;
-        if (seenFetchers.has(df.relationTable)) continue;
-        seenFetchers.add(df.relationTable);
-        const targetNames = deriveNames(df.relationTable);
-        const displayField = df.relationDisplayField || 'name';
-        const optionInterfaceName = `${toPascalCase(singularize(df.relationTable))}Option`;
-        const fetchFunctionName = `get${toPascalCase(singularize(df.relationTable))}Options`;
-
-        relationOptionInterfaces.push(`
-export interface ${optionInterfaceName} {
-  id: string;
-  ${displayField}: string;
-}
-`);
-        relationFetchFunctions.push(`
-/**
- * Get ${targetNames.kebabName} options for select dropdown.
- */
-export async function ${fetchFunctionName}(): Promise<${optionInterfaceName}[]> {
-  const res = await request.get('/lc/${targetNames.kebabName}', { params: { pageSize: 100 } });
-  return res.list || res.data || [];
-}
-`);
-      }
-    }
-
-    const hasDictRelation = [...relationDictTypes.values()].some(v => v !== null);
-    return `import request from './request';${hasDictRelation ? `\nimport { getDictDetailsByType } from './dictionary';` : ''}
-${childInterfaces.join('')}
-export interface ${n.pascalSingular} {
-  id: string;
-${fieldInterfaces.join('\n')}
-  createdAt: string;
-  updatedAt: string;
-  createdBy: string | null;
-  updatedBy: string | null;
-}
-${relationOptionInterfaces.join('')}
-export interface ${n.pascalSingular}ListParams {
-  page?: number;
-  pageSize?: number;
-${queryFields.map(f => `  ${f}`).join('\n')}
-}
-
-export interface ${n.pascalSingular}ListResult {
-  list: ${n.pascalSingular}[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
-export interface Create${n.pascalSingular}Dto {
-${createFields.map(f => `  ${f}`).join('\n')}
-}
-
-export interface Update${n.pascalSingular}Dto {
-${updateFields.map(f => `  ${f}`).join('\n')}
-}
-
-export interface BatchDeleteDto {
-  ids: string[];
-}
-
-/**
- * Get paginated ${n.kebabName} list.
- */
-export async function get${n.pascalName}List(params?: ${n.pascalSingular}ListParams): Promise<${n.pascalSingular}ListResult> {
-  return request.get('/lc/${n.kebabName}', { params });
-}
-
-/**
- * Get a single ${n.kebabSingular} by ID.
- */
-export async function get${n.pascalSingular}(id: string): Promise<${n.pascalSingular}> {
-  return request.get(\`/lc/${n.kebabName}/\$\{id\}\`);
-}
-
-/**
- * Create a new ${n.kebabSingular}.
- */
-export async function create${n.pascalSingular}(dto: Create${n.pascalSingular}Dto): Promise<${n.pascalSingular}> {
-  return request.post('/lc/${n.kebabName}', dto);
-}
-
-/**
- * Update an existing ${n.kebabSingular}.
- */
-export async function update${n.pascalSingular}(id: string, dto: Update${n.pascalSingular}Dto): Promise<${n.pascalSingular}> {
-  return request.patch(\`/lc/${n.kebabName}/\$\{id\}\`, dto);
-}
-
-/**
- * Delete a ${n.kebabSingular} by ID (soft delete).
- */
-export async function delete${n.pascalSingular}(id: string): Promise<void> {
-  return request.delete(\`/lc/${n.kebabName}/\$\{id\}\`);
-}
-
-/**
- * Batch delete ${n.kebabName} by IDs (soft delete).
- * Returns { count: number }.
- */
-export async function batchDelete${n.pascalName}(ids: string[]): Promise<{ count: number }> {
-  return request.delete('/lc/${n.kebabName}/batch', { data: { ids } });
-}
-${relationFetchFunctions.join('')}
-`;
-  }
-
-  /**
-   * Generate Umi 4 frontend page with ProTable + ModalForm.
-   */
-  generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<string, string | null> = new Map()): string {
-    const n = deriveNames(dto.tableName);
-    const listableFields = dto.fields.filter((f) => f.listable);
-    const creatableFields = dto.fields.filter((f) => f.creatable);
-    const editableFields = dto.fields.filter((f) => f.editable);
-    const searchableFields = dto.fields.filter((f) => f.searchable);
-    const relationFields = dto.fields.filter((f) => f.type === 'relation');
-
-    // ProColumns generation
-    const columnLines = listableFields.map((f) => {
-      const valueType = getValueType(f);
-      if (f.type === 'boolean') {
-        return `    {
-      title: '${f.description || f.name}',
-      dataIndex: '${f.name}',
-      valueType: 'switch',
-      width: 100,
-      search: false,
-    },`;
-      }
-      if (f.type === 'image') {
-        return `    {
-      title: '${f.description || f.name}',
-      dataIndex: '${f.name}',
-      valueType: '${valueType}',
-      width: 120,
-      search: false,
-      render: (_, record) => record.${f.name} ? <img src={record.${f.name}} style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 4 }} /> : '-',
-    },`;
-      }
-      if (f.type === 'file') {
-        return `    {
-      title: '${f.description || f.name}',
-      dataIndex: '${f.name}',
-      valueType: '${valueType}',
-      width: 180,
-      search: false,
-      render: (_, record) => record.${f.name} ? <a href={record.${f.name}} target="_blank" rel="noreferrer">{'${f.description || f.name}'}</a> : '-',
-    },`;
-      }
-      if (f.type === 'relation' && (f.relationType === 'many-to-one' || f.relationType === 'many-to-many')) {
-        const m2oDictType = relationDictTypes.get(f.name);
-        const renderExpr = m2oDictType
-          ? `{ const code = record.${f.name}_display || record.${f.name}; return ${toCamelCase(f.name)}TypeMap[code ?? ''] ?? code; }`
-          : `record.${f.name}_display || record.${f.name}`;
-        return `    {
-      title: '${f.description || f.name}',
-      dataIndex: '${f.name}',
-      valueType: '${valueType}',
-      width: 180,
-      search: false,
-      render: (_, record) => ${renderExpr},
-    },`;
-      }
-      if (f.type === 'relation' && f.relationType === 'one-to-many') {
-        const displayField = f.relationDisplayField;
-        const renderLogic = displayField
-          ? `const items = record.${f.name} || [];
-        if (items.length === 0) return '-';
-        const names = items.slice(0, 3).map(i => i.${displayField}).filter(Boolean).join(', ');
-        return items.length > 3 ? names + '... 等' + items.length + '条' : names;`
-          : `const items = record.${f.name} || [];
-        return items.length > 0 ? items.length + ' 条' : '-';`;
-        return `    {
-      title: '${f.description || f.name}',
-      dataIndex: '${f.name}',
-      valueType: 'text',
-      width: 150,
-      search: false,
-      render: (_, record) => {
-        ${renderLogic}
-      },
-    },`;
-      }
-      if (f.type === 'dict') {
-        return `    {
-      title: '${f.description || f.name}',
-      dataIndex: '${f.name}',
-      valueType: 'select',
-      width: 120,
-      search: false,
-      valueEnum: ${toCamelCase(f.name)}Options,
-    },`;
-      }
-      const sorterExpr = (f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal')
-        ? `sorter: (a, b) => (Number(a.${f.name} ?? 0) - Number(b.${f.name} ?? 0)),`
-        : (f.type === 'timestamp')
-        ? `sorter: (a, b) => new Date(a.${f.name} as string).getTime() - new Date(b.${f.name} as string).getTime(),`
-        : (f.type === 'varchar' || f.type === 'text')
-        ? `sorter: (a, b) => String(a.${f.name} ?? '').localeCompare(String(b.${f.name} ?? '')),`
-        : '';
-      return `    {
-      title: '${f.description || f.name}',
-      dataIndex: '${f.name}',
-      valueType: '${valueType}',
-      width: 180,
-      ${sorterExpr}
-    },`;
-    });
-
-    // Form fields for create/edit
-    const formFields = creatableFields.map((f) => {
-      const component = getProFormComponent(f);
-      const requiredRule = f.required ? `rules={[{ required: true, message: '请${f.type === 'relation' ? '选择' : '输入'}${f.description || f.name}' }]}` : '';
-      const disabledWhenEditing = f.unique ? `disabled={!!editingRecord}` : '';
-
-      if (f.type === 'relation') {
-        // One-to-many: render EditableProTable for detail rows
-        if (f.relationType === 'one-to-many' && f.detailFields && f.detailFields.length > 0) {
-          const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
-          const childPascalType = isExisting
-            ? deriveNames(f.relationTable!).schemaType
-            : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
-          const detailCols = f.detailFields.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName));
-          const editableColumns = detailCols.map((df) => {
-            // Relation/FK columns → render ProFormSelect with options fetch
-            if (df.type === 'relation' && df.relationTable) {
-              const relTarget = deriveNames(df.relationTable);
-              const relDisplay = df.relationDisplayField || 'name';
-              const relFetchFn = `get${toPascalCase(singularize(df.relationTable))}Options`;
-              return `        {
-          title: '${df.description || df.name}',
-          dataIndex: '${df.name}',
-          valueType: 'select',
-          render: (_: any, r: any) => r.${df.name}_display || r.${df.name},
-          formItemProps: { rules: [{ required: ${df.required} }] },
-          request: async () => {
-            const res = await ${relFetchFn}();
-            return res.map((item: any) => ({ label: item.${relDisplay}, value: item.id }));
-          },
-          fieldProps: { showSearch: true },
-        },`;
-            }
-            return `        {
-          title: '${df.description || df.name}',
-          dataIndex: '${df.name}',
-          valueType: '${df.type === 'integer' || df.type === 'bigint' || df.type === 'decimal' ? 'digit' : df.type === 'timestamp' ? 'dateTime' : 'text'}',
-          formItemProps: { rules: [{ required: ${df.required} }] },
-        },`;
-          });
-          const emptyRow = detailCols.map(df => {
-            if (df.type === 'relation') return `${df.name}: ''`;
-            return `${df.name}: ${df.type === 'integer' || df.type === 'bigint' || df.type === 'decimal' ? '0' : df.type === 'timestamp' ? 'null' : "''"}`;
-          }).join(', ');
-
-          return `          <Form.Item name="${f.name}" label="${f.description || f.name}">
-            <Form.Item noStyle shouldUpdate>
-              {() => {
-                const rows: any[] = form.getFieldValue('${f.name}') || [];
-                return (
-                  <>
-                    <EditableProTable<${childPascalType}>
-                      rowKey="id"
-                      value={rows}
-                      onChange={(data) => { form.setFieldValue('${f.name}', data ?? []); }}
-                      recordCreatorProps={false}
-                      editable={{
-                        type: 'multiple',
-                        editableKeys: ${toCamelCase(f.name)}EditableKeys,
-                        onChange: set${toPascalCase(f.name)}EditableKeys,
-                        onValuesChange: (_record, dataSource) => { form.setFieldValue('${f.name}', dataSource); },
-                        actionRender: (row, _config, _defaultDoms) => [
-                          <a key="delete" onClick={() => {
-                            const cur: any[] = form.getFieldValue('${f.name}') || [];
-                            form.setFieldValue('${f.name}', cur.filter((r: any) => r.id !== row.id));
-                            set${toPascalCase(f.name)}EditableKeys((keys: React.Key[]) => keys.filter((k) => k !== row.id));
-                          }} style={{ color: '#ff4d4f' }}>删除</a>,
-                        ],
-                      }}
-                      columns={[
-${editableColumns.join('\n')}
-                        { title: '操作', valueType: 'option', width: 60 },
-                      ]}
-                    />
-                    <Button
-                      type="dashed"
-                      block
-                      icon={<PlusOutlined />}
-                      style={{ marginTop: 8 }}
-                      onClick={() => {
-                        const tempId = Date.now().toString() + '_' + Math.random().toString(36).slice(2, 8);
-                        const newRow = { id: tempId, ${emptyRow} };
-                        form.setFieldValue('${f.name}', [...rows, newRow]);
-                        set${toPascalCase(f.name)}EditableKeys((keys: React.Key[]) => [...keys, tempId]);
-                      }}
-                    >
-                      添加${f.description || f.name}
-                    </Button>
-                  </>
-                );
-              }}
-            </Form.Item>
-          </Form.Item>`;
-        }
-
-        // Many-to-one or many-to-many: render single-select ProFormSelect
-        const targetNames = deriveNames(f.relationTable!);
-        const fetchFunctionName = `get${toPascalCase(singularize(f.relationTable!))}Options`;
-        const displayField = f.relationDisplayField || 'name';
-
-        return `          <${component}
-            name="${f.name}"
-            label="${f.description || f.name}"
-            ${requiredRule}
-            request={async () => {
-              const res = await ${fetchFunctionName}();
-              return res.map((item: any) => ({ label: item.${displayField}, value: item.id }));
-            }}
-          />`;
-      }
-      if (f.type === 'dict') {
-        const requiredRuleDict = f.required ? `rules={[{ required: true, message: '请选择${f.description || f.name}' }]}` : '';
-        return `          <ProFormSelect
-            name="${f.name}"
-            label="${f.description || f.name}"
-            ${requiredRuleDict}
-            request={async () => {
-              const list = await getDictDetailsByType('${f.dictType || ''}');
-              return list.map((item: any) => ({ label: item.label, value: item.value }));
-            }}
-          />`;
-      }
-      if (f.type === 'boolean') {
-        return `          <${component}
-            name="${f.name}"
-            label="${f.description || f.name}"
-          />`;
-      }
-      if (f.type === 'image') {
-        return `          <Form.Item
-            name="${f.name}"
-            label="${f.description || f.name}"
-            ${requiredRule}
-            getValueFromEvent={(e) => {
-              if (Array.isArray(e)) return e;
-              return e?.fileList;
-            }}
-          >
-            <Upload
-              listType="picture-card"
-              accept="image/*"
-              maxCount={1}
-              customRequest={async ({ file, onSuccess, onError }) => {
-                try {
-                  const result = await uploadFile(file as File);
-                  onSuccess(result);
-                } catch (err) {
-                  onError(err);
-                }
-              }}
-            >
-              <div><PlusOutlined /> Upload</div>
-            </Upload>
-          </Form.Item>`;
-      }
-      if (f.type === 'file') {
-        return `          <Form.Item
-            name="${f.name}"
-            label="${f.description || f.name}"
-            ${requiredRule}
-            getValueFromEvent={(e) => {
-              if (Array.isArray(e)) return e;
-              return e?.fileList;
-            }}
-          >
-            <Upload
-              listType="text"
-              maxCount={1}
-              customRequest={async ({ file, onSuccess, onError }) => {
-                try {
-                  const result = await uploadFile(file as File);
-                  onSuccess(result);
-                } catch (err) {
-                  onError(err);
-                }
-              }}
-            >
-              <Button icon={<UploadOutlined />}>Select File</Button>
-            </Upload>
-          </Form.Item>`;
-      }
-      if (f.type === 'text') {
-        return `          <${component}
-            name="${f.name}"
-            label="${f.description || f.name}"
-            placeholder="${f.description || f.name}"
-            ${requiredRule}
-            fieldProps={{ rows: 3 }}
-          />`;
-      }
-      return `          <${component}
-            name="${f.name}"
-            label="${f.description || f.name}"
-            placeholder="${f.description || f.name}"
-            ${requiredRule}
-            ${disabledWhenEditing}
-          />`;
-    });
-
-    // Request params destructure (exclude many-to-many from query params in table)
-    const tableSearchableFields = searchableFields.filter((f) => !(f.type === 'relation' && (f.relationType === 'one-to-many')));
-    const requestParamKeys = tableSearchableFields.map((f) => f.name).join(', ');
-    const requestDestructure = tableSearchableFields.length > 0
-      ? `const { current: page, pageSize${requestParamKeys ? `, ${requestParamKeys}` : ''} } = params;`
-      : 'const { current: page, pageSize } = params;';
-
-    // Handle submit: build DTO
-    const createDtoFields = creatableFields.map((f) => {
-      if (f.type === 'relation' && f.relationType === 'one-to-many') {
-        const tsFields = (f.detailFields || []).filter((df: any) => df.type === 'timestamp' && df.name !== 'id');
-        const tsOverrides = tsFields.map((df: any) => `            ${df.name}: d.${df.name} && typeof d.${df.name} === 'object' ? d.${df.name}.toISOString() : d.${df.name},`).join('\n');
-        return `          ${f.name}: (values.${f.name} || []).map((d: any) => ({
-            ...d,
-            id: d.id?.length < 36 ? undefined : d.id,
-${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
-      }
-      if (f.type === 'boolean') {
-        return `          ${f.name}: values.${f.name} ?? false,`;
-      }
-      if (f.type === 'integer' || f.type === 'bigint') {
-        return `          ${f.name}: values.${f.name} ?? 0,`;
-      }
-      if (f.type === 'decimal') {
-        return `          ${f.name}: String(values.${f.name} ?? '0'),`;
-      }
-      if (f.type === 'relation') {
-        return `          ${f.name}: values.${f.name} || '',`;
-      }
-      if (f.type === 'image' || f.type === 'file') {
-        return `          ${f.name}: (() => {
-            const v = values.${f.name};
-            if (typeof v === 'string') return v;
-            if (Array.isArray(v) && v.length > 0) {
-              const item = v[0];
-              return item?.response?.url || item?.url || '';
-            }
-            return '';
-          })(),`;
-      }
-      return `          ${f.name}: values.${f.name} || '',`;
-    });
-
-    const updateDtoFields = editableFields.map((f) => {
-      if (f.type === 'relation' && f.relationType === 'one-to-many') {
-        const tsFields = (f.detailFields || []).filter((df: any) => df.type === 'timestamp' && df.name !== 'id');
-        const tsOverrides = tsFields.map((df: any) => `            ${df.name}: d.${df.name} && typeof d.${df.name} === 'object' ? d.${df.name}.toISOString() : d.${df.name},`).join('\n');
-        return `          ${f.name}: (values.${f.name} || []).map((d: any) => ({
-            ...d,
-            id: d.id?.length < 36 ? undefined : d.id,
-${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
-      }
-      if (f.type === 'boolean') {
-        return `          ${f.name}: values.${f.name} ?? false,`;
-      }
-      if (f.type === 'integer' || f.type === 'bigint') {
-        return `          ${f.name}: values.${f.name} ?? 0,`;
-      }
-      if (f.type === 'decimal') {
-        return `          ${f.name}: String(values.${f.name} ?? '0'),`;
-      }
-      if (f.type === 'relation') {
-        return `          ${f.name}: values.${f.name} || '',`;
-      }
-      if (f.type === 'image' || f.type === 'file') {
-        return `          ${f.name}: (() => {
-            const v = values.${f.name};
-            if (typeof v === 'string') return v;
-            if (Array.isArray(v) && v.length > 0) {
-              const item = v[0];
-              return item?.response?.url || item?.url || '';
-            }
-            return '';
-          })(),`;
-      }
-      return `          ${f.name}: values.${f.name} || '',`;
-    });
-
-    // Import destructure for API functions
-    const apiFunctions = [
-      `get${n.pascalName}List`,
-      `create${n.pascalSingular}`,
-      `update${n.pascalSingular}`,
-      `delete${n.pascalSingular}`,
-      `batchDelete${n.pascalName}`,
-    ];
-    const typeImports = [
-      `${n.pascalSingular}`,
-      `Create${n.pascalSingular}Dto`,
-      `Update${n.pascalSingular}Dto`,
-    ];
-
-    // Add relation fetch functions to imports
-    for (const f of relationFields) {
-      if (f.relationTable) {
-        apiFunctions.push(`get${toPascalCase(singularize(f.relationTable))}Options`);
-      }
-    }
-
-    // Determine if we need ProFormSelect import
-    const dictFields = dto.fields.filter((f) => f.type === 'dict');
-    const needsProFormSelect = creatableFields.some((f) => (f.type === 'relation' && f.relationType !== 'one-to-many') || f.type === 'dict');
-    // Many-to-one fields whose display column is dict-backed
-    const manyToOneDictFields = dto.fields
-      .filter((f) => f.type === 'relation' && (f.relationType === 'many-to-one' || f.relationType === 'many-to-many') && relationDictTypes.get(f.name))
-      .map((f) => ({ field: f, dictType: relationDictTypes.get(f.name) as string }));
-    const hasDictFields = dictFields.length > 0 || manyToOneDictFields.length > 0;
-
-    // Determine if we need Upload/FileUpload imports
-    const hasUploadFields = creatableFields.some((f) => f.type === 'image' || f.type === 'file');
-
-    // Determine if we need EditableProTable for one-to-many
-    const hasOneToMany = creatableFields.some((f) => f.type === 'relation' && f.relationType === 'one-to-many');
-
-    const oneToManyFields = dto.fields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields && f.detailFields.length > 0);
-    const antdImports = ['Button', 'message', 'Popconfirm', 'Space', 'Form', 'Table', 'Input'];
-    if (hasUploadFields) antdImports.push('Upload');
-    if (oneToManyFields.length > 1) antdImports.push('Tabs');
-    // Add options fetchers for FK fields in O2M child tables
-    for (const f2 of oneToManyFields) {
-      for (const df of (f2.detailFields || [])) {
-        if (df.type === 'relation' && df.relationTable && df.relationTable !== dto.tableName) {
-          const childOptFn = `get${toPascalCase(singularize(df.relationTable))}Options`;
-          if (!apiFunctions.includes(childOptFn)) apiFunctions.push(childOptFn);
-        }
-      }
-    }
-
-    const iconImports = ['PlusOutlined', 'SearchOutlined'];
-    if (hasUploadFields) {
-      iconImports.push('UploadOutlined');
-    }
-
-    return `import React, { useRef, useState, useEffect, useCallback } from 'react';
-${hasOneToMany && dto.fields.some((f: any) => f.type === 'relation' && f.relationType === 'one-to-many' && (f.detailFields || []).some((df: any) => df.type === 'timestamp')) ? "import dayjs from 'dayjs';\n" : ''}import { ${antdImports.join(', ')} } from 'antd';
-import { ${iconImports.join(', ')} } from '@ant-design/icons';
-import { ActionType, ProColumns, ProTable${hasOneToMany ? ', EditableProTable' : ''} } from '@ant-design/pro-components';
-import {
-  ModalForm,
-  ProFormText,
-  ProFormTextArea,
-  ProFormDigit,
-  ProFormSwitch,${needsProFormSelect ? '\n  ProFormSelect,' : ''}
-} from '@ant-design/pro-components';
-import {
-  ${apiFunctions.join(',\n  ')},
-  type ${typeImports.join(',\n  type ')},
-} from '@/services/${n.kebabSingular}';
-import { getMyBtnPerms } from '@/services/authority-btn';${hasUploadFields ? `\nimport { uploadFile } from '@/services/file';` : ''}${hasDictFields ? `\nimport { getDictDetailsByType } from '@/services/dictionary';` : ''}
-
-export default function ${n.pascalName}Page() {
-  const actionRef = useRef<ActionType>(undefined);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<${n.pascalSingular} | null>(null);
-  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
-  const [form] = Form.useForm();
-${hasOneToMany ? `${dto.fields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many').map(f => `  const [${toCamelCase(f.name)}EditableKeys, set${toPascalCase(f.name)}EditableKeys] = useState<React.Key[]>([]);`).join('\n')}\n  const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([]);\n  const currentDataRef = useRef<${n.pascalSingular}[]>([]);\n` : ''}${dictFields.length > 0 ? dictFields.map(f => `  const [${toCamelCase(f.name)}Options, set${toPascalCase(f.name)}Options] = useState<Record<string, { text: string }>>({});`).join('\n') + '\n' : ''}${manyToOneDictFields.length > 0 ? manyToOneDictFields.map(({ field: f }) => `  const [${toCamelCase(f.name)}TypeMap, set${toPascalCase(f.name)}TypeMap] = useState<Record<string, string>>({});`).join('\n') + '\n' : ''}${tableSearchableFields.flatMap(f => (f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal') ? [`  const [search${toPascalCase(f.name)}Min, setSearch${toPascalCase(f.name)}Min] = useState('');`, `  const [search${toPascalCase(f.name)}Max, setSearch${toPascalCase(f.name)}Max] = useState('');`] : [`  const [search${toPascalCase(f.name)}, setSearch${toPascalCase(f.name)}] = useState('');`]).join('\n')}${tableSearchableFields.length > 0 ? `
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const makeDebounce = useCallback((setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => { setter(val); }, 400);
-  }, []);
-` : ''}${hasDictFields ? `
-  useEffect(() => {
-${dictFields.map(f => `    getDictDetailsByType('${f.dictType || ''}').then((list: any[]) => {
-      const map: Record<string, { text: string }> = {};
-      list.forEach((item: any) => { map[item.value] = { text: item.label }; });
-      set${toPascalCase(f.name)}Options(map);
-    }).catch(() => {});`).join('\n')}
-${manyToOneDictFields.map(({ field: f, dictType }) => `    getDictDetailsByType('${dictType}').then((list: any[]) => {
-      const m: Record<string, string> = {};
-      list.forEach((item: any) => { m[item.value] = item.label; });
-      set${toPascalCase(f.name)}TypeMap(m);
-    }).catch(() => {});`).join('\n')}
-  }, []);
-` : ''}
-  // ── Button-level permission check ──
-  // Fetch directly from sys_authority_btns on every page visit.
-  // This is the single source of truth — same data the backend Guard checks.
-  const [btnPerms, setBtnPerms] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    getMyBtnPerms().then((perms) => {
-      setBtnPerms(new Set(perms['./${n.kebabName}/index'] ?? []));
-    }).catch(() => setBtnPerms(new Set()));
-  }, []);
-
-  const columns: ProColumns<${n.pascalSingular}>[] = [
-${columnLines.join('\n')}
-    {
-      title: '创建时间',
-      dataIndex: 'createdAt',
-      valueType: 'dateTime',
-      width: 180,
-      search: false,
-      sorter: (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-      defaultSortOrder: 'descend',
-    },
-    {
-      title: '创建人',
-      dataIndex: 'createdBy',
-      valueType: 'text',
-      width: 120,
-      search: false,
-    },
-    {
-      title: '操作',
-      key: 'action',
-      width: 140,
-      search: false,
-      render: (_, record) => (
-        <Space>
-          {btnPerms.has('edit') && (
-            <Button
-              type="link"
-              size="small"
-              onClick={() => {
-                form.resetFields();
-                form.setFieldsValue({
-                  ${creatableFields.map(f => {
-                    if (f.type === 'relation' && f.relationType === 'one-to-many') {
-                      const tsFields = (f.detailFields || []).filter((df: any) => df.type === 'timestamp' && df.name !== 'id');
-                      if (tsFields.length > 0) {
-                        const tsConversions = tsFields.map((df: any) => `${df.name}: d.${df.name} ? dayjs(d.${df.name}) : null`).join(', ');
-                        return `${f.name}: (record.${f.name} || []).map((d: any) => ({ ...d, ${tsConversions} })),`;
-                      }
-                      return `${f.name}: record.${f.name} || [],`;
-                    }
-                    if (f.type === 'image' || f.type === 'file') {
-                      return `${f.name}: record.${f.name} ? [{ uid: '-1', name: 'file', url: record.${f.name}, status: 'done' }] : [],`;
-                    }
-                    return `${f.name}: record.${f.name},`;
-                  }).join('\n                  ')}
-                });
-                setEditingRecord(record);
-                ${hasOneToMany ? dto.fields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many').map(f => `set${toPascalCase(f.name)}EditableKeys((record.${f.name} || []).map((d: any) => d.id));`).join('\n                ') : ''}
-                setModalOpen(true);
-              }}
-            >
-              编辑
-            </Button>
-          )}
-          {btnPerms.has('delete') && (
-            <Popconfirm
-              title="确认删除？"
-              description="删除后无法恢复。"
-              onConfirm={async () => {
-                try {
-                  await delete${n.pascalSingular}(record.id);
-                  message.success('删除成功');
-                  actionRef.current?.reload();
-                } catch (err: any) {
-                  message.error(err.message || '删除失败');
-                }
-              }}
-              okText="确认"
-              cancelText="取消"
-            >
-              <Button type="link" size="small" danger>
-                删除
-              </Button>
-            </Popconfirm>
-          )}
-        </Space>
-      ),
-    },
-  ];
-
-  const handleSubmit = async (values: Record<string, any>) => {
-    try {
-      if (editingRecord) {
-        const dto: Update${n.pascalSingular}Dto = {
-${updateDtoFields.join('\n')}
-        };
-        await update${n.pascalSingular}(editingRecord.id, dto);
-        message.success('更新成功');
-      } else {
-        const dto: Create${n.pascalSingular}Dto = {
-${createDtoFields.join('\n')}
-        };
-        await create${n.pascalSingular}(dto);
-        message.success('创建成功');
-      }
-      setModalOpen(false);
-      setEditingRecord(null);
-      actionRef.current?.reload();
-      return true;
-    } catch (err: any) {
-      message.error(err.message || '操作失败');
-      return false;
-    }
-  };
-
-  const handleBatchDelete = async () => {
-    try {
-      const result = await batchDelete${n.pascalName}(selectedRowKeys);
-      message.success(\`成功删除 \$\{result.count\} 条记录\`);
-      setSelectedRowKeys([]);
-      actionRef.current?.reload();
-    } catch (err: any) {
-      message.error(err.message || '批量删除失败');
-    }
-  };
-
-  return (
-    <>
-      <ProTable<${n.pascalSingular}>
-        headerTitle="${dto.description || n.pascalName}"
-        actionRef={actionRef}
-        rowKey="id"
-        columns={columns}
-${oneToManyFields.length > 0 ? `        expandable={{
-          expandedRowKeys,
-          onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as string[]),
-          rowExpandable: (record) => ${oneToManyFields.map(f => `(record.${f.name}?.length ?? 0) > 0`).join(' || ')},
-          expandedRowRender: (record) => (
-            ${oneToManyFields.length === 1 ? `<Table
-              size="small"
-              rowKey="id"
-              dataSource={record.${oneToManyFields[0].name} || []}
-              pagination={false}
-              columns={[
-                ${oneToManyFields[0].detailFields!.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName)).map(df => (df.type === 'relation' ? `{ title: '${df.description || df.name}', dataIndex: '${df.name}', render: (_: any, r: any) => r.${df.name}_display || r.${df.name} }` : `{ title: '${df.description || df.name}', dataIndex: '${df.name}' }`)).join(',\n                ')},
-              ]}
-              style={{ margin: '0 48px' }}
-            />` : `<Tabs
-              style={{ margin: '0 48px' }}
-              items={[
-                ${oneToManyFields.map(f => `{
-                  key: '${f.name}',
-                  label: '${f.description || f.name}',
-                  children: (
-                    <Table
-                      size="small"
-                      rowKey="id"
-                      dataSource={record.${f.name} || []}
-                      pagination={false}
-                      columns={[
-                        ${f.detailFields!.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName)).map(df => (df.type === 'relation' ? `{ title: '${df.description || df.name}', dataIndex: '${df.name}', render: (_: any, r: any) => r.${df.name}_display || r.${df.name} }` : `{ title: '${df.description || df.name}', dataIndex: '${df.name}' }`)).join(',\n                        ')},
-                      ]}
-                    />
-                  ),
-                }`).join(',\n                ')}
-              ]}
-            />`}
-          ),
-        }}` : ''}
-        search={false}
-        ${tableSearchableFields.length > 0 ? `params={{ ${tableSearchableFields.flatMap(f => (f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal') ? [`search${toPascalCase(f.name)}Min`, `search${toPascalCase(f.name)}Max`] : [`search${toPascalCase(f.name)}`]).join(', ')} }}` : ''}
-        rowSelection={{
-          selectedRowKeys,
-          onChange: (keys) => setSelectedRowKeys(keys as string[]),
-        }}
-        request={async (params) => {
-          const { current: page, pageSize } = params;
-          const result = await get${n.pascalName}List({ page, pageSize${tableSearchableFields.length > 0 ? `, ${tableSearchableFields.flatMap(f => (f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal') ? [`${f.name}Min: search${toPascalCase(f.name)}Min || undefined`, `${f.name}Max: search${toPascalCase(f.name)}Max || undefined`] : [`${f.name}: search${toPascalCase(f.name)} || undefined`]).join(', ')}` : ''} });
-          ${oneToManyFields.length > 0 ? 'currentDataRef.current = result.list;\n          setExpandedRowKeys([]);' : ''}
-          return {
-            data: result.list,
-            total: result.total,
-            success: true,
-          };
-        }}
-        toolBarRender={() => [
-          ${oneToManyFields.length > 0 ? `<Button
-            key="expand-all"
-            size="small"
-            onClick={() => {
-              const expandable = currentDataRef.current
-                .filter(r => ${oneToManyFields.map(f => `(r.${f.name}?.length ?? 0) > 0`).join(' || ')})
-                .map(r => r.id);
-              if (expandedRowKeys.length === expandable.length) {
-                setExpandedRowKeys([]);
-              } else {
-                setExpandedRowKeys(expandable);
-              }
-            }}
-          >
-            {expandedRowKeys.length > 0 ? '折叠全部' : '展开全部'}
-          </Button>,` : ''}
-          ${tableSearchableFields.flatMap(f => (f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal') ? [`<Input
-            key="search-${f.name}-min"
-            placeholder="${f.description || f.name}最小值"
-            allowClear
-            style={{ width: 120 }}
-            onChange={makeDebounce(setSearch${toPascalCase(f.name)}Min)}
-            onClear={() => setSearch${toPascalCase(f.name)}Min('')}
-          />,`, `<Input
-            key="search-${f.name}-max"
-            placeholder="${f.description || f.name}最大值"
-            allowClear
-            style={{ width: 120 }}
-            onChange={makeDebounce(setSearch${toPascalCase(f.name)}Max)}
-            onClear={() => setSearch${toPascalCase(f.name)}Max('')}
-          />,`] : [`<Input
-            key="search-${f.name}"
-            placeholder="搜索${f.description || f.name}"
-            prefix={<SearchOutlined />}
-            allowClear
-            style={{ width: 180 }}
-            onChange={makeDebounce(setSearch${toPascalCase(f.name)})}
-            onClear={() => setSearch${toPascalCase(f.name)}('')}
-          />,`]).join('\n          ')}
-          btnPerms.has('add') && (
-            <Button
-              key="create"
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => {
-                form.resetFields();
-                setEditingRecord(null);
-                ${hasOneToMany ? dto.fields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many').map(f => `set${toPascalCase(f.name)}EditableKeys([]);`).join('\n                ') : ''}
-                setModalOpen(true);
-              }}
-            >
-              新建
-            </Button>
-          ),
-          btnPerms.has('batchDelete') && selectedRowKeys.length > 0 && (
-            <Popconfirm
-              key="batch-delete"
-              title="确认批量删除？"
-              description={\`已选择 \$\{selectedRowKeys.length\} 条记录，删除后无法恢复。\`}
-              onConfirm={handleBatchDelete}
-              okText="确认"
-              cancelText="取消"
-            >
-              <Button danger>
-                批量删除 ({selectedRowKeys.length})
-              </Button>
-            </Popconfirm>
-          ),
-        ].filter(Boolean)}
-      />
-
-      <ModalForm
-        title={editingRecord ? '编辑' : '新建'}
-        open={modalOpen}
-        form={form}
-        onOpenChange={(open) => {
-          setModalOpen(open);
-          if (!open) {
-${hasOneToMany ? dto.fields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many').map(f => `            set${toPascalCase(f.name)}EditableKeys([]);`).join('\n') + '\n' : ''}            setTimeout(() => setEditingRecord(null), 300);
-          }
-        }}
-        onFinish={handleSubmit}
-        modalProps={{ destroyOnClose: true }}
-      >
-${(() => {
-  const nonDetailFields = formFields.filter((_, i) => {
-    const f = creatableFields[i];
-    return !(f?.type === 'relation' && f?.relationType === 'one-to-many');
-  });
-  const detailFormFields = formFields.filter((_, i) => {
-    const f = creatableFields[i];
-    return f?.type === 'relation' && f?.relationType === 'one-to-many';
-  });
-  const detailFieldDefs = creatableFields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many');
-
-  if (detailFormFields.length <= 1) {
-    return formFields.join('\n\n');
-  }
-  // Multiple 1:N fields → wrap in Tabs
-  const tabItems = detailFieldDefs.map((f, i) => `          {
-            key: '${f.name}',
-            label: '${f.description || f.name}',
-            forceRender: true,
-            children: (
-${detailFormFields[i]}
-            ),
-          }`).join(',\n');
-  return `${nonDetailFields.join('\n\n')}
-
-          <Tabs
-            items={[
-${tabItems}
-            ]}
-          />`;
-})()}
-      </ModalForm>
-    </>
-  );
-}
-`;
-  }
 
   // =========================================================================
   // Public API
@@ -2423,38 +96,34 @@ ${tabItems}
     const files: Record<string, string> = {};
 
     // For schema: keep removed fields as comments (preserves DB column)
-    files[`apps/server/src/db/schema/${n.kebabName}.ts`] = this.generateSchema(dto);
+    files[`release/lowcode/apps/server/src/db/schema/${n.kebabName}.ts`] = generateSchema(dto);
 
     // For all business code: exclude removed fields
     const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
 
     // DTOs
-    files[`apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`] = this.generateCreateDto(activeDto);
-    files[`apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`] = this.generateQueryDto(activeDto);
-    files[`apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`] = this.generateUpdateDto(activeDto);
+    files[`release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`] = generateCreateDto(activeDto);
+    files[`release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`] = generateQueryDto(activeDto);
+    files[`release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`] = generateUpdateDto(activeDto);
 
     // Service
-    files[`apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`] = this.generateService(activeDto);
+    files[`release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`] = generateService(activeDto);
 
     // Controller
-    files[`apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`] = this.generateController(activeDto);
+    files[`release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`] = generateController(activeDto);
 
     // Module
-    files[`apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`] = this.generateModule(activeDto);
+    files[`release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`] = generateModule(activeDto);
 
     // Frontend files (only if generateWeb is true)
     if (dto.generateWeb) {
-      files[`apps/web/src/services/${n.kebabSingular}.ts`] = this.generateFrontendService(activeDto);
-      files[`apps/web/src/pages/${n.kebabName}/index.tsx`] = this.generateFrontendPage(activeDto);
+      files[`release/lowcode/apps/web/src/services/${n.kebabSingular}.ts`] = generateFrontendService(activeDto);
+      files[`release/lowcode/apps/web/src/pages/${n.kebabName}/index.tsx`] = generateFrontendPage(activeDto);
     }
 
     return files;
   }
 
-  /**
-   * Generate: write files to disk and update entry points.
-   * Checks for existing files before overwriting.
-   */
   /**
    * Infer dict types for many-to-one relation display fields by querying history records.
    * Returns a Map keyed by field.name to the dictType string (or null if not dict-backed).
@@ -2482,6 +151,220 @@ ${tabItems}
     return result;
   }
 
+  /**
+   * Insert `dto.mockData.count` mock business rows into lc_<tableName> via raw
+   * multi-VALUES INSERT (chunked, ON CONFLICT DO NOTHING). Throws to abort
+   * THIS table's mock when a required relation field has an empty parent
+   * table; callers must catch (the generate pipeline treats it as non-fatal).
+   */
+  private async insertMockData(dto: AutoCodeDto): Promise<void> {
+    const count = dto.mockData?.count ?? 0;
+    if (count <= 0 || !dto.mockData?.enabled) return;
+
+    const tableName = `lc_${dto.tableName}`;
+    const fields = activeFields(dto.fields).filter(
+      (f) => isBusinessColumn(f.name) && (f.type !== 'relation' || f.relationType === 'many-to-one'),
+    );
+
+    if (fields.length === 0) {
+      this.logger.log(` mock: no business columns for '${tableName}', skipping`);
+      return;
+    }
+
+    // 1) Pre-warm context.
+    const dictCache: Record<string, string[]> = {};
+    const parentIds: Record<string, string[]> = {};
+
+    // dict cache: per distinct dictType (status=1 filtered).
+    const dictTypes = new Set(
+      fields.filter((f) => f.type === 'dict' && f.dictType).map((f) => f.dictType!),
+    );
+    for (const dt of dictTypes) {
+      try {
+        const details = await this.dictionaryDetailService.findByDictType(dt);
+        dictCache[dt] = details
+          .filter((d: any) => (d.status ?? 1) === 1 && d.value != null)
+          .map((d: any) => String(d.value));
+      } catch (err: unknown) {
+        this.logger.warn(` mock: failed to load dict '${dt}': ${(err as Error).message}`);
+        dictCache[dt] = [];
+      }
+    }
+
+    // parent ids: per distinct many-to-one relationTable (deleted_at IS NULL).
+    const relTables = new Set(
+      fields
+        .filter((f) => f.type === 'relation' && f.relationType === 'many-to-one' && f.relationTable)
+        .map((f) => f.relationTable!),
+    );
+    for (const rt of relTables) {
+      try {
+        const res = await this.db.execute(
+          sql.raw(`SELECT id FROM "lc_${rt}" WHERE deleted_at IS NULL`),
+        );
+        parentIds[rt] = (res as unknown as any[])
+          .map((r) => r.id)
+          .filter((id): id is string => typeof id === 'string');
+      } catch (err: unknown) {
+        this.logger.warn(` mock: failed to load parent ids for 'lc_${rt}': ${(err as Error).message}`);
+        parentIds[rt] = [];
+      }
+    }
+
+    // Required relation field with empty parent -> abort THIS table's mock.
+    for (const f of fields) {
+      if (
+        f.type === 'relation' &&
+        f.relationType === 'many-to-one' &&
+        f.required &&
+        f.relationTable &&
+        (parentIds[f.relationTable] || []).length === 0
+      ) {
+        throw new Error(
+          `required relation field '${f.name}' has empty parent table 'lc_${f.relationTable}'`,
+        );
+      }
+    }
+
+    // mintCode: builds prefix+date+zero-padded random seq, batch-local unique
+    // via a Set. Does NOT touch sys_encoding_rule_sequences.
+    const codeRules: Record<
+      string,
+      {
+        prefix: string | null;
+        dateFormat: string | null;
+        separator: string;
+        sequenceDigits: number;
+        paddingChar: string;
+      }
+    > = {};
+    const codeUsed: Set<string> = new Set();
+    const mintCode = (field: AutoCodeField): string => {
+      // Try to honor the configured rule's format if ruleId resolves.
+      let prefix = '';
+      let dateFormat: string | null = null;
+      let separator = '';
+      let sequenceDigits = 4;
+      let paddingChar = '0';
+
+      // Synchronous best-effort: ruleId lookup must be done up-front by caller
+      // for true fidelity; here we keep it self-contained with a reasonable
+      // default shape (prefix 'CODE' if no ruleId) so the value always matches
+      // the documented /^<prefix>\d{8}\d+$/ format expectation.
+      if (field.ruleId) {
+        // EncodingRuleService.findOne is async; we cannot await inside this
+        // sync closure. Caller pre-warms resolved rule params below via the
+        // `codeRules` map when ruleId is present.
+        const cached = codeRules[field.ruleId];
+        if (cached) {
+          prefix = cached.prefix ?? '';
+          dateFormat = cached.dateFormat ?? null;
+          separator = cached.separator ?? '';
+          sequenceDigits = cached.sequenceDigits ?? 4;
+          paddingChar = cached.paddingChar ?? '0';
+        }
+      }
+
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const MM = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      let datePart = '';
+      if (dateFormat === 'yyyyMMdd') datePart = `${yyyy}${MM}${dd}`;
+      else if (dateFormat === 'yyyy') datePart = String(yyyy);
+      else if (dateFormat === 'yyMM') datePart = `${String(yyyy).slice(-2)}${MM}`;
+      else if (dateFormat === 'none' || !dateFormat) datePart = '';
+      else datePart = `${yyyy}${MM}${dd}`;
+
+      // Random sequence, retry on collision against batch-local Set.
+      let code = '';
+      let attempt = 0;
+      do {
+        const seq = faker.number.int({ min: 0, max: Math.pow(10, sequenceDigits) - 1 });
+        const seqPart = String(seq).padStart(sequenceDigits, paddingChar);
+        const parts: string[] = [];
+        if (prefix) parts.push(prefix);
+        if (datePart) parts.push(datePart);
+        parts.push(seqPart);
+        code = parts.join(separator);
+        attempt += 1;
+        if (attempt > 9999) break;
+      } while (codeUsed.has(code));
+      codeUsed.add(code);
+      return code;
+    };
+
+    // Pre-warm code rule params for all code fields (async, before mintCode).
+    const codeRuleIds = new Set(
+      fields.filter((f) => f.type === 'code' && f.ruleId).map((f) => f.ruleId!),
+    );
+    for (const rid of codeRuleIds) {
+      try {
+        const rule: any = await this.encodingRuleService.findOne(rid);
+        codeRules[rid] = {
+          prefix: rule.prefix ?? '',
+          dateFormat: rule.dateFormat ?? null,
+          separator: rule.separator ?? '',
+          sequenceDigits: rule.sequenceDigits ?? 4,
+          paddingChar: rule.paddingChar ?? '0',
+        };
+      } catch (err: unknown) {
+        this.logger.warn(` mock: failed to load encoding rule '${rid}': ${(err as Error).message}`);
+      }
+    }
+
+    const ctx: MockCtx = { dictCache, parentIds, mintCode, usedValues: {} };
+
+    // 2) Build rows.
+    const buildRow = (): Record<string, string | number | boolean | null> => {
+      const row: Record<string, string | number | boolean | null> = {};
+      for (const f of fields) {
+        row[f.name] = generateMockValue(f, ctx);
+      }
+      return row;
+    };
+
+    const rows: Record<string, string | number | boolean | null>[] = [];
+    for (let i = 0; i < count; i += 1) rows.push(buildRow());
+
+    // 3) Build escaped multi-VALUES INSERT, chunked at 100.
+    const cols = fields.map((f) => `"${f.name}"`).join(', ');
+    const CHUNK_SIZE = 100;
+    let inserted = 0;
+
+    const escapeValue = (v: string | number | boolean | null): string => {
+      if (v === null || v === undefined) return 'NULL';
+      if (typeof v === 'number') return String(v);
+      if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+      return `'${String(v).replace(/'/g, "''").replace(/\0/g, '')}'`;
+    };
+
+    for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+      const chunk = rows.slice(i, i + CHUNK_SIZE);
+      const valuesSql = chunk
+        .map((row) => `(${fields.map((f) => escapeValue(row[f.name] ?? null)).join(', ')})`)
+        .join(', ');
+      const insertSql = `INSERT INTO "${tableName}" (${cols}) VALUES ${valuesSql} ON CONFLICT DO NOTHING`;
+      try {
+        await this.db.execute(sql.raw(insertSql));
+        inserted += chunk.length;
+      } catch (err: unknown) {
+        this.logger.warn(` mock: chunk insert failed for '${tableName}': ${(err as Error).message}`);
+      }
+    }
+
+    // 4) Post-validate and log.
+    try {
+      const res = await this.db.execute(
+        sql.raw(`SELECT COUNT(*)::int AS c FROM "${tableName}" WHERE deleted_at IS NULL`),
+      );
+      const total = (res as unknown as any[])?.[0]?.c ?? '?';
+      this.logger.log(` mock: inserted ${inserted} rows (table '${tableName}' now has ${total} live rows)`);
+    } catch {
+      this.logger.log(` mock: inserted ${inserted} rows into '${tableName}'`);
+    }
+  }
+
   async generate(dto: AutoCodeDto): Promise<{ createdFiles: string[] }> {
     const files = this.preview(dto);
     const projectRoot = this.resolveProjectRoot();
@@ -2492,8 +375,8 @@ ${tabItems}
       const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
       const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
       if ([...relationDictTypes.values()].some((v) => v !== null)) {
-        files[`apps/web/src/services/${n.kebabSingular}.ts`] = this.generateFrontendService(activeDto, relationDictTypes);
-        files[`apps/web/src/pages/${n.kebabName}/index.tsx`] = this.generateFrontendPage(activeDto, relationDictTypes);
+        files[`release/lowcode/apps/web/src/services/${n.kebabSingular}.ts`] = generateFrontendService(activeDto, relationDictTypes);
+        files[`release/lowcode/apps/web/src/pages/${n.kebabName}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
       }
     }
     const createdFiles: string[] = [];
@@ -2557,7 +440,7 @@ ${tabItems}
       const { exec } = await import('node:child_process');
       const { promisify } = await import('node:util');
       const execAsync = promisify(exec);
-      const serverDir = path.join(projectRoot, 'apps', 'server');
+      const serverDir = path.join(projectRoot, 'release', 'lowcode', 'apps', 'server');
       await execAsync('npx --no-install drizzle-kit push --force', {
         cwd: serverDir,
         timeout: 30000,
@@ -2587,6 +470,7 @@ ${tabItems}
     { key: 'generate', label: '正在生成代码...' },
     { key: 'write', label: '正在写入文件...' },
     { key: 'schema-sync', label: '正在同步数据库表...' },
+    { key: 'mock-data', label: '正在生成 mock 数据...' },
     { key: 'menu', label: '正在创建菜单...' },
     { key: 'history', label: '正在保存历史记录...' },
     { key: 'entrypoints', label: '正在更新入口文件...' },
@@ -2701,15 +585,15 @@ ${tabItems}
       // Step 1: Delete generated files on disk
       await updateStep(0, 'running');
       const expectedPaths = [
-        `apps/server/src/db/schema/${n.kebabName}.ts`,
-        `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-        `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-        `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-        `apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-        `apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-        `apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-        `apps/web/src/services/${n.kebabSingular}.ts`,
-        `apps/web/src/pages/${n.kebabName}/index.tsx`,
+        `release/lowcode/apps/server/src/db/schema/${n.kebabName}.ts`,
+        `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
+        `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
+        `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
+        `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
+        `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
+        `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
+        `release/lowcode/apps/web/src/services/${n.kebabSingular}.ts`,
+        `release/lowcode/apps/web/src/pages/${n.kebabName}/index.tsx`,
       ];
       for (const p of expectedPaths) {
         const fullPath = path.join(projectRoot, p);
@@ -2719,12 +603,12 @@ ${tabItems}
         }
       }
       // Remove module directory if empty
-      const moduleDir = path.join(projectRoot, `apps/server/src/modules/${n.kebabSingular}`);
+      const moduleDir = path.join(projectRoot, `release/lowcode/apps/server/src/modules/${n.kebabSingular}`);
       if (existsSync(moduleDir)) {
         try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
         try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
       }
-      const pageDir = path.join(projectRoot, `apps/web/src/pages/${n.kebabName}`);
+      const pageDir = path.join(projectRoot, `release/lowcode/apps/web/src/pages/${n.kebabName}`);
       if (existsSync(pageDir)) {
         try { await fs.rmdir(pageDir); } catch { /* not empty */ }
       }
@@ -2746,7 +630,6 @@ ${tabItems}
       await updateStep(3, 'completed');
 
       // Step 5: Remove menu entries (including button children)
-      // Search by component path (works for both /lc/ and /pkg/ prefixed routes)
       await updateStep(4, 'running');
       const componentPath = `./${n.kebabName}/index`;
       const menuRows = await this.db
@@ -2755,7 +638,6 @@ ${tabItems}
         .where(and(eq(sysMenus.component, componentPath), isNull(sysMenus.deletedAt)));
       if (menuRows.length > 0) {
         const pageMenuIds = menuRows.map((m) => m.id);
-        // Also find button children (menuType=3) of these page menus
         const btnChildren = await this.db
           .select({ id: sysMenus.id })
           .from(sysMenus)
@@ -2767,7 +649,6 @@ ${tabItems}
             ),
           );
         const allMenuIds = [...pageMenuIds, ...btnChildren.map((b) => b.id)];
-        // Cascade-delete authority_btn entries
         await this.db
           .delete(sysAuthorityBtns)
           .where(inArray(sysAuthorityBtns.menuId, allMenuIds));
@@ -2799,9 +680,7 @@ ${tabItems}
           WHERE table_schema = 'public' AND table_name = ${dbTableName}
         `);
         if ((tableExists[0] as any)?.cnt > 0) {
-          // When cascade mode is on, drop referencing tables first and clean up their artifacts
           if (cascade) {
-            // Find all tables that reference this table via FK
             const fkRows = await this.db.execute(sql`
               SELECT DISTINCT kcu.table_name
               FROM information_schema.table_constraints tc
@@ -2819,7 +698,6 @@ ${tabItems}
             for (const refDbTable of refTables) {
               const refTableName = refDbTable.startsWith('lc_') ? refDbTable.slice(3) : refDbTable;
               try {
-                // Clean up files, menus, schema exports for this cascade table
                 const result = await this.cleanupTableSoft(refTableName, projectRoot);
                 deletedFiles.push(...result.deletedFiles);
                 removedMenus += result.removedMenus;
@@ -2827,7 +705,6 @@ ${tabItems}
               try {
                 await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${refDbTable}" CASCADE`));
               } catch { /* ignore drop failures */ }
-              // Delete history records for cascade table
               try {
                 await this.db
                   .delete(sysAutoCodeHistories)
@@ -2835,29 +712,21 @@ ${tabItems}
               } catch { /* ignore */ }
             }
           }
-          // Drop child detail tables for one-to-many relations (always, regardless of cascade)
+          // Drop child detail tables for one-to-many relations
           for (const field of oneToManyFields) {
             const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
-            if (isExisting) {
-              // Existing tables are only dropped in cascade mode (handled above via FK query)
-              continue;
-            }
+            if (isExisting) continue;
             const singularMain = singularize(tableName);
             const singularField = singularize(field.name);
             const childDbName = `lc_${singularMain}_${singularField}`;
             try {
               await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${childDbName}" CASCADE`));
-            } catch {
-              // Child table may not exist, ignore
-            }
+            } catch { /* Child table may not exist, ignore */ }
           }
-          // Finally drop the main table
           await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${dbTableName}" CASCADE`));
           droppedTable = true;
         }
-      } catch {
-        // Table may not exist or drop failed
-      }
+      } catch { /* Table may not exist or drop failed */ }
       await updateStep(5, 'completed');
 
       // Step 7: Delete all history records for this table
@@ -2904,8 +773,6 @@ ${tabItems}
 
   /**
    * Start async generation with progress tracking.
-   * Returns a jobId immediately; the actual work runs in the background.
-   * Progress is persisted to disk so it survives nest --watch restarts.
    */
   async startGenerate(dto: AutoCodeDto): Promise<string> {
     const jobId = randomUUID();
@@ -2915,7 +782,6 @@ ${tabItems}
       status: 'pending' as const,
     }));
 
-    // Write initial status
     await this.writeJobStatus(jobId, {
       jobId,
       status: 'processing',
@@ -2924,7 +790,6 @@ ${tabItems}
       currentStepLabel: '准备中...',
     });
 
-    // Run in background (fire-and-forget)
     this.executeGenerateAsync(jobId, dto).catch((err) => {
       this.logger.error(` Unhandled error in generate job ${jobId}:`, err);
     });
@@ -2934,7 +799,6 @@ ${tabItems}
 
   /**
    * Read current job status from disk.
-   * Survives nest --watch restarts because status is file-based.
    */
   async getJobStatus(jobId: string): Promise<GenerateJobStatus | null> {
     return this.readJobStatus(jobId);
@@ -2946,17 +810,13 @@ ${tabItems}
 
   /**
    * Start async module update with progress tracking.
-   * Loads the latest version, computes diff, regenerates code, syncs DB.
-   * Returns a jobId immediately.
    */
   async startUpdate(dto: UpdateModuleDto): Promise<string> {
-    // Validate that a version exists for this table
     const latest = await this.getLatestVersion(dto.tableName);
     if (!latest) {
       throw new NotFoundException(`No existing version found for table '${dto.tableName}'. Use generate to create it first.`);
     }
 
-    // Check for structural changes (skip when force=true — user wants to re-apply templates)
     const oldFields = (latest.fields as AutoCodeField[]) ?? [];
     const hasChanges = this.hasStructuralChange(oldFields, dto.fields);
 
@@ -2966,7 +826,6 @@ ${tabItems}
       );
     }
 
-    // Check for hard-removed fields (field completely missing from new list) — requires force
     const hardRemovedFields = this.getRemovedFields(oldFields, dto.fields);
     if (hardRemovedFields.length > 0 && !dto.force) {
       const fieldNames = hardRemovedFields.map((f) => `${f.name}(${f.type})`).join(', ');
@@ -3033,7 +892,6 @@ ${tabItems}
     };
 
     try {
-      // Load latest version info
       const latest = await this.getLatestVersion(dto.tableName);
       if (!latest) {
         throw new Error(`Version record for '${dto.tableName}' not found`);
@@ -3043,7 +901,6 @@ ${tabItems}
       const oldVersion = latest.version ?? 1;
       const changeLog = this.computeChangeLog(oldFields, dto.fields);
 
-      // Build a full AutoCodeDto from the update DTO
       const autoCodeDto: AutoCodeDto = {
         tableName: dto.tableName,
         description: dto.description || '',
@@ -3056,14 +913,13 @@ ${tabItems}
       files = this.preview(autoCodeDto);
       projectRoot = this.resolveProjectRoot();
 
-      // Infer dict types for relation display fields and regenerate frontend files with dict-aware templates
       if (autoCodeDto.generateWeb) {
         const n2 = deriveNames(autoCodeDto.tableName);
         const activeDto2: AutoCodeDto = { ...autoCodeDto, fields: activeFields(autoCodeDto.fields) };
         const relationDictTypes2 = await this.lookupRelationDisplayDictTypes(activeDto2.fields);
         if ([...relationDictTypes2.values()].some((v) => v !== null)) {
-          files[`apps/web/src/services/${n2.kebabSingular}.ts`] = this.generateFrontendService(activeDto2, relationDictTypes2);
-          files[`apps/web/src/pages/${n2.kebabName}/index.tsx`] = this.generateFrontendPage(activeDto2, relationDictTypes2);
+          files[`release/lowcode/apps/web/src/services/${n2.kebabSingular}.ts`] = generateFrontendService(activeDto2, relationDictTypes2);
+          files[`release/lowcode/apps/web/src/pages/${n2.kebabName}/index.tsx`] = generateFrontendPage(activeDto2, relationDictTypes2);
         }
       }
 
@@ -3078,22 +934,20 @@ ${tabItems}
         await fs.writeFile(absolutePath, content, 'utf-8');
         createdFiles.push(relativePath);
       }
-      // Ensure schema index export exists
       await this.updateSchemaIndex(autoCodeDto, projectRoot);
-      // Register module in app.module.ts NOW — same race-condition fix as generate flow.
       await this.updateAppModule(autoCodeDto, projectRoot);
       if (autoCodeDto.generateWeb) {
         await this.updateUmiRoutes(autoCodeDto, projectRoot);
       }
       await updateStep(1, 'completed');
 
-      // Step 3: drizzle-kit push --silent (patched, no TTY required)
+      // Step 3: drizzle-kit push
       await updateStep(2, 'running', '正在同步数据库...');
       try {
         const { exec } = await import('node:child_process');
         const { promisify } = await import('node:util');
         const execAsync = promisify(exec);
-        const serverDir = path.join(projectRoot, 'apps', 'server');
+        const serverDir = path.join(projectRoot, 'release', 'lowcode', 'apps', 'server');
         await execAsync('npx --no-install drizzle-kit push --force', {
           cwd: serverDir, timeout: 60000,
           env: { ...process.env, DRIZZLE_SILENT: '1' },
@@ -3126,7 +980,7 @@ ${tabItems}
       }
       await updateStep(3, 'completed');
 
-      // Step 5: Update entry points (idempotent — skips if already present)
+      // Step 5: Update entry points
       await updateStep(4, 'running');
       await this.updateAppModule(autoCodeDto, projectRoot);
       if (dto.generateWeb) {
@@ -3134,7 +988,6 @@ ${tabItems}
       }
       await updateStep(4, 'completed');
 
-      // Write final completed status
       await this.writeJobStatus(jobId, {
         jobId,
         status: 'completed',
@@ -3171,8 +1024,6 @@ ${tabItems}
 
   /**
    * Background execution of all generate steps with progress persistence.
-   * Steps are ordered so that critical work (DB sync, menu) happens BEFORE
-   * entry point updates, which trigger nest --watch restart.
    */
   private async executeGenerateAsync(jobId: string, dto: AutoCodeDto): Promise<void> {
     const totalSteps = AutocodeService.GENERATE_STEPS.length;
@@ -3215,15 +1066,15 @@ ${tabItems}
         const n = deriveNames(dto.tableName);
         const root = this.resolveProjectRoot();
         const expectedPaths = [
-          `apps/server/src/db/schema/${n.kebabName}.ts`,
-          `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-          `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-          `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-          `apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-          `apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-          `apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-          `apps/web/src/services/${n.kebabSingular}.ts`,
-          `apps/web/src/pages/${n.kebabName}/index.tsx`,
+          `release/lowcode/apps/server/src/db/schema/${n.kebabName}.ts`,
+          `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
+          `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
+          `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
+          `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
+          `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
+          `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
+          `release/lowcode/apps/web/src/services/${n.kebabSingular}.ts`,
+          `release/lowcode/apps/web/src/pages/${n.kebabName}/index.tsx`,
         ];
         for (const p of expectedPaths) {
           const fullPath = path.join(root, p);
@@ -3231,17 +1082,15 @@ ${tabItems}
             await fs.rm(fullPath, { force: true });
           }
         }
-        // Remove empty directories
-        const moduleDir = path.join(root, `apps/server/src/modules/${n.kebabSingular}`);
+        const moduleDir = path.join(root, `release/lowcode/apps/server/src/modules/${n.kebabSingular}`);
         if (existsSync(moduleDir)) {
           try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
           try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
         }
-        const pageDir = path.join(root, `apps/web/src/pages/${n.kebabName}`);
+        const pageDir = path.join(root, `release/lowcode/apps/web/src/pages/${n.kebabName}`);
         if (existsSync(pageDir)) {
           try { await fs.rmdir(pageDir); } catch { /* not empty */ }
         }
-        // Remove entry point references
         await this.removeSchemaExport(n);
         await this.removeModuleRegistration(n);
         await this.removeRouteFromUmirc(n);
@@ -3253,14 +1102,13 @@ ${tabItems}
       files = this.preview(dto);
       projectRoot = this.resolveProjectRoot();
 
-      // Infer dict types for relation display fields and regenerate frontend files with dict-aware templates
       if (dto.generateWeb) {
         const n = deriveNames(dto.tableName);
         const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
         const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
         if ([...relationDictTypes.values()].some((v) => v !== null)) {
-          files[`apps/web/src/services/${n.kebabSingular}.ts`] = this.generateFrontendService(activeDto, relationDictTypes);
-          files[`apps/web/src/pages/${n.kebabName}/index.tsx`] = this.generateFrontendPage(activeDto, relationDictTypes);
+          files[`release/lowcode/apps/web/src/services/${n.kebabSingular}.ts`] = generateFrontendService(activeDto, relationDictTypes);
+          files[`release/lowcode/apps/web/src/pages/${n.kebabName}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
         }
       }
 
@@ -3275,35 +1123,48 @@ ${tabItems}
         await fs.writeFile(absolutePath, content, 'utf-8');
         createdFiles.push(relativePath);
       }
-      // Export schema from index.ts BEFORE drizzle-kit push (so drizzle-kit sees it)
       await this.updateSchemaIndex(dto, projectRoot);
-      // Register module in app.module.ts NOW — before drizzle-kit triggers a tsc recompile,
-      // so the first nest --watch restart already includes the new module.
       await this.updateAppModule(dto, projectRoot);
       if (dto.generateWeb) {
         await this.updateUmiRoutes(dto, projectRoot);
       }
       await updateStep(1, 'completed');
 
-      // Step 3: drizzle-kit push --silent (patched, no TTY required)
+      // Step 3: drizzle-kit push
       await updateStep(2, 'running', '正在同步数据库表...');
+      let pushSucceeded = false;
       try {
         const { exec } = await import('node:child_process');
         const { promisify } = await import('node:util');
         const execAsync = promisify(exec);
-        const serverDir = path.join(projectRoot, 'apps', 'server');
+        const serverDir = path.join(projectRoot, 'release', 'lowcode', 'apps', 'server');
         await execAsync('npx --no-install drizzle-kit push --force', {
           cwd: serverDir, timeout: 60000,
           env: { ...process.env, DRIZZLE_SILENT: '1' },
         });
+        pushSucceeded = true;
         this.logger.log(` drizzle-kit push (silent) completed for '${dto.tableName}'`);
       } catch (pushErr: unknown) {
         this.logger.error(` drizzle-kit push FAILED for '${dto.tableName}':`, pushErr);
       }
       await updateStep(2, 'completed');
 
-      // Step 4: Create menu
+      // Step 4: Generate mock business data (NON-FATAL).
+      // Runs only when schema-sync succeeded and dto.mockData.enabled is set.
       await updateStep(3, 'running');
+      try {
+        if (dto.mockData?.enabled && pushSucceeded) {
+          await this.insertMockData(dto);
+        }
+      } catch (mockErr: unknown) {
+        const msg = mockErr instanceof Error ? mockErr.message : String(mockErr);
+        this.logger.warn(` mock insert skipped for '${dto.tableName}': ${msg}`);
+      } finally {
+        await updateStep(3, 'completed');
+      }
+
+      // Step 5: Create menu
+      await updateStep(4, 'running');
       let asyncMenuParentId: string | null = null;
       let asyncPackageName = '';
       if (dto.packageId) {
@@ -3318,12 +1179,11 @@ ${tabItems}
       } catch (menuErr: unknown) {
         this.logger.error(` Auto-create menu FAILED for '${dto.tableName}':`, menuErr);
       }
-      await updateStep(3, 'completed');
+      await updateStep(4, 'completed');
 
-      // Step 5: Save history (with version info)
-      await updateStep(4, 'running');
+      // Step 6: Save history
+      await updateStep(5, 'running');
       try {
-        // Check if there's an existing version for this table (e.g. force mode regeneration)
         const existing = await this.getLatestVersion(dto.tableName);
         const nextVersion = existing ? (existing.version ?? 1) + 1 : 1;
 
@@ -3341,17 +1201,16 @@ ${tabItems}
       } catch (historyErr: unknown) {
         this.logger.error('[AutocodeService] Failed to save generation history:', historyErr);
       }
-      await updateStep(4, 'completed');
+      await updateStep(5, 'completed');
 
-      // Step 6: Update remaining entry points (LAST — triggers nest --watch restart)
-      await updateStep(5, 'running');
+      // Step 7: Update remaining entry points (LAST — triggers nest --watch restart)
+      await updateStep(6, 'running');
       await this.updateAppModule(dto, projectRoot);
       if (dto.generateWeb) {
         await this.updateUmiRoutes(dto, projectRoot);
       }
-      await updateStep(5, 'completed');
+      await updateStep(6, 'completed');
 
-      // Write final completed status
       await this.writeJobStatus(jobId, {
         jobId,
         status: 'completed',
@@ -3366,7 +1225,6 @@ ${tabItems}
         completedAt: new Date().toISOString(),
       });
 
-      // Schedule cleanup of job file after 5 minutes
       setTimeout(() => this.deleteJobFile(jobId), 5 * 60 * 1000);
     } catch (err: any) {
       const errorMsg = err?.message || 'Unknown error during generation';
@@ -3428,7 +1286,6 @@ ${tabItems}
 
   /**
    * Get list of lowcode-generated tables in the database.
-   * Only returns tables with the 'lc_' prefix (lowcode business tables).
    */
   async getTables(): Promise<string[]> {
     const rows = await this.db.execute(sql`
@@ -3439,7 +1296,6 @@ ${tabItems}
         AND table_name LIKE 'lc_%'
       ORDER BY table_name
     `);
-    // Return names without the lc_ prefix for cleaner display
     return rows.map((r: any) => (r.table_name as string).replace(/^lc_/, ''));
   }
 
@@ -3479,9 +1335,6 @@ ${tabItems}
   // History CRUD — generation history with rollback support
   // =========================================================================
 
-  /**
-   * Paginated list of generation history records.
-   */
   async findAllHistory(params: { page?: number; pageSize?: number; tableName?: string }): Promise<{ list: SysAutoCodeHistory[]; total: number; page: number; pageSize: number }> {
     const page = params.page ?? 1;
     const pageSize = params.pageSize ?? 10;
@@ -3513,9 +1366,6 @@ ${tabItems}
     return { list: rows, total, page, pageSize };
   }
 
-  /**
-   * Single history record by id.
-   */
   async findOneHistory(id: string): Promise<SysAutoCodeHistory> {
     const rows = await this.db
       .select()
@@ -3530,30 +1380,20 @@ ${tabItems}
     return rows[0]!;
   }
 
-  /**
-   * Rollback to a previous generation snapshot.
-   * Writes the stored templates back to disk, syncs DB via drizzle-kit push,
-   * and creates a new version record with operation='rollback'.
-   */
   async rollbackHistory(id: string): Promise<{ restoredFiles: string[] }> {
     const history = await this.findOneHistory(id);
     const templates = history.templates as Record<string, string>;
     const projectRoot = this.resolveProjectRoot();
     const restoredFiles: string[] = [];
 
-    // 1. Write files from the target version
     for (const [relativePath, content] of Object.entries(templates)) {
       const absolutePath = path.join(projectRoot, relativePath);
       const dir = path.dirname(absolutePath);
-
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(absolutePath, content, 'utf-8');
       restoredFiles.push(relativePath);
     }
 
-    // 2. Sync DB schema — table already exists from original generation; rollback only restores code files
-
-    // 3. Create a new version record for the rollback
     try {
       const latest = await this.getLatestVersion(history.tableName);
       const currentVersion = latest?.version ?? 1;
@@ -3577,15 +1417,6 @@ ${tabItems}
     return { restoredFiles };
   }
 
-  /**
-   * Delete a generated module completely:
-   * - generated files on disk (schema, module dir, frontend service, frontend page)
-   * - .umirc.ts route entry
-   * - menu entries from sys_menus + sys_role_menus
-   * - database table (DROP TABLE)
-   * - schema export from index.ts, module registration from app.module.ts
-   * - history record
-   */
   async deleteHistory(id: string): Promise<{ deletedFiles: string[]; droppedTable: boolean; removedMenus: number }> {
     const history = await this.findOneHistory(id);
     const tableName = history.tableName;
@@ -3596,17 +1427,16 @@ ${tabItems}
     let droppedTable = false;
     let removedMenus = 0;
 
-    // 1. Delete generated files on disk
     const expectedPaths = [
-      `apps/server/src/db/schema/${n.kebabName}.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `apps/web/src/services/${n.kebabSingular}.ts`,
-      `apps/web/src/pages/${n.kebabName}/index.tsx`,
+      `release/lowcode/apps/server/src/db/schema/${n.kebabName}.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
+      `release/lowcode/apps/web/src/services/${n.kebabSingular}.ts`,
+      `release/lowcode/apps/web/src/pages/${n.kebabName}/index.tsx`,
     ];
     for (const p of expectedPaths) {
       const fullPath = path.join(projectRoot, p);
@@ -3615,52 +1445,28 @@ ${tabItems}
         deletedFiles.push(p);
       }
     }
-    // Remove module directory if empty
-    const moduleDir = path.join(projectRoot, `apps/server/src/modules/${n.kebabSingular}`);
+    const moduleDir = path.join(projectRoot, `release/lowcode/apps/server/src/modules/${n.kebabSingular}`);
     if (existsSync(moduleDir)) {
-      try {
-        await fs.rmdir(moduleDir); // only succeeds if empty
-      } catch {
-        // directory not empty, leave it
-      }
-      try {
-        await fs.rmdir(path.join(moduleDir, 'dto'));
-      } catch {
-        // not empty or doesn't exist
-      }
+      try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
+      try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
     }
-    // Remove frontend page directory if empty
-    const pageDir = path.join(projectRoot, `apps/web/src/pages/${n.kebabName}`);
+    const pageDir = path.join(projectRoot, `release/lowcode/apps/web/src/pages/${n.kebabName}`);
     if (existsSync(pageDir)) {
-      try {
-        await fs.rmdir(pageDir);
-      } catch {
-        // not empty
-      }
+      try { await fs.rmdir(pageDir); } catch { /* not empty */ }
     }
 
-    // 2. Remove route from .umirc.ts
     await this.removeRouteFromUmirc(n);
-
-    // 3. Remove schema export from db/schema/index.ts
     await this.removeSchemaExport(n);
-
-    // 4. Remove module registration from app.module.ts
     await this.removeModuleRegistration(n);
 
-    // 5. Remove menu entries from sys_menus + sys_role_menus
     const dbTableName = `lc_${tableName}`;
     const componentPath = `./${n.kebabName}/index`;
     const menuRows = await this.db
       .select({ id: sysMenus.id, name: sysMenus.name, path: sysMenus.path })
       .from(sysMenus)
-      .where(and(
-        eq(sysMenus.component, componentPath),
-        isNull(sysMenus.deletedAt),
-      ));
+      .where(and(eq(sysMenus.component, componentPath), isNull(sysMenus.deletedAt)));
     if (menuRows.length > 0) {
       const pageMenuIds = menuRows.map((m) => m.id);
-      // Also find button children (menuType=3) of these page menus
       const btnChildren = await this.db
         .select({ id: sysMenus.id })
         .from(sysMenus)
@@ -3672,18 +1478,12 @@ ${tabItems}
           ),
         );
       const allMenuIds = [...pageMenuIds, ...btnChildren.map((b) => b.id)];
-      // Cascade-delete authority_btn entries
-      await this.db
-        .delete(sysAuthorityBtns)
-        .where(inArray(sysAuthorityBtns.menuId, allMenuIds));
-      // Remove role-menu assignments first
+      await this.db.delete(sysAuthorityBtns).where(inArray(sysAuthorityBtns.menuId, allMenuIds));
       await this.db.delete(sysRoleMenus).where(inArray(sysRoleMenus.menuId, allMenuIds));
-      // Remove menu entries
       await this.db.delete(sysMenus).where(inArray(sysMenus.id, allMenuIds));
       removedMenus = allMenuIds.length;
     }
 
-    // 6. Drop the database table
     try {
       const tableExists = await this.db.execute(sql`
         SELECT COUNT(*) as cnt FROM information_schema.tables
@@ -3693,11 +1493,8 @@ ${tabItems}
         await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${dbTableName}" CASCADE`));
         droppedTable = true;
       }
-    } catch {
-      // Table may not exist or drop failed
-    }
+    } catch { /* Table may not exist or drop failed */ }
 
-    // 7. Delete all history records for this table
     await this.db
       .delete(sysAutoCodeHistories)
       .where(eq(sysAutoCodeHistories.tableName, tableName));
@@ -3706,14 +1503,9 @@ ${tabItems}
   }
 
   // =========================================================================
-  // Soft cleanup helper — delete files, menus, exports for a table (no DB drop)
-  // Used by cascade delete to clean up referenced tables.
+  // Soft cleanup helper
   // =========================================================================
 
-  /**
-   * Clean up generated files, menu entries, and code registrations for a table
-   * WITHOUT dropping the database table.  Used for cascade-chain cleanup.
-   */
   private async cleanupTableSoft(
     tableName: string,
     projectRoot: string,
@@ -3722,17 +1514,16 @@ ${tabItems}
     const deletedFiles: string[] = [];
     let removedMenus = 0;
 
-    // 1. Delete generated files on disk
     const expectedPaths = [
-      `apps/server/src/db/schema/${n.kebabName}.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `apps/web/src/services/${n.kebabSingular}.ts`,
-      `apps/web/src/pages/${n.kebabName}/index.tsx`,
+      `release/lowcode/apps/server/src/db/schema/${n.kebabName}.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
+      `release/lowcode/apps/web/src/services/${n.kebabSingular}.ts`,
+      `release/lowcode/apps/web/src/pages/${n.kebabName}/index.tsx`,
     ];
     for (const p of expectedPaths) {
       const fullPath = path.join(projectRoot, p);
@@ -3741,27 +1532,20 @@ ${tabItems}
         deletedFiles.push(p);
       }
     }
-    // Remove empty directories
-    const moduleDir = path.join(projectRoot, `apps/server/src/modules/${n.kebabSingular}`);
+    const moduleDir = path.join(projectRoot, `release/lowcode/apps/server/src/modules/${n.kebabSingular}`);
     if (existsSync(moduleDir)) {
       try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
       try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
     }
-    const pageDir = path.join(projectRoot, `apps/web/src/pages/${n.kebabName}`);
+    const pageDir = path.join(projectRoot, `release/lowcode/apps/web/src/pages/${n.kebabName}`);
     if (existsSync(pageDir)) {
       try { await fs.rmdir(pageDir); } catch { /* not empty */ }
     }
 
-    // 2. Remove route from .umirc.ts
     await this.removeRouteFromUmirc(n);
-
-    // 3. Remove schema export from db/schema/index.ts
     await this.removeSchemaExport(n);
-
-    // 4. Remove module registration from app.module.ts
     await this.removeModuleRegistration(n);
 
-    // 5. Remove menu entries
     const componentPath = `./${n.kebabName}/index`;
     const menuRows = await this.db
       .select({ id: sysMenus.id, name: sysMenus.name })
@@ -3779,7 +1563,6 @@ ${tabItems}
       await this.db.delete(sysMenus).where(inArray(sysMenus.id, allMenuIds));
       removedMenus = allMenuIds.length;
 
-      // Remove sys_apis entries and Casbin policies
       const apiGroup = `lc/${n.kebabName}`;
       const apiRows = await this.db
         .select({ path: sysApis.path, method: sysApis.method })
@@ -3798,13 +1581,9 @@ ${tabItems}
   }
 
   // =========================================================================
-  // Impact analysis — analyze dependencies before delete
+  // Impact analysis
   // =========================================================================
 
-  /**
-   * Analyze the impact of deleting a generated module.
-   * When cascade=true, recursively collects impact for all FK-referencing tables.
-   */
   async analyzeImpact(
     tableName: string,
     cascade = false,
@@ -3830,7 +1609,6 @@ ${tabItems}
 
     if (!cascade) return impact;
 
-    // Build cascade chain: for each FK-referencing table, compute its impact
     const visited = new Set<string>([impact.dbTableName]);
     const cascadeChain: Array<{
       autocodeTable: string;
@@ -3845,7 +1623,6 @@ ${tabItems}
       if (visited.has(ref.table)) continue;
       visited.add(ref.table);
 
-      // Derive autocode table name from DB table name (strip lc_ prefix)
       const autocodeTable = ref.table.startsWith('lc_') ? ref.table.slice(3) : ref.table;
 
       try {
@@ -3859,7 +1636,6 @@ ${tabItems}
           hasHistory: childImpact.hasHistory,
         });
       } catch {
-        // Table may not be an autocode-generated table — include basic info
         cascadeChain.push({
           autocodeTable,
           dbTable: ref.table,
@@ -3874,9 +1650,6 @@ ${tabItems}
     return { ...impact, cascadeChain };
   }
 
-  /**
-   * Compute impact for a single table (no cascade).
-   */
   private async computeSingleTableImpact(tableName: string): Promise<{
     tableName: string;
     dbTableName: string;
@@ -3890,7 +1663,6 @@ ${tabItems}
     const dbTableName = `lc_${tableName}`;
     const n = deriveNames(tableName);
 
-    // 1. Check if the DB table exists and get record count
     let recordCount = 0;
     try {
       const countRows = await this.db.execute(sql`
@@ -3901,11 +1673,8 @@ ${tabItems}
         const cnt = await this.db.execute(sql.raw(`SELECT COUNT(*) as cnt FROM "${dbTableName}"`));
         recordCount = Number((cnt[0] as any)?.cnt ?? 0);
       }
-    } catch {
-      // Table doesn't exist
-    }
+    } catch { /* Table doesn't exist */ }
 
-    // 2. Find foreign keys referencing this table
     let referencedBy: Array<{ table: string; column: string; constraint: string }> = [];
     try {
       const fkRows = await this.db.execute(sql`
@@ -3930,22 +1699,15 @@ ${tabItems}
         column: r.column_name as string,
         constraint: r.constraint_name as string,
       }));
-    } catch {
-      // No foreign keys or query failed
-    }
+    } catch { /* No foreign keys or query failed */ }
 
-    // 3. Find menu entries
     const componentPath = `./${n.kebabName}/index`;
     const menuRows = await this.db
       .select({ id: sysMenus.id, name: sysMenus.name, path: sysMenus.path })
       .from(sysMenus)
-      .where(and(
-        eq(sysMenus.component, componentPath),
-        isNull(sysMenus.deletedAt),
-      ));
+      .where(and(eq(sysMenus.component, componentPath), isNull(sysMenus.deletedAt)));
     const menus = menuRows.map((m) => ({ id: m.id, name: m.name, path: m.path ?? '' }));
 
-    // 4. Count role-menu assignments for these menus
     let roleMenuCount = 0;
     if (menus.length > 0) {
       const menuIds = menus.map((m) => m.id);
@@ -3956,19 +1718,18 @@ ${tabItems}
       roleMenuCount = Number((rmRows[0] as any)?.count ?? 0);
     }
 
-    // 5. Check generated files on disk
     const projectRoot = this.resolveProjectRoot();
     const files: string[] = [];
     const expectedPaths = [
-      `apps/server/src/db/schema/${n.kebabName}.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-      `apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `apps/web/src/services/${n.kebabSingular}.ts`,
-      `apps/web/src/pages/${n.kebabName}/index.tsx`,
+      `release/lowcode/apps/server/src/db/schema/${n.kebabName}.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
+      `release/lowcode/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
+      `release/lowcode/apps/web/src/services/${n.kebabSingular}.ts`,
+      `release/lowcode/apps/web/src/pages/${n.kebabName}/index.tsx`,
     ];
     for (const p of expectedPaths) {
       if (existsSync(path.join(projectRoot, p))) {
@@ -3976,86 +1737,49 @@ ${tabItems}
       }
     }
 
-    // 6. Check history records
     const hasHistory = (await this.db
       .select({ id: sysAutoCodeHistories.id })
       .from(sysAutoCodeHistories)
       .where(eq(sysAutoCodeHistories.tableName, tableName))
       .limit(1)).length > 0;
 
-    return {
-      tableName,
-      dbTableName,
-      recordCount,
-      referencedBy,
-      menus,
-      roleMenuCount,
-      files,
-      hasHistory,
-    };
+    return { tableName, dbTableName, recordCount, referencedBy, menus, roleMenuCount, files, hasHistory };
   }
 
   // =========================================================================
   // Version management helpers
   // =========================================================================
 
-  /**
-   * Pure function: compare two field arrays and generate a human-readable change log.
-   */
   computeChangeLog(oldFields: AutoCodeField[], newFields: AutoCodeField[]): string {
     const changes: string[] = [];
-
     const oldMap = new Map(oldFields.map((f) => [f.name, f]));
     const newMap = new Map(newFields.map((f) => [f.name, f]));
 
-    // Detect added fields
     for (const f of newFields) {
-      if (!oldMap.has(f.name)) {
-        changes.push(`新增字段 ${f.name}(${f.type})`);
-      }
+      if (!oldMap.has(f.name)) changes.push(`新增字段 ${f.name}(${f.type})`);
     }
-
-    // Detect removed fields
     for (const f of oldFields) {
-      if (!newMap.has(f.name)) {
-        changes.push(`移除字段 ${f.name}(${f.type})`);
-      }
+      if (!newMap.has(f.name)) changes.push(`移除字段 ${f.name}(${f.type})`);
     }
-
-    // Detect modified fields (type change)
     for (const f of newFields) {
       const old = oldMap.get(f.name);
-      if (old && old.type !== f.type) {
-        changes.push(`修改字段 ${f.name}: ${old.type} → ${f.type}`);
-      }
+      if (old && old.type !== f.type) changes.push(`修改字段 ${f.name}: ${old.type} → ${f.type}`);
     }
-
-    // Detect soft-removed fields (removed flag toggled)
     for (const f of newFields) {
       const old = oldMap.get(f.name);
-      if (old && !old.removed && f.removed) {
-        changes.push(`停用字段 ${f.name}(${f.type})`);
-      }
-      if (old && old.removed && !f.removed) {
-        changes.push(`恢复字段 ${f.name}(${f.type})`);
-      }
+      if (old && !old.removed && f.removed) changes.push(`停用字段 ${f.name}(${f.type})`);
+      if (old && old.removed && !f.removed) changes.push(`恢复字段 ${f.name}(${f.type})`);
     }
 
     return changes.length > 0 ? changes.join('; ') : '无变更';
   }
 
-  /**
-   * Check if two field arrays have structural differences (name, type, required, unique, length).
-   * Ignores description-only changes — those don't affect DB schema or generated code logic.
-   */
   hasStructuralChange(oldFields: AutoCodeField[], newFields: AutoCodeField[]): boolean {
     const oldMap = new Map(oldFields.map((f) => [f.name, f]));
     const newMap = new Map(newFields.map((f) => [f.name, f]));
 
-    // Different number of fields = structural change
     if (oldMap.size !== newMap.size) return true;
 
-    // Check for added or removed fields
     for (const f of newFields) {
       if (!oldMap.has(f.name)) return true;
     }
@@ -4063,7 +1787,6 @@ ${tabItems}
       if (!newMap.has(f.name)) return true;
     }
 
-    // Check for type/required/unique/length/removed changes on existing fields
     for (const f of newFields) {
       const old = oldMap.get(f.name);
       if (!old) return true;
@@ -4075,27 +1798,17 @@ ${tabItems}
         old.relationType !== f.relationType ||
         old.relationTable !== f.relationTable ||
         old.removed !== f.removed
-      ) {
-        return true;
-      }
+      ) return true;
     }
 
     return false;
   }
 
-  /**
-   * Detect which fields are being removed (exist in old but not in new).
-   */
   getRemovedFields(oldFields: AutoCodeField[], newFields: AutoCodeField[]): AutoCodeField[] {
     const newNames = new Set(newFields.map((f) => f.name));
     return oldFields.filter((f) => !newNames.has(f.name));
   }
 
-  /**
-   * Get the latest version record for a given table name.
-   * If the latest version has no fields snapshot (legacy record),
-   * attempts to parse fields from the schema file on disk.
-   */
   async getLatestVersion(tableName: string): Promise<SysAutoCodeHistory & { menuName?: string } | null> {
     const rows = await this.db
       .select()
@@ -4106,7 +1819,6 @@ ${tabItems}
 
     const record = rows[0] ?? null;
 
-    // If fields snapshot is missing (legacy record), try to parse from schema file
     if (record && !record.fields) {
       const parsed = await this.parseFieldsFromSchema(tableName);
       if (parsed.length > 0) {
@@ -4114,7 +1826,6 @@ ${tabItems}
       }
     }
 
-    // Look up menu name for description display
     if (record) {
       const n = deriveNames(tableName);
       const componentPath = `./${n.kebabName}/index`;
@@ -4131,29 +1842,23 @@ ${tabItems}
     return record;
   }
 
-  /**
-   * Parse field definitions from the generated schema file on disk.
-   * Used as a fallback when version records don't have a fields snapshot.
-   */
   private async parseFieldsFromSchema(tableName: string): Promise<AutoCodeField[]> {
     try {
       const n = deriveNames(tableName);
       const projectRoot = this.resolveProjectRoot();
-      const schemaPath = path.join(projectRoot, 'apps/server/src/db/schema', `${n.kebabName}.ts`);
+      const schemaPath = path.join(projectRoot, 'release/lowcode/apps/server/src/db/schema', `${n.kebabName}.ts`);
 
       if (!existsSync(schemaPath)) return [];
 
       const content = await fs.readFile(schemaPath, 'utf-8');
       const fields: AutoCodeField[] = [];
 
-      // Match column definitions like: name: varchar('name', { length: 255 }).notNull().default(''),
       const columnPattern = /^\s+(\w+):\s+(\w+)\('(\w+)'(?:,\s*\{[^}]*\})?\)(\.notNull\(\))?(\.default\([^)]*\))?(\.references\([^)]*\))?/gm;
       let match: RegExpExecArray | null;
 
       while ((match = columnPattern.exec(content)) !== null) {
         const colName = match[3]!;
 
-        // Skip system columns
         if (['id', 'created_at', 'updated_at', 'deleted_at', 'created_by', 'updated_by'].includes(colName)) {
           continue;
         }
@@ -4161,7 +1866,6 @@ ${tabItems}
         const drizzleType = match[2]!;
         const isNotNull = !!match[4];
 
-        // Map drizzle type back to AutoCodeFieldType
         let fieldType: AutoCodeField['type'] = 'varchar';
         switch (drizzleType) {
           case 'varchar': fieldType = 'varchar'; break;
@@ -4172,12 +1876,7 @@ ${tabItems}
           case 'boolean': fieldType = 'boolean'; break;
           case 'timestamp': fieldType = 'timestamp'; break;
           case 'uuid':
-            // If it has references, it's a relation field
-            if (match[6]) {
-              fieldType = 'relation';
-            } else {
-              fieldType = 'uuid';
-            }
+            if (match[6]) { fieldType = 'relation'; } else { fieldType = 'uuid'; }
             break;
         }
 
@@ -4200,9 +1899,6 @@ ${tabItems}
     }
   }
 
-  /**
-   * Get all version records for a given table name, ordered by version descending.
-   */
   async getHistoryVersions(tableName: string): Promise<SysAutoCodeHistory[]> {
     return this.db
       .select()
@@ -4212,12 +1908,70 @@ ${tabItems}
   }
 
   // =========================================================================
-  // Package CRUD — reusable template packages
+  // ER Graph
   // =========================================================================
 
-  /**
-   * Paginated list of template packages (excluding soft-deleted).
-   */
+  async getErGraph(packageId?: string): Promise<ErGraph> {
+    const rows = await this.db
+      .select()
+      .from(sysAutoCodeHistories)
+      .orderBy(
+        desc(sysAutoCodeHistories.tableName),
+        desc(sysAutoCodeHistories.version),
+        desc(sysAutoCodeHistories.createdAt),
+      );
+
+    const latestByTable = new Map<string, SysAutoCodeHistory>();
+    for (const row of rows) {
+      if (!row.tableName) continue;
+      const prev = latestByTable.get(row.tableName);
+      if (!prev || (row.version ?? 0) > (prev.version ?? 0)) {
+        latestByTable.set(row.tableName, row);
+      }
+    }
+    let histories = Array.from(latestByTable.values());
+
+    if (packageId) {
+      let pkgName: string | undefined;
+      try {
+        const pkg = await this.findOnePackage(packageId);
+        pkgName = pkg.name;
+      } catch { /* package not found */ }
+      histories = pkgName
+        ? histories.filter((h) => h.packageName === pkgName)
+        : [];
+    }
+
+    if (histories.length === 0) {
+      return { nodes: [], edges: [] };
+    }
+
+    const componentPaths = histories.map(
+      (h) => `./${deriveNames(h.tableName!).kebabName}/index`,
+    );
+    const menuRows = await this.db
+      .select({ component: sysMenus.component, name: sysMenus.name })
+      .from(sysMenus)
+      .where(and(inArray(sysMenus.component, componentPaths), isNull(sysMenus.deletedAt)));
+    const menuNameByComponent = new Map(menuRows.map((m) => [m.component, m.name]));
+
+    const inputs: ErHistoryInput[] = histories.map((h) => {
+      const componentPath = `./${deriveNames(h.tableName!).kebabName}/index`;
+      return {
+        tableName: h.tableName!,
+        description: menuNameByComponent.get(componentPath) || h.tableName!,
+        packageName: h.packageName,
+        fields: (h.fields as AutoCodeField[]) || null,
+      };
+    });
+
+    return buildErGraph(inputs);
+  }
+
+  // =========================================================================
+  // Package CRUD
+  // =========================================================================
+
   async findAllPackages(params: { page?: number; pageSize?: number; name?: string }): Promise<{ list: SysAutoCodePackage[]; total: number; page: number; pageSize: number }> {
     const page = params.page ?? 1;
     const pageSize = params.pageSize ?? 10;
@@ -4249,9 +2003,6 @@ ${tabItems}
     return { list: rows, total, page, pageSize };
   }
 
-  /**
-   * Create a new template package. Also creates a directory menu.
-   */
   async createPackage(dto: CreatePackageDto): Promise<SysAutoCodePackage> {
     const menuId = await this.ensureDirectoryMenu(dto.name);
 
@@ -4271,9 +2022,6 @@ ${tabItems}
     return rows[0]!;
   }
 
-  /**
-   * Single package by id (excluding soft-deleted).
-   */
   async findOnePackage(id: string): Promise<SysAutoCodePackage> {
     const rows = await this.db
       .select()
@@ -4288,16 +2036,10 @@ ${tabItems}
     return rows[0]!;
   }
 
-  /**
-   * Update an existing template package.
-   */
   async updatePackage(id: string, dto: UpdatePackageDto): Promise<SysAutoCodePackage> {
-    const existing = await this.findOnePackage(id);
+    await this.findOnePackage(id);
 
-    const updateData: Record<string, unknown> = {
-      updatedAt: new Date(),
-    };
-
+    const updateData: Record<string, unknown> = { updatedAt: new Date() };
     if (dto.name !== undefined) updateData.name = dto.name;
     if (dto.description !== undefined) updateData.description = dto.description;
     if (dto.templates !== undefined) updateData.templates = dto.templates;
@@ -4318,15 +2060,10 @@ ${tabItems}
     return rows[0]!;
   }
 
-  /**
-   * Soft-delete a template package and its associated directory menu.
-   */
   async deletePackage(id: string): Promise<void> {
     const pkg = await this.findOnePackage(id);
 
-    // Cascade delete directory menu if it exists
     if (pkg.menuId) {
-      // Find direct child menus (page menus under the directory)
       const children = await this.db
         .select({ id: sysMenus.id })
         .from(sysMenus)
@@ -4334,7 +2071,6 @@ ${tabItems}
 
       const childIds = children.map((c) => c.id);
 
-      // Find button children (menuType=3) of each page child
       let btnIds: string[] = [];
       if (childIds.length > 0) {
         const btnRows = await this.db
@@ -4352,13 +2088,8 @@ ${tabItems}
 
       const allMenuIds = [pkg.menuId, ...childIds, ...btnIds];
 
-      // Delete authority_btn entries for all affected menus
-      await this.db
-        .delete(sysAuthorityBtns)
-        .where(inArray(sysAuthorityBtns.menuId, allMenuIds));
-      // Delete role-menu assignments first
+      await this.db.delete(sysAuthorityBtns).where(inArray(sysAuthorityBtns.menuId, allMenuIds));
       await this.db.delete(sysRoleMenus).where(inArray(sysRoleMenus.menuId, allMenuIds));
-      // Delete all menus (button children → page children → directory)
       if (btnIds.length > 0) {
         await this.db.delete(sysMenus).where(inArray(sysMenus.id, btnIds));
       }
@@ -4378,12 +2109,6 @@ ${tabItems}
   // Menu auto-creation
   // =========================================================================
 
-  /**
-   * Insert a menu record into sys_menus and assign it to super_admin + admin roles.
-   * When parentMenuId is provided, creates as a page child under that directory.
-   * Returns the created menu ID.
-   */
-  /** CRUD sub-route permissions — each maps a menu entry + sys_apis entry + Casbin policy */
   private static readonly CRUD_DEFS: { name: string; desc: string; method: string; suffix: string }[] = [
     { name: 'query',       desc: '查询',     method: 'GET',    suffix: '' },
     { name: 'add',         desc: '新增',     method: 'POST',   suffix: '' },
@@ -4397,7 +2122,6 @@ ${tabItems}
     const mainSql = buildCreateTableSql(n.tableName, dto.fields);
     await this.db.execute(sql.raw(mainSql));
 
-    // Create child tables for one-to-many relations
     for (const f of dto.fields) {
       if (f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields?.length) {
         const childTable = `lc_${singularize(n.tableName.replace(/^lc_/, ''))}_${singularize(f.name)}`;
@@ -4412,8 +2136,7 @@ ${tabItems}
     const n = deriveNames(dto.tableName);
     const componentName = `./${n.kebabName}/index`;
 
-    // Compute menu path based on parent
-    let menuPath = n.routePath; // default: /lc/{kebabName}
+    let menuPath = n.routePath;
     if (parentMenuId) {
       const parentRows = await this.db
         .select({ path: sysMenus.path })
@@ -4425,7 +2148,6 @@ ${tabItems}
       }
     }
 
-    // Skip if menu already exists
     const existing = await this.db
       .select({ id: sysMenus.id })
       .from(sysMenus)
@@ -4433,10 +2155,9 @@ ${tabItems}
       .limit(1);
 
     if (existing.length > 0) {
-      return existing[0].id; // Menu already created — return existing ID
+      return existing[0].id;
     }
 
-    // Get current max sort among siblings
     const sortWhere = parentMenuId
       ? eq(sysMenus.parentId, parentMenuId)
       : isNull(sysMenus.parentId);
@@ -4446,7 +2167,6 @@ ${tabItems}
       .where(sortWhere);
     const nextSort = (maxSortRows[0]?.maxSort ?? -1) + 1;
 
-    // Insert menu record
     const menuRows = await this.db
       .insert(sysMenus)
       .values({
@@ -4457,13 +2177,12 @@ ${tabItems}
         parentId: parentMenuId ?? null,
         sort: nextSort,
         isVisible: 1,
-        menuType: 2, // 2 = page/menu (always a page, directories are created separately)
+        menuType: 2,
       })
       .returning();
 
     const menuId = menuRows[0]!.id;
 
-    // Assign to super_admin and admin roles
     const adminRoles = await this.db
       .select({ id: sysRoles.id, code: sysRoles.code })
       .from(sysRoles)
@@ -4472,23 +2191,11 @@ ${tabItems}
     if (adminRoles.length > 0) {
       await this.db
         .insert(sysRoleMenus)
-        .values(
-          adminRoles.map((role) => ({
-            roleId: role.id,
-            menuId,
-          })),
-        )
+        .values(adminRoles.map((role) => ({ roleId: role.id, menuId })))
         .onConflictDoNothing();
     }
 
-    // ── Create CRUD sub-route permissions (menuType=3) ──
-    // Each CRUD action gets:
-    //   1. A menuType=3 sub-menu entry (name=desc, permission=lc:{kebab}:{name})
-    //   2. A sys_apis entry (method + full path + matching permission)
-    //   3. Assigned to admin roles via sys_role_menus
-    //   4. Casbin policies for method-level API enforcement
-    //
-    // Clean up old button-style entries first (migration from BTN_DEFS era)
+    // Clean up old button-style entries first
     const oldBtnChildren = await this.db
       .select({ id: sysMenus.id })
       .from(sysMenus)
@@ -4515,7 +2222,6 @@ ${tabItems}
       const permission = `lc:${n.kebabName}:${def.name}`;
       const apiPath = `${apiPrefix}/${n.kebabName}${def.suffix}`;
 
-      // Skip if this sub-menu already exists under this parent
       const existingSub = await this.db
         .select({ id: sysMenus.id })
         .from(sysMenus)
@@ -4534,7 +2240,6 @@ ${tabItems}
         continue;
       }
 
-      // 1. Create sub-menu entry (menuType=3) with permission key
       const subRows = await this.db
         .insert(sysMenus)
         .values({
@@ -4553,8 +2258,6 @@ ${tabItems}
       const subMenuId = subRows[0]!.id;
       crudCount++;
 
-      // 2. Insert sys_apis entries
-      // For queries (suffix=''), also register the /:id path for single-record GET
       const apiPaths = def.suffix === ''
         ? [apiPath, `${apiPath}/:id`]
         : [apiPath];
@@ -4583,19 +2286,12 @@ ${tabItems}
         }
       }
 
-      // 3. Assign sub-menu to admin roles via sys_role_menus
       if (adminRoles.length > 0) {
         await this.db
           .insert(sysRoleMenus)
-          .values(
-            adminRoles.map((role) => ({
-              roleId: role.id,
-              menuId: subMenuId,
-            })),
-          )
+          .values(adminRoles.map((role) => ({ roleId: role.id, menuId: subMenuId })))
           .onConflictDoNothing();
 
-        // 4. Write Casbin policies for method-level enforcement
         for (const role of adminRoles) {
           for (const p of apiPaths) {
             await this.casbin.addPolicy(role.code, p, def.method);
@@ -4616,15 +2312,10 @@ ${tabItems}
   // Package ↔ Generation integration
   // =========================================================================
 
-  /**
-   * Ensure a directory menu exists for a package name.
-   * Returns the directory menu ID (existing or newly created).
-   */
   private async ensureDirectoryMenu(packageName: string): Promise<string> {
     const kebabDirName = toKebabCase(packageName).replace(/[^a-z0-9-]/g, '') || 'untitled';
     const dirPath = `/pkg/${kebabDirName}`;
 
-    // Check if directory menu already exists
     const existingMenu = await this.db
       .select({ id: sysMenus.id })
       .from(sysMenus)
@@ -4635,14 +2326,12 @@ ${tabItems}
       return existingMenu[0].id;
     }
 
-    // Get max sort among root menus
     const maxSortRows = await this.db
       .select({ maxSort: sql<number>`COALESCE(MAX(${sysMenus.sort}), -1)` })
       .from(sysMenus)
       .where(isNull(sysMenus.parentId));
     const nextSort = (maxSortRows[0]?.maxSort ?? -1) + 1;
 
-    // Create directory menu
     const menuRows = await this.db
       .insert(sysMenus)
       .values({
@@ -4653,13 +2342,12 @@ ${tabItems}
         parentId: null,
         sort: nextSort,
         isVisible: 1,
-        menuType: 1, // directory
+        menuType: 1,
       })
       .returning();
 
     const menuId = menuRows[0]!.id;
 
-    // Assign to admin roles
     const adminRoles = await this.db
       .select({ id: sysRoles.id })
       .from(sysRoles)
@@ -4676,10 +2364,6 @@ ${tabItems}
     return menuId;
   }
 
-  /**
-   * Save the current code generator form config as a template package.
-   * Creates a directory menu for the package and stores the field definitions.
-   */
   async saveFromConfig(dto: SaveFromConfigDto): Promise<SysAutoCodePackage> {
     const menuId = await this.ensureDirectoryMenu(dto.name);
     let templates: Record<string, string> = {};
@@ -4693,7 +2377,6 @@ ${tabItems}
       templates = this.preview(autoCodeDto);
     }
 
-    // Insert package
     const rows = await this.db
       .insert(sysAutoCodePackages)
       .values({
@@ -4712,9 +2395,6 @@ ${tabItems}
     return rows[0]!;
   }
 
-  /**
-   * Resolve a package name by ID (used internally for history association).
-   */
   private async getPackageName(packageId: string): Promise<string> {
     const rows = await this.db
       .select({ name: sysAutoCodePackages.name })
@@ -4724,9 +2404,6 @@ ${tabItems}
     return rows[0]?.name ?? '';
   }
 
-  /**
-   * Get a package's generation config (for "Load from Package" in the frontend).
-   */
   async getPackageConfig(id: string): Promise<{
     tableName: string;
     description: string;
@@ -4746,9 +2423,6 @@ ${tabItems}
     };
   }
 
-  /**
-   * List all packages (lightweight, no pagination) for frontend dropdowns.
-   */
   async listAllPackages(): Promise<Array<{ id: string; name: string; tableName: string; description: string }>> {
     const rows = await this.db
       .select({
@@ -4773,28 +2447,25 @@ ${tabItems}
   // Entry point updaters
   // =========================================================================
 
-  /**
-   * Resolve the monorepo project root.
-   * Works whether cwd is the project root or apps/server/.
-   */
   private resolveProjectRoot(): string {
-    const cwd = process.cwd();
-    if (existsSync(path.join(cwd, 'apps', 'server', 'src'))) {
-      return cwd;
+    let dir = process.cwd();
+    const root = path.parse(dir).root;
+    while (dir !== root) {
+      if (existsSync(path.join(dir, 'release', 'lowcode', 'apps', 'server', 'src'))) {
+        return dir;
+      }
+      dir = path.resolve(dir, '..');
     }
-    // cwd is inside apps/server, go up to project root
-    return path.resolve(cwd, '..', '..');
+    throw new Error(`Cannot resolve project root from cwd=${process.cwd()}`);
   }
 
   private async updateSchemaIndex(dto: AutoCodeDto, projectRoot: string): Promise<void> {
     const n = deriveNames(dto.tableName);
-    const indexPath = path.join(projectRoot, 'apps/server/src/db/schema/index.ts');
+    const indexPath = path.join(projectRoot, 'release/lowcode/apps/server/src/db/schema/index.ts');
     const exportLine = `export * from './${n.kebabName}.js';`;
 
     let content = await fs.readFile(indexPath, 'utf-8');
-    if (content.includes(exportLine)) {
-      return; // Already exists
-    }
+    if (content.includes(exportLine)) return;
 
     content = content.trimEnd() + '\n' + exportLine + '\n';
     await fs.writeFile(indexPath, content, 'utf-8');
@@ -4802,26 +2473,21 @@ ${tabItems}
 
   private async updateAppModule(dto: AutoCodeDto, projectRoot: string): Promise<void> {
     const n = deriveNames(dto.tableName);
-    const modulePath = path.join(projectRoot, 'apps/server/src/app.module.ts');
+    const modulePath = path.join(projectRoot, 'release/lowcode/apps/server/src/app.module.ts');
 
     let content = await fs.readFile(modulePath, 'utf-8');
 
     const importLine = `import { ${n.pascalSingular}Module } from './modules/${n.kebabSingular}/${n.kebabSingular}.module';`;
     const moduleLine = `    ${n.pascalSingular}Module,`;
 
-    // Check if already registered
-    if (content.includes(importLine)) {
-      return;
-    }
+    if (content.includes(importLine)) return;
 
-    // Add import after the last import statement
     const lastImportMatch = content.match(/^import .+;$/gm);
     if (lastImportMatch && lastImportMatch.length > 0) {
       const lastImport = lastImportMatch[lastImportMatch.length - 1]!;
       content = content.replace(lastImport, `${lastImport}\n${importLine}`);
     }
 
-    // Add module to imports array (before closing ])
     content = content.replace(
       /(\s+)(OperationRecordModule,)/,
       `$1$2\n${moduleLine}`,
@@ -4832,15 +2498,12 @@ ${tabItems}
 
   private async updateUmiRoutes(dto: AutoCodeDto, projectRoot: string): Promise<void> {
     const n = deriveNames(dto.tableName);
-    const umircPath = path.join(projectRoot, 'apps/web/.umirc.ts');
+    const umircPath = path.join(projectRoot, 'release/lowcode/apps/web/.umirc.ts');
     let content = await fs.readFile(umircPath, 'utf-8');
 
-    // Package-scoped module — nest under the package's directory route block
     if (dto.packageId) {
       let pkg: SysAutoCodePackage | null = null;
-      try {
-        pkg = await this.findOnePackage(dto.packageId);
-      } catch { /* fall back to flat route */ }
+      try { pkg = await this.findOnePackage(dto.packageId); } catch { /* fall back to flat route */ }
 
       if (pkg?.menuId) {
         const parentMenu = await this.db
@@ -4850,20 +2513,16 @@ ${tabItems}
           .limit(1);
 
         if (parentMenu.length > 0 && parentMenu[0].path) {
-          const dirPath = parentMenu[0].path; // e.g., /pkg/test
+          const dirPath = parentMenu[0].path;
           const dirName = parentMenu[0].name;
           const childPath = `${dirPath}/${n.kebabName}`;
 
-          // Check if child route already exists
           if (content.includes(`path: '${childPath}'`)) return;
 
           const childEntry = `      { path: '${childPath}', name: '${dto.description || n.pascalName}', icon: 'TableOutlined', component: './${n.kebabName}/index' },`;
 
-          // Look for existing directory route block for this package
           const dirMarker = `path: '${dirPath}'`;
           if (content.includes(dirMarker)) {
-            // Directory block exists — append child before its closing },]
-            // Find the directory block and insert before its closing ]},
             const dirRegex = new RegExp(
               `(\\{[^}]*path:\\s*'${dirPath.replace(/\//g, '\\/')}'[^}]*routes:\\s*\\[[^\\]]*)(\\][^}]*\\},)`,
               's',
@@ -4873,7 +2532,6 @@ ${tabItems}
               content = content.replace(dirRegex, `$1\n${childEntry}\n      $2`);
             }
           } else {
-            // No directory block yet — create one with the child
             const dirBlock = `    {
       path: '${dirPath}',
       name: '${dirName}',
@@ -4894,15 +2552,10 @@ ${childEntry}
       }
     }
 
-    // Standalone module (no package) — flat leaf route
-    const routePath = n.routePath; // /lc/{kebabName}
-
-    // Check if route already exists with correct component
+    const routePath = n.routePath;
     const routePattern = `path: '${routePath}'`;
     if (content.includes(routePattern)) {
-      // Route exists — ensure it has the component field
       if (!content.includes(`component: './${n.kebabName}/index'`)) {
-        // Add missing component to existing route entry
         content = content.replace(
           new RegExp(`(path: '${routePath.replace('/', '\\/')}',[\\s\\S]*?icon: 'TableOutlined',)`, 'm'),
           `$1\n      component: './${n.kebabName}/index',`,
@@ -4931,23 +2584,15 @@ ${childEntry}
   // Delete helpers — remove generated artifacts
   // =========================================================================
 
-  /**
-   * Remove the route entry for a generated module from .umirc.ts.
-   * Handles both flat routes and child routes inside package directory blocks.
-   * When the last child is removed, the directory block is cleaned up too.
-   */
-  private async removeRouteFromUmirc(n: ReturnType<typeof deriveNames>): Promise<void> {
+  private async removeRouteFromUmirc(n: DerivedNames): Promise<void> {
     const projectRoot = this.resolveProjectRoot();
-    const umircPath = path.join(projectRoot, 'apps/web/.umirc.ts');
+    const umircPath = path.join(projectRoot, 'release/lowcode/apps/web/.umirc.ts');
     if (!existsSync(umircPath)) return;
 
     let content = await fs.readFile(umircPath, 'utf-8');
-    const routePath = n.routePath; // e.g. /lc/course
+    const routePath = n.routePath;
     const componentPath = `./${n.kebabName}/index`;
 
-    // Remove the entire flat route block containing this path+component.
-    // Matches both 4-line blocks (path/name/icon/component) and any variant,
-    // as long as the block contains both the path and the component.
     const flatBlockRegex = new RegExp(
       `\\s*\\{[^{}]*path:\\s*'${routePath.replace(/\//g, '\\/')}'[^{}]*component:\\s*'${componentPath.replace(/\//g, '\\/')}'[^{}]*\\},?`,
       'gs',
@@ -4955,12 +2600,10 @@ ${childEntry}
     if (flatBlockRegex.test(content)) {
       content = content.replace(flatBlockRegex, '');
     } else {
-      // Fallback: remove only the component line (child route inside a directory block)
       const lines = content.split('\n');
       content = lines.filter((line) => !line.includes(`component: '${componentPath}'`)).join('\n');
     }
 
-    // Clean up empty directory blocks (all children removed)
     content = content.replace(
       /    \{\n      path: '\/pkg\/[^']+',\n      name: '[^']+',\n      icon: '[^']+',\n      routes: \[\s*\],\n    \},\n?/g,
       '',
@@ -4969,17 +2612,13 @@ ${childEntry}
     await fs.writeFile(umircPath, content, 'utf-8');
   }
 
-  /**
-   * Remove the schema export line from db/schema/index.ts.
-   */
-  private async removeSchemaExport(n: ReturnType<typeof deriveNames>): Promise<void> {
+  private async removeSchemaExport(n: DerivedNames): Promise<void> {
     const projectRoot = this.resolveProjectRoot();
-    const indexPath = path.join(projectRoot, 'apps/server/src/db/schema/index.ts');
+    const indexPath = path.join(projectRoot, 'release/lowcode/apps/server/src/db/schema/index.ts');
     if (!existsSync(indexPath)) return;
 
     let content = await fs.readFile(indexPath, 'utf-8');
 
-    // Remove: export * from './{kebabName}.js';  (format written by updateSchemaIndex)
     const exportPattern = new RegExp(
       `export \\* from '\\.\\/${n.kebabName}\\.js';\\n?`,
     );
@@ -4988,23 +2627,18 @@ ${childEntry}
     await fs.writeFile(indexPath, content, 'utf-8');
   }
 
-  /**
-   * Remove the module registration from app.module.ts.
-   */
-  private async removeModuleRegistration(n: ReturnType<typeof deriveNames>): Promise<void> {
+  private async removeModuleRegistration(n: DerivedNames): Promise<void> {
     const projectRoot = this.resolveProjectRoot();
-    const modulePath = path.join(projectRoot, 'apps/server/src/app.module.ts');
+    const modulePath = path.join(projectRoot, 'release/lowcode/apps/server/src/app.module.ts');
     if (!existsSync(modulePath)) return;
 
     let content = await fs.readFile(modulePath, 'utf-8');
 
-    // Remove import line: import { XxxModule } from './modules/xxx/xxx.module';
     const importPattern = new RegExp(
       `import \\{ ${n.pascalSingular}Module \\} from '\\./modules/${n.kebabSingular}/${n.kebabSingular}\\.module';\\n?`,
     );
     content = content.replace(importPattern, '');
 
-    // Remove module from imports array: XxxModule,
     const moduleArrayPattern = new RegExp(
       `\\s*${n.pascalSingular}Module,\\n?`,
     );

@@ -5,6 +5,7 @@ import {
   Card,
   Form,
   Input,
+  InputNumber,
   Radio,
   Select,
   Switch,
@@ -19,6 +20,7 @@ import {
   Tooltip,
   Modal,
   Progress,
+  Segmented,
 } from 'antd';
 import {
   PlusOutlined,
@@ -53,6 +55,10 @@ import {
 } from '@/services/autocode';
 import { useUserStore } from '@/stores/user';
 import { getDictionaries, type Dictionary } from '@/services/dictionary';
+import { getEncodingRulesList, createEncodingRule } from '@/services/encoding-rule';
+import { ModalForm, ProFormText, ProFormSelect, ProFormDigit } from '@ant-design/pro-components';
+import ERGraphTab from './ErGraph';
+import { AiGeneratorPanel } from './AiGenerator';
 
 const { Text, Title } = Typography;
 
@@ -69,6 +75,7 @@ const FIELD_TYPE_OPTIONS = [
   { value: 'file', label: 'Attachment (upload)' },
   { value: 'relation', label: 'Relation (foreign key)' },
   { value: 'dict', label: '字典 (Dictionary)' },
+  { value: 'code', label: '编码规则 (Auto Code)' },
 ];
 
 const DEFAULT_FIELD: AutoCodeField = {
@@ -175,6 +182,15 @@ function GenerateProgressModal({
         const statusFn = mode === 'update' ? getUpdateStatus : getGenerateStatus;
         const status = await statusFn(jobId);
         if (cancelled) return;
+
+        // Job 文件已丢失(后端重启导致) → 直接关闭 modal
+        if (!status) {
+          clearActiveJob();
+          onClose();
+          message.info('任务已过期（后端已重启），请重试');
+          return;
+        }
+
         setJobStatus(status);
         setPollError(null);
         failCountRef.current = 0;
@@ -478,6 +494,9 @@ export default function AutocodePage() {
 
   // Form state
   const [generateWeb, setGenerateWeb] = useState(true);
+  // Mock-data generation (opt-in, default off; count default 10)
+  const [mockEnabled, setMockEnabled] = useState(false);
+  const [mockCount, setMockCount] = useState(10);
 
   // Update mode state
   const [updateMode, setUpdateMode] = useState(false);
@@ -488,6 +507,7 @@ export default function AutocodePage() {
   // Preview state
   const [previewFiles, setPreviewFiles] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState('');
+  const [viewMode, setViewMode] = useState<'generator' | 'ergraph'>('generator');
   const [previewLoading, setPreviewLoading] = useState(false);
   const [generateLoading, setGenerateLoading] = useState(false);
   const [tableOptions, setTableOptions] = useState<{ value: string; label: string }[]>([]);
@@ -504,6 +524,8 @@ export default function AutocodePage() {
   const [packageOptions, setPackageOptions] = useState<PackageListItem[]>([]);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
   const [dictOptions, setDictOptions] = useState<{ value: string; label: string }[]>([]);
+  const [encodingRuleOptions, setEncodingRuleOptions] = useState<{ label: string; value: string }[]>([]);
+  const [quickCreateRuleModalOpen, setQuickCreateRuleModalOpen] = useState(false);
   const [searchParams] = useSearchParams();
 
   // On mount: restore active job from sessionStorage (survives HMR reload)
@@ -543,7 +565,15 @@ export default function AutocodePage() {
         setDictOptions(res.list.map((d: Dictionary) => ({ value: d.type, label: `${d.name} (${d.type})` })));
       })
       .catch(() => { /* non-critical */ });
+    loadEncodingRules();
   }, []);
+
+  const loadEncodingRules = async () => {
+    try {
+      const res = await getEncodingRulesList({ pageSize: 100 });
+      setEncodingRuleOptions((res.list || []).map((r: any) => ({ label: r.name, value: r.id })));
+    } catch { /* non-critical */ }
+  };
 
   // Handle ?packageId=xxx URL param (from packages page "Apply" button)
   useEffect(() => {
@@ -716,6 +746,7 @@ export default function AutocodePage() {
         fields: values.fields || [],
         generateWeb,
         ...(selectedPackageId ? { packageId: selectedPackageId } : {}),
+        ...(mockEnabled ? { mockData: { enabled: true, count: mockCount } } : {}),
       };
 
       // Try normal generate first
@@ -765,6 +796,74 @@ export default function AutocodePage() {
     }
   };
 
+  // AI 对话框「确认创建」→ 复用现有 startGenerateJob 进度 modal 流程
+  const handleAiGenerate = async (dto: AutoCodeDto) => {
+    try {
+      setGenerateLoading(true);
+      try {
+        await startGenerateJob(dto);
+      } catch (err: any) {
+        const errMsg = err?.message || '';
+        if (errMsg.includes('already exists')) {
+          message.warning(
+            `表 ${dto.tableName} 已存在。可换个表名重试,或在「填入表单修改」后勾选覆盖生成。`,
+          );
+        } else {
+          throw err;
+        }
+      }
+    } catch (err: any) {
+      message.error(err?.message || 'AI 生成失败');
+    } finally {
+      setGenerateLoading(false);
+    }
+  };
+
+  // AI 对话框「全部确认创建」(批量)→ 按顺序依次生成(避免并发 drizzle push / 文件写入冲突)。
+  // 已存在的表跳过并继续,真正的错误则中断批量。
+  const handleAiGenerateBatch = async (dtos: AutoCodeDto[]) => {
+    setGenerateLoading(true);
+    let ok = 0;
+    let skipped = 0;
+    try {
+      for (const dto of dtos) {
+        try {
+          await startGenerateJob(dto);
+          ok += 1;
+        } catch (err: any) {
+          const errMsg = err?.message || '';
+          if (errMsg.includes('already exists')) {
+            skipped += 1;
+          } else {
+            throw err;
+          }
+        }
+      }
+      if (ok > 0 && skipped > 0) {
+        message.success(`批量完成:已创建 ${ok} 个,跳过 ${skipped} 个已存在的表`);
+      } else if (skipped > 0) {
+        message.warning(`批量完成:跳过 ${skipped} 个已存在的表`);
+      } else if (ok > 0) {
+        message.success(`批量完成:已创建 ${ok} 个表`);
+      }
+    } catch (err: any) {
+      message.error(`批量生成中断: ${err?.message || 'AI 生成失败'}(已成功 ${ok} 个)`);
+    } finally {
+      setGenerateLoading(false);
+    }
+  };
+
+  // AI 对话框「填入表单修改」→ 把方案写入代码生成器表单,供用户调整
+  const handleAiFillForm = (dto: AutoCodeDto) => {
+    form.setFieldsValue({
+      tableName: dto.tableName,
+      description: dto.description,
+      fields: dto.fields && dto.fields.length > 0 ? dto.fields : [{ ...DEFAULT_FIELD }],
+      generateWeb: dto.generateWeb,
+    });
+    setGenerateWeb(dto.generateWeb);
+  };
+
   const tabItems = Object.entries(previewFiles).map(([path, content]) => ({
     key: path,
     label: getFileLabel(path),
@@ -795,6 +894,27 @@ export default function AutocodePage() {
         <CodeOutlined /> Code Generator
       </Title>
 
+      <Segmented
+        value={viewMode}
+        onChange={(v) => setViewMode(v as 'generator' | 'ergraph')}
+        options={[
+          { label: '代码生成器', value: 'generator' },
+          { label: 'ER 图', value: 'ergraph' },
+        ]}
+        style={{ marginBottom: 16 }}
+      />
+
+      {viewMode === 'ergraph' ? (
+        <ERGraphTab />
+      ) : (
+        <>
+      <Card size="small" style={{ marginBottom: 16 }} styles={{ body: { padding: 12 } }}>
+        <AiGeneratorPanel
+          onGenerate={handleAiGenerate}
+          onGenerateBatch={handleAiGenerateBatch}
+          onFillForm={handleAiFillForm}
+        />
+      </Card>
       {/* Single Form wrapping the entire page */}
       <Form
         form={form}
@@ -878,7 +998,7 @@ export default function AutocodePage() {
           }
         >
           <Row gutter={16}>
-            <Col span={8}>
+            <Col span={6}>
               <Form.Item
                 name="tableName"
                 label="Table Name"
@@ -893,7 +1013,7 @@ export default function AutocodePage() {
                 <Input placeholder="e.g. user_profiles" disabled={updateMode} />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={6}>
               <Form.Item
                 name="description"
                 label="Description"
@@ -902,7 +1022,7 @@ export default function AutocodePage() {
                 <Input placeholder="e.g. User Profile Management" disabled={updateMode} />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={6}>
               <Form.Item label="Generate Frontend">
                 <Switch
                   checked={generateWeb}
@@ -910,6 +1030,28 @@ export default function AutocodePage() {
                   checkedChildren="Web"
                   unCheckedChildren="Server Only"
                 />
+              </Form.Item>
+            </Col>
+            <Col span={6}>
+              <Form.Item label="生成 mock 数据">
+                <Space>
+                  <Switch
+                    checked={mockEnabled}
+                    onChange={setMockEnabled}
+                    checkedChildren="开"
+                    unCheckedChildren="关"
+                  />
+                  <Tooltip title="数据数量">
+                    <InputNumber
+                      min={1}
+                      max={1000}
+                      value={mockCount}
+                      onChange={(v) => setMockCount(Number(v) || 10)}
+                      disabled={!mockEnabled}
+                      style={{ width: 96 }}
+                    />
+                  </Tooltip>
+                </Space>
               </Form.Item>
             </Col>
           </Row>
@@ -1294,7 +1436,7 @@ export default function AutocodePage() {
                                               <Input placeholder="field_name" style={{ width: 140 }} />
                                             </Form.Item>
                                             <Form.Item {...dRest} name={[dName, 'type']}>
-                                              <Select style={{ width: 120 }} options={FIELD_TYPE_OPTIONS.filter(o => o.value !== 'relation' && o.value !== 'dict')} />
+                                              <Select style={{ width: 120 }} options={FIELD_TYPE_OPTIONS.filter(o => o.value !== 'relation' && o.value !== 'dict' && o.value !== 'code')} />
                                             </Form.Item>
                                             <Form.Item {...dRest} name={[dName, 'description']}>
                                               <Input placeholder="描述" style={{ width: 120 }} />
@@ -1350,6 +1492,47 @@ export default function AutocodePage() {
                                   }
                                 />
                               </Form.Item>
+                            </Col>
+                          </Row>
+                        );
+                      }}
+                    </Form.Item>
+                    {/* Code config — only visible when type === 'code' */}
+                    <Form.Item noStyle shouldUpdate={(prev, cur) => {
+                      const prevType = prev.fields?.[name]?.type;
+                      const curType = cur.fields?.[name]?.type;
+                      return prevType !== curType;
+                    }}>
+                      {({ getFieldValue }) => {
+                        const fieldType = getFieldValue(['fields', name, 'type']);
+                        if (fieldType !== 'code') return null;
+                        return (
+                          <Row gutter={8} align="middle" style={{ marginBottom: 8, padding: '0 0 8px 0', background: '#fafafa', borderRadius: 4, margin: '0 0 8px 0' }}>
+                            <Col span={1} />
+                            <Col flex="auto">
+                              <Form.Item
+                                name={[name, 'ruleId']}
+                                label="编码规则"
+                                rules={[{ required: true, message: '请选择编码规则' }]}
+                              >
+                                <Select
+                                  showSearch
+                                  placeholder="选择编码规则"
+                                  optionFilterProp="label"
+                                  options={encodingRuleOptions}
+                                  onDropdownVisibleChange={(open) => {
+                                    if (open) loadEncodingRules();
+                                  }}
+                                />
+                              </Form.Item>
+                            </Col>
+                            <Col flex="none" style={{ paddingTop: 4 }}>
+                              <Button
+                                type="dashed"
+                                onClick={() => setQuickCreateRuleModalOpen(true)}
+                              >
+                                + 新建规则
+                              </Button>
                             </Col>
                           </Row>
                         );
@@ -1573,6 +1756,52 @@ export default function AutocodePage() {
           />
         </Card>
       )}
+        </>
+      )}
+
+      {/* Quick-create encoding rule modal */}
+      <ModalForm
+        title="新建编码规则"
+        open={quickCreateRuleModalOpen}
+        onOpenChange={setQuickCreateRuleModalOpen}
+        modalProps={{ destroyOnClose: true }}
+        onFinish={async (values) => {
+          try {
+            const rule = await createEncodingRule(values);
+            await loadEncodingRules();
+            message.success(`编码规则 "${rule.name}" 已创建`);
+            setQuickCreateRuleModalOpen(false);
+          } catch (err: any) {
+            message.error(err?.response?.data?.msg || err?.message || '创建失败');
+          }
+          return true;
+        }}
+      >
+        <ProFormText name="name" label="规则名称" rules={[{ required: true, message: '请输入规则名称' }]} />
+        <ProFormText name="prefix" label="前缀" placeholder="如 STU、CON" />
+        <ProFormSelect
+          name="dateFormat"
+          label="日期格式"
+          options={[
+            { label: '无', value: 'none' },
+            { label: 'yyyyMMdd', value: 'yyyyMMdd' },
+            { label: 'yyMM', value: 'yyMM' },
+            { label: 'yyyy', value: 'yyyy' },
+          ]}
+        />
+        <ProFormText name="separator" label="分隔符" placeholder="-" initialValue="-" />
+        <ProFormDigit name="sequenceDigits" label="序号位数" min={1} max={10} initialValue={4} />
+        <ProFormSelect
+          name="resetCycle"
+          label="重置周期"
+          rules={[{ required: true, message: '请选择重置周期' }]}
+          options={[
+            { label: '永不重置', value: 'never' },
+            { label: '按年重置', value: 'yearly' },
+            { label: '按月重置', value: 'monthly' },
+          ]}
+        />
+      </ModalForm>
 
       {/* Generate progress modal — "前往新模块" button lives here */}
       <GenerateProgressModal

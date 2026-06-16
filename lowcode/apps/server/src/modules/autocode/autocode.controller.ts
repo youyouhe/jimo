@@ -22,6 +22,7 @@ import { AutocodeService, type GenerateJobStatus } from './autocode.service';
 import { AutoCodeDto } from './dto/autocode.dto';
 import { UpdateModuleDto } from './dto/update-module.dto';
 import { CreatePackageDto, UpdatePackageDto, SaveFromConfigDto } from './dto/package.dto';
+import type { ErGraph } from './er-graph.util';
 import { ApiResponse as ApiResp, PaginatedResponse } from '@lowcode/shared';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../db/schema/users';
@@ -215,6 +216,21 @@ export class AutocodeController {
     if (!data) {
       throw new NotFoundException(`Job ${jobId} not found (may have expired)`);
     }
+    return { code: 0, msg: 'success', data };
+  }
+
+  // ---------------------------------------------------------------------------
+  // ER Graph endpoint
+  // ---------------------------------------------------------------------------
+
+  @Get('er-graph')
+  @HttpCode(HttpStatus.OK)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Get ER graph of all generated entities and their relations' })
+  @ApiQuery({ name: 'packageId', required: false, type: String, description: 'Filter entities by package ID' })
+  @ApiResponse({ status: 200, description: 'Returns { nodes: ErGraphNode[], edges: ErGraphEdge[] }' })
+  async getErGraph(@Query('packageId') packageId?: string): Promise<ApiResp<ErGraph>> {
+    const data = await this.autocodeService.getErGraph(packageId);
     return { code: 0, msg: 'success', data };
   }
 

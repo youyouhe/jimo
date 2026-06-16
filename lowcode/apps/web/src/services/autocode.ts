@@ -34,6 +34,9 @@ export interface AutoCodeDto {
   generateWeb: boolean;
   force?: boolean;
   packageId?: string;
+  packageName?: string;
+  // Mock-data generation (opt-in). When absent the backend defaults to no mock rows.
+  mockData?: { enabled: boolean; count: number };
 }
 
 export interface TemplateMetadata {
@@ -87,6 +90,89 @@ export async function previewGenerate(dto: AutoCodeDto): Promise<Record<string, 
  */
 export async function getTables(): Promise<string[]> {
   return request.get('/autocode/tables');
+}
+
+// ---------------------------------------------------------------------------
+// ER Graph
+// ---------------------------------------------------------------------------
+
+export interface ErFieldInfo {
+  name: string;
+  type: string;
+  isPk: boolean;
+  isFk: boolean;
+  relationTable?: string;
+  relationType?: string;
+}
+
+export interface ErGraphNode {
+  id: string;
+  table: string;
+  description: string;
+  packageName?: string | null;
+  fields: ErFieldInfo[];
+  /** 隐式子表(one-to-many 新建,无独立 history),前端用虚线边框区分 */
+  isImplicit?: boolean;
+  /** 角色:main 主表/独立 | child 1:N 子表 | junction N:N 关联表 */
+  role?: ErNodeRole;
+  // index signature: ReactFlow v12 requires Node data to extend Record<string, unknown>
+  [key: string]: unknown;
+}
+
+export type ErRelationType = 'many-to-one' | 'many-to-many' | 'one-to-many';
+
+/** 实体在 ER 图中的角色,决定边框颜色 */
+export type ErNodeRole = 'main' | 'child' | 'junction' | 'child-junction';
+
+export interface ErGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  relationType: ErRelationType;
+  label: string;
+}
+
+export interface ErGraphData {
+  nodes: ErGraphNode[];
+  edges: ErGraphEdge[];
+}
+
+/**
+ * Get ER graph of all generated entities and their relations.
+ * Optional packageId filters to a single template package.
+ */
+export async function getErGraph(packageId?: string): Promise<ErGraphData> {
+  return request.get('/autocode/er-graph', { params: packageId ? { packageId } : {} });
+}
+
+// ---------------------------------------------------------------------------
+// AI generator config test
+// ---------------------------------------------------------------------------
+
+export interface AiTestConfig {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+}
+
+/**
+ * 测试 BYOC 配置连通性(经后端代理,避免浏览器 CORS)。
+ * 后端用极简 ping 请求验证 baseUrl/apiKey/model。
+ */
+export async function testAiConfig(
+  config: AiTestConfig,
+): Promise<{ ok: boolean; message: string }> {
+  return request.post(
+    '/autocode/ai-test',
+    {},
+    {
+      headers: {
+        'X-AI-Api-Key': config.apiKey,
+        'X-AI-Base-URL': config.baseUrl,
+        'X-AI-Model': config.model,
+      },
+    },
+  );
 }
 
 export interface CascadeChainEntry {

@@ -29,6 +29,7 @@ const FIELD_TYPES = [
   'file',
   'relation',
   'dict',
+  'code',
 ] as const;
 
 export type AutoCodeFieldType = (typeof FIELD_TYPES)[number];
@@ -52,7 +53,7 @@ export class AutoCodeField {
   })
   @IsNotEmpty()
   @IsString()
-  @IsIn(FIELD_TYPES, { message: 'type must be one of: varchar, text, integer, bigint, decimal, boolean, timestamp, uuid, image, file, relation, dict' })
+  @IsIn(FIELD_TYPES, { message: 'type must be one of: varchar, text, integer, bigint, decimal, boolean, timestamp, uuid, image, file, relation, dict, code' })
   type: AutoCodeFieldType = 'varchar';
 
   @ApiPropertyOptional({ description: 'Max length for varchar columns', example: 128 })
@@ -137,6 +138,17 @@ export class AutoCodeField {
   @IsString()
   dictType?: string;
 
+  // ── Code-specific field (only used when type === 'code') ──
+
+  @ApiPropertyOptional({
+    description: 'Encoding rule ID for code fields. Required when type=code',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @IsOptional()
+  @IsUUID()
+  @IsNotEmpty({ message: 'ruleId must be a valid UUID when field type is code' })
+  ruleId?: string;
+
   // ── One-to-many: detail fields for the child table ──
 
   @ApiPropertyOptional({
@@ -179,6 +191,33 @@ export class AutoCodeField {
   @IsOptional()
   @IsBoolean()
   removed?: boolean = false;
+}
+
+/**
+ * Mock data generation options. When attached to AutoCodeDto.mockData,
+ * the generate pipeline inserts `count` mock business rows into lc_<tableName>
+ * right after the schema-sync step.
+ */
+export class MockDataDto {
+  @ApiProperty({
+    description: 'Whether to generate mock business data after table creation',
+    default: false,
+  })
+  @IsNotEmpty()
+  @IsBoolean()
+  enabled: boolean = false;
+
+  @ApiProperty({
+    description: 'Number of mock rows to insert',
+    default: 10,
+    minimum: 1,
+    maximum: 1000,
+  })
+  @IsNotEmpty()
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  count: number = 10;
 }
 
 export class AutoCodeDto {
@@ -230,4 +269,13 @@ export class AutoCodeDto {
   @IsOptional()
   @IsUUID()
   packageId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Generate mock business data after table creation',
+    default: { enabled: false, count: 10 },
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MockDataDto)
+  mockData?: MockDataDto;
 }
