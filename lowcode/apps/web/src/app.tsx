@@ -16,6 +16,7 @@ import { useUserStore } from '@/stores/user';
 import { getAccessibleMenus, type MenuItem } from '@/services/menu';
 import { logout as logoutApi } from '@/services/auth';
 import { history } from '@umijs/max';
+import WorkspaceTabs from '@/components/WorkspaceTabs';
 
 async function doLogout() {
   try {
@@ -64,6 +65,11 @@ export const layout = ({ initialState }: { initialState: any }) => ({
     },
   },
   rightContentRender: false,
+  // Take over the content area: render the multi-tab workspace (tab strip +
+  // KeepAlive page cache) instead of Umi's default `<Outlet/>`. Navigation still
+  // flows through Umi (history/location); pages are rendered from the route
+  // registry so each opened tab stays mounted and preserves its state.
+  childrenRender: () => <WorkspaceTabs />,
 });
 
 export interface InitialState {

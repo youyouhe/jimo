@@ -1,8 +1,8 @@
 import { hash } from 'bcryptjs';
-import { eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { RoleCode } from '@lowcode/shared';
 import { createDb } from './connection.js';
-import { sysUsers, sysRoles, sysMenus, sysUserRoles, sysRoleMenus } from './schema/index.js';
+import { sysUsers, sysRoles, sysMenus, sysUserRoles, sysRoleMenus, sysEncodingRules } from './schema/index.js';
 
 async function seedAdmin(db: ReturnType<typeof createDb>): Promise<void> {
   const existing = await db
@@ -407,6 +407,18 @@ async function seedMenus(db: ReturnType<typeof createDb>): Promise<void> {
       menuType: 2,
       permission: 'system:api-token:list',
     },
+    // ── Tools > Encoding Rules ──
+    {
+      name: '编码规则管理',
+      path: '/tools/encoding-rules',
+      component: './encoding-rules/index',
+      icon: 'BarcodeOutlined',
+      parentId: null,
+      sort: 70,
+      isVisible: 1,
+      menuType: 2,
+      permission: 'tools:encoding-rule:list',
+    },
     // ── Monitoring (directory) ──
     {
       name: '系统监控',
@@ -461,25 +473,26 @@ async function seedMenus(db: ReturnType<typeof createDb>): Promise<void> {
   const parentMap = new Map<string, string>(); // name -> id
 
   for (const menu of menuTree) {
-    const result = await db
-      .insert(sysMenus)
-      .values(menu)
-      .onConflictDoNothing()
-      .returning({ id: sysMenus.id });
+    // Check existence first — onConflictDoNothing() targets the PK (uuid) which is
+    // always new, so it never fires. Use path (or name for buttons) as the real key.
+    const lookupCond = menu.path
+      ? and(eq(sysMenus.path, menu.path), isNull(sysMenus.deletedAt))
+      : and(eq(sysMenus.name, menu.name!), isNull(sysMenus.deletedAt));
+    const existing = await db
+      .select({ id: sysMenus.id })
+      .from(sysMenus)
+      .where(lookupCond)
+      .limit(1);
 
-    if (result.length > 0) {
-      parentMap.set(menu.name!, result[0]!.id);
+    if (existing.length > 0) {
+      parentMap.set(menu.name!, existing[0]!.id);
     } else {
-      // Menu already exists; look up its ID for child references
-      const existing = await db
-        .select({ id: sysMenus.id })
-        .from(sysMenus)
-        .where(
-          eq(sysMenus.name, menu.name!),
-        )
-        .limit(1);
-      if (existing.length > 0) {
-        parentMap.set(menu.name!, existing[0]!.id);
+      const result = await db
+        .insert(sysMenus)
+        .values(menu)
+        .returning({ id: sysMenus.id });
+      if (result.length > 0) {
+        parentMap.set(menu.name!, result[0]!.id);
       }
     }
   }
@@ -514,6 +527,7 @@ async function seedMenus(db: ReturnType<typeof createDb>): Promise<void> {
     '版本管理': '系统工具',
     '按钮权限': '系统工具',
     'API令牌': '系统工具',
+    '编码规则管理': '系统工具',
     // Monitoring children
     '操作日志': '系统监控',
     '登录日志': '系统监控',
@@ -604,6 +618,31 @@ async function seedAdminUserRoles(db: ReturnType<typeof createDb>): Promise<void
   console.log('[seed] admin user-roles seeded');
 }
 
+async function seedEncodingRules(db: ReturnType<typeof createDb>): Promise<void> {
+  const existing = await db
+    .select({ id: sysEncodingRules.id })
+    .from(sysEncodingRules)
+    .where(eq(sysEncodingRules.name, '默认学号规则'))
+    .limit(1);
+
+  if (existing.length > 0) {
+    console.log('[seed] encoding rule already exists, skipping');
+    return;
+  }
+
+  await db.insert(sysEncodingRules).values({
+    name: '默认学号规则',
+    prefix: 'STU',
+    dateFormat: 'yyyyMMdd',
+    separator: '-',
+    sequenceDigits: 4,
+    paddingChar: '0',
+    resetCycle: 'yearly',
+  });
+
+  console.log('[seed] example encoding rule created');
+}
+
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -619,6 +658,7 @@ async function main(): Promise<void> {
     await seedRoleMenus(db);
     // This block runs independently — outside any early-return guard for admin user creation
     await seedAdminUserRoles(db);
+    await seedEncodingRules(db);
     console.log('[seed] completed');
   } finally {
     process.exit(0);

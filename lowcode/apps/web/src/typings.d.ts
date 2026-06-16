@@ -29,6 +29,18 @@ declare module '@umijs/max' {
   export function useParams<T extends Record<string, string>>(): T;
   export function useSearchParams(): [URLSearchParams, (params: URLSearchParams) => void];
 
+  // Umi 4 runtime app data — exposes the route config (`routes`) and the
+  // id → lazy component map (`routeComponents`). Used by the multi-tab
+  // workspace to build its path → component registry.
+  export function useAppData(): {
+    routes?: Record<string, any>;
+    routeComponents?: Record<string, any>;
+    clientRoutes?: any[];
+    pluginManager?: any;
+    rootPath?: string;
+    [key: string]: any;
+  };
+
   // Umi runtime history object
   export const history: {
     push: (path: string, state?: any) => void;

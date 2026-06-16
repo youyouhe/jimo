@@ -28,12 +28,7 @@ import { OperationInterceptor } from './common/interceptors/operation.intercepto
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { AuthzGuard } from './common/guards/authz.guard';
-import { ContractModule } from './modules/contract/contract.module';
-import { OrderModule } from './modules/order/order.module';
-import { CourseModule } from './modules/course/course.module';
-import { StudentModule } from './modules/student/student.module';
-import { ScoreModule } from './modules/score/score.module';
-import { TestModule } from './modules/test/test.module';
+import { EncodingRuleModule } from './modules/encoding-rule/encoding-rule.module.js';
 
 @Module({
   imports: [
@@ -50,10 +45,8 @@ import { TestModule } from './modules/test/test.module';
     MinioModule,
     DictionaryModule,
     DictionaryDetailModule,
-    OperationRecordModule,
-    TestModule,
-    ScoreModule,    StudentModule,    CourseModule,    OrderModule,
-    ContractModule,    ApiModule,
+    OperationRecordModule,    EncodingRuleModule,
+    ApiModule,
     AutocodeModule,
     JwtBlacklistModule,
     SystemModule,

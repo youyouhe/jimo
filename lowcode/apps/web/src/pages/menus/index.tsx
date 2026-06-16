@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, message, Popconfirm, Select, Space, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   ModalForm,
   ProFormText,
@@ -15,7 +15,6 @@ import {
   updateMenu,
   deleteMenu,
   getMenus,
-  syncRoutesToUmirc,
   type MenuItem,
   type CreateMenuDto,
   type UpdateMenuDto,
@@ -62,7 +61,6 @@ function flattenMenuTree(tree: MenuItem[], depth = 0): FlatMenuOption[] {
 export default function MenusPage() {
   const [dataSource, setDataSource] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [syncing, setSyncing] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingMenu, setEditingMenu] = useState<MenuItem | null>(null);
   const [defaultParentId, setDefaultParentId] = useState<string | null>(null);
@@ -288,23 +286,6 @@ export default function MenusPage() {
           </Button>
           <Button icon={<ReloadOutlined />} onClick={loadData}>
             Refresh
-          </Button>
-          <Button
-            icon={<SyncOutlined />}
-            loading={syncing}
-            onClick={async () => {
-              setSyncing(true);
-              try {
-                const result = await syncRoutesToUmirc();
-                message.success(`已同步 ${result.updated} 条路由名称到 .umirc.ts`);
-              } catch (err: any) {
-                message.error(err.message || '同步失败');
-              } finally {
-                setSyncing(false);
-              }
-            }}
-          >
-            同步路由
           </Button>
         </Space>
       </div>

@@ -5,6 +5,10 @@ export default defineConfig({
   access: {},
   model: {},
   initialState: {},
+  // Error boundaries are class components; esbuild's minifier can emit
+  // conflicting class helpers across the main bundle and async page chunks.
+  // IIFE-wrapping each chunk prevents the name collision.
+  esbuildMinifyIIFE: true,
   layout: {
     title: 'LowCode Admin',
   },
@@ -50,6 +54,7 @@ export default defineConfig({
         { path: '/tools/versions', name: '版本管理', icon: 'BranchesOutlined', component: './versions/index' },
         { path: '/tools/authority-btns', name: '按钮权限', icon: 'BlockOutlined', component: './authority-btns/index' },
         { path: '/tools/api-tokens', name: 'API令牌', icon: 'KeyOutlined', component: './api-tokens/index' },
+        { path: '/tools/encoding-rules', name: '编码规则管理', icon: 'BarcodeOutlined', component: './encoding-rules/index' },
       ],
     },
     // ── Monitoring (directory) ──
@@ -79,42 +84,6 @@ export default defineConfig({
     // Generated business module routes are added by updateUmiRoutes() at
     // code-generation time.  patchClientRoutes filters them at runtime
     // against the DB menu tree for role-based access control.
-    {
-      path: '/lc/order',
-      name: '订单',
-      icon: 'TableOutlined',
-      component: './order/index',
-    },
-    {
-      path: '/lc/course',
-      name: '课程',
-      icon: 'TableOutlined',
-      component: './course/index',
-    },
-    {
-      path: '/lc/student',
-      name: '学生信息',
-      icon: 'TableOutlined',
-      component: './student/index',
-    },
-    {
-      path: '/lc/score',
-      name: '学科成绩',
-      icon: 'TableOutlined',
-      component: './score/index',
-    },
-    {
-      path: '/lc/contract',
-      name: '合同',
-      icon: 'TableOutlined',
-      component: './contract/index',
-    },
-    {
-      path: '/lc/test',
-      name: '测试',
-      icon: 'TableOutlined',
-      component: './test/index',
-    },
     { path: '/*', redirect: '/dashboard' },
   ],
   proxy: {
