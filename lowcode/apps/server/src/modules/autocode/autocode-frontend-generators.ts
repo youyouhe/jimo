@@ -672,6 +672,19 @@ ${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
     `Create${n.pascalSingular}Dto`,
     `Update${n.pascalSingular}Dto`,
   ];
+  // Detail (child) types for one-to-many relations must be imported alongside the main
+  // types — otherwise the generated page references <EditableProTable<XxxDetail>> without
+  // the import (recurring "Cannot find name 'XxxDetail'" tsc error). Mirrors the
+  // childPascalType logic used when rendering the EditableProTable below.
+  for (const f of dto.fields) {
+    if (f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields && f.detailFields.length > 0) {
+      const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
+      const childPascalType = isExisting
+        ? deriveNames(f.relationTable!).schemaType
+        : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
+      typeImports.push(childPascalType);
+    }
+  }
 
   for (const f of relationFields) {
     if (f.relationTable) {
