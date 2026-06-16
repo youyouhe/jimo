@@ -131,12 +131,22 @@ export class CasbinService implements ICasbinService, OnModuleInit {
     await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/files', '*');
     await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/autocode', '*');
 
+    // admin: encoding rules full access
+    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/encoding-rules', '*');
+    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/encoding-rules/:id', '*');
+
     // editor: read users and menus
     await this.enforcer.addPolicy(RoleCode.EDITOR, '/api/v1/users', 'GET');
     await this.enforcer.addPolicy(RoleCode.EDITOR, '/api/v1/menus', 'GET');
+    // editor: read encoding rules
+    await this.enforcer.addPolicy(RoleCode.EDITOR, '/api/v1/encoding-rules', 'GET');
+    await this.enforcer.addPolicy(RoleCode.EDITOR, '/api/v1/encoding-rules/:id', 'GET');
 
     // viewer: read menus only
     await this.enforcer.addPolicy(RoleCode.VIEWER, '/api/v1/menus', 'GET');
+    // viewer: read encoding rules
+    await this.enforcer.addPolicy(RoleCode.VIEWER, '/api/v1/encoding-rules', 'GET');
+    await this.enforcer.addPolicy(RoleCode.VIEWER, '/api/v1/encoding-rules/:id', 'GET');
 
     // All authenticated roles: system endpoints needed for UI rendering
     for (const role of [RoleCode.ADMIN, RoleCode.EDITOR, RoleCode.VIEWER]) {
