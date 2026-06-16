@@ -643,7 +643,12 @@ export default function AutocodePage() {
   };
 
   const startGenerateJob = async (dto: AutoCodeDto) => {
-    const { jobId } = await executeGenerate(dto);
+    // Unified mock-data injection — applies to all three callers:
+    // manual handleGenerate, AI handleAiGenerate, and AI batch handleAiGenerateBatch.
+    const finalDto: AutoCodeDto = mockEnabled
+      ? { ...dto, mockData: { enabled: true, count: mockCount } }
+      : dto;
+    const { jobId } = await executeGenerate(finalDto);
     const kebab = dto.tableName.toLowerCase().replace(/_/g, '-');
     let modulePath = `/lc/${kebab}`;
     if (dto.packageId) {
@@ -746,7 +751,7 @@ export default function AutocodePage() {
         fields: values.fields || [],
         generateWeb,
         ...(selectedPackageId ? { packageId: selectedPackageId } : {}),
-        ...(mockEnabled ? { mockData: { enabled: true, count: mockCount } } : {}),
+        // mockData is injected centrally in startGenerateJob (also covers the AI path).
       };
 
       // Try normal generate first
