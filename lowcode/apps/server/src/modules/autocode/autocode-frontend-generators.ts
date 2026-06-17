@@ -16,7 +16,7 @@ export function generateFrontendService(dto: AutoCodeDto, relationDictTypes: Map
   const n = deriveNames(dto.tableName);
   const oneToManyFields = dto.fields.filter((f) => f.type === 'relation' && f.relationType === 'one-to-many');
 
-  // Generate child detail interfaces for one-to-many
+  // Generate child detail interfaces for one-to-many (including grandchild)
   const childInterfaces: string[] = [];
   for (const f of oneToManyFields) {
     if (!f.detailFields || f.detailFields.length === 0) continue;
@@ -24,7 +24,32 @@ export function generateFrontendService(dto: AutoCodeDto, relationDictTypes: Map
     const childPascalType = isExisting
       ? deriveNames(f.relationTable!).schemaType
       : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
+
+    // Grandchild interfaces first (referenced by child interface)
+    for (const gf of f.detailFields) {
+      if (gf.type !== 'relation' || gf.relationType !== 'one-to-many') continue;
+      if (!gf.detailFields || gf.detailFields.length === 0) continue;
+      const grandPascalType = toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}_${singularize(gf.name)}`);
+      const grandFieldLines = gf.detailFields.map((gdf) => {
+        const tsType = toTsType(gdf);
+        const nullable = !gdf.required && gdf.type !== 'boolean' ? ' | null' : '';
+        return `  ${gdf.name}: ${tsType}${nullable};`;
+      });
+      childInterfaces.push(`
+export interface ${grandPascalType} {
+  id: string;
+${grandFieldLines.join('\n')}
+  createdAt: string;
+  updatedAt: string;
+}
+`);
+    }
+
     const childFieldLines = f.detailFields.map((df) => {
+      if (df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0) {
+        const grandPascalType = toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}_${singularize(df.name)}`);
+        return `  ${df.name}: ${grandPascalType}[];`;
+      }
       const tsType = toTsType(df);
       const nullable = !df.required && df.type !== 'boolean' ? ' | null' : '';
       return `  ${df.name}: ${tsType}${nullable};`;
@@ -149,11 +174,39 @@ export async function ${fetchFunctionName}(): Promise<${optionInterfaceName}[]> 
     }
   }
 
-  // Generate options fetchers for FK fields inside O2M child tables
+  // Generate options fetchers for FK fields inside O2M child tables (and grandchild tables)
   const oneToManyFieldsForService = dto.fields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields);
   const seenFetchers = new Set(relationFields.map(f => f.relationTable).filter(Boolean));
   for (const o2m of oneToManyFieldsForService) {
     for (const df of (o2m.detailFields || [])) {
+      if (df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields) {
+        // Grandchild level: scan grandchild detailFields for FK relations
+        for (const gdf of df.detailFields) {
+          if (gdf.type !== 'relation' || !gdf.relationTable || gdf.relationTable === dto.tableName) continue;
+          if (seenFetchers.has(gdf.relationTable)) continue;
+          seenFetchers.add(gdf.relationTable);
+          const targetNames = deriveNames(gdf.relationTable);
+          const displayField = gdf.relationDisplayField || 'name';
+          const optionInterfaceName = `${toPascalCase(singularize(gdf.relationTable))}Option`;
+          const fetchFunctionName = `get${toPascalCase(singularize(gdf.relationTable))}Options`;
+          relationOptionInterfaces.push(`
+export interface ${optionInterfaceName} {
+  id: string;
+  ${displayField}: string;
+}
+`);
+          relationFetchFunctions.push(`
+/**
+ * Get ${targetNames.kebabName} options for select dropdown.
+ */
+export async function ${fetchFunctionName}(): Promise<${optionInterfaceName}[]> {
+  const res = await request.get('/lc/${targetNames.kebabName}', { params: { pageSize: 100 } });
+  return res.list || res.data || [];
+}
+`);
+        }
+        continue;
+      }
       if (df.type !== 'relation' || !df.relationTable || df.relationTable === dto.tableName) continue;
       if (seenFetchers.has(df.relationTable)) continue;
       seenFetchers.add(df.relationTable);
@@ -180,8 +233,20 @@ export async function ${fetchFunctionName}(): Promise<${optionInterfaceName}[]> 
     }
   }
 
-  const hasDictRelation = [...relationDictTypes.values()].some(v => v !== null);
-  return `import request from './request';${hasDictRelation ? `\nimport { getDictDetailsByType } from './dictionary';` : ''}
+  // Check if any grandchild uses dict — needed for getDictDetailsByType import in service
+  const hasDictInGrandchildren = oneToManyFieldsForService.some(o2m =>
+    (o2m.detailFields || []).some(df =>
+      df.type === 'relation' && df.relationType === 'one-to-many' &&
+      (df.detailFields || []).some(gdf => gdf.type === 'dict' && gdf.dictType),
+    ),
+  );
+
+  const hasDictRelation = [...relationDictTypes.values()].some(v => v !== null) || hasDictInGrandchildren;
+  const hasChildDictFieldsInService = oneToManyFieldsForService.some(o2m =>
+    (o2m.detailFields || []).some(df => df.type === 'dict' && df.dictType),
+  );
+  const needsDictImportInService = hasDictRelation || hasChildDictFieldsInService;
+  return `import request from './request';${needsDictImportInService ? `\nimport { getDictDetailsByType } from './dictionary';` : ''}
 ${childInterfaces.join('')}
 export interface ${n.pascalSingular} {
   id: string;
@@ -390,7 +455,8 @@ export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<st
         const childPascalType = isExisting
           ? deriveNames(f.relationTable!).schemaType
           : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
-        const detailCols = f.detailFields.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName));
+        const detailCols = f.detailFields.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName) && !(df.type === 'relation' && df.relationType === 'one-to-many'));
+        const grandchildO2MFields = f.detailFields.filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0);
         const editableColumns = detailCols.map((df) => {
           if (df.type === 'relation' && df.relationTable) {
             const relDisplay = df.relationDisplayField || 'name';
@@ -408,6 +474,18 @@ export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<st
           fieldProps: { showSearch: true },
         },`;
           }
+          if (df.type === 'dict' && df.dictType) {
+            return `        {
+          title: '${df.description || df.name}',
+          dataIndex: '${df.name}',
+          valueType: 'select',
+          formItemProps: { rules: [{ required: ${df.required} }] },
+          request: async () => {
+            const list = await getDictDetailsByType('${df.dictType}');
+            return list.map((item: any) => ({ label: item.label, value: item.value }));
+          },
+        },`;
+          }
           return `        {
           title: '${df.description || df.name}',
           dataIndex: '${df.name}',
@@ -418,7 +496,99 @@ export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<st
         const emptyRow = detailCols.map(df => {
           if (df.type === 'relation') return `${df.name}: ''`;
           return `${df.name}: ${df.type === 'integer' || df.type === 'bigint' || df.type === 'decimal' ? '0' : df.type === 'timestamp' ? 'null' : "''"}`;
-        }).join(', ');
+        }).concat(grandchildO2MFields.map(gf => `${gf.name}: []`)).join(', ');
+
+        // Grandchild columns: add extra sub-table columns for each grandchild one-to-many
+        const grandchildColumnDefs = grandchildO2MFields.map((gf) => {
+          const grandPascalType = toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}_${singularize(gf.name)}`);
+          const grandCols = (gf.detailFields || []).filter(gdf => gdf.name !== 'id' && !(gdf.type === 'relation' && gdf.relationType === 'one-to-many'));
+          const grandEditableCols = grandCols.map((gdf) => {
+            if (gdf.type === 'relation' && gdf.relationTable) {
+              const relDisplay = gdf.relationDisplayField || 'name';
+              const relFetchFn = `get${toPascalCase(singularize(gdf.relationTable))}Options`;
+              return `              {
+                title: '${gdf.description || gdf.name}',
+                dataIndex: '${gdf.name}',
+                valueType: 'select',
+                render: (_: any, r: any) => r.${gdf.name}_display || r.${gdf.name},
+                formItemProps: { rules: [{ required: ${gdf.required} }] },
+                request: async () => { const res = await ${relFetchFn}(); return res.map((item: any) => ({ label: item.${relDisplay}, value: item.id })); },
+                fieldProps: { showSearch: true },
+              },`;
+            }
+            if (gdf.type === 'dict' && gdf.dictType) {
+              return `              {
+                title: '${gdf.description || gdf.name}',
+                dataIndex: '${gdf.name}',
+                valueType: 'select',
+                formItemProps: { rules: [{ required: ${gdf.required} }] },
+                request: async () => { const list = await getDictDetailsByType('${gdf.dictType}'); return list.map((item: any) => ({ label: item.label, value: item.value })); },
+              },`;
+            }
+            return `              {
+                title: '${gdf.description || gdf.name}',
+                dataIndex: '${gdf.name}',
+                valueType: '${gdf.type === 'integer' || gdf.type === 'bigint' || gdf.type === 'decimal' ? 'digit' : gdf.type === 'timestamp' ? 'dateTime' : 'text'}',
+                formItemProps: { rules: [{ required: ${gdf.required} }] },
+              },`;
+          });
+          const grandEmptyRow = grandCols.map(gdf => {
+            if (gdf.type === 'relation') return `${gdf.name}: ''`;
+            return `${gdf.name}: ${gdf.type === 'integer' || gdf.type === 'bigint' || gdf.type === 'decimal' ? '0' : gdf.type === 'timestamp' ? 'null' : "''"}`;
+          }).join(', ');
+
+          return `            {
+              title: '${gf.description || gf.name}',
+              dataIndex: '${gf.name}',
+              valueType: 'option',
+              width: 200,
+              render: (_: any, row: any) => {
+                const grandRows: any[] = row.${gf.name} || [];
+                const [grandKeys, setGrandKeys] = React.useState<React.Key[]>(() => grandRows.map((r: any) => r.id));
+                return (
+                  <>
+                    <EditableProTable<${grandPascalType}>
+                      rowKey="id"
+                      size="small"
+                      value={grandRows}
+                      onChange={(data) => {
+                        const cur: any[] = form.getFieldValue('${f.name}') || [];
+                        form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: data ?? [] } : r));
+                      }}
+                      recordCreatorProps={false}
+                      editable={{
+                        type: 'multiple',
+                        editableKeys: grandKeys,
+                        onChange: setGrandKeys,
+                        onValuesChange: (_r, ds) => {
+                          const cur: any[] = form.getFieldValue('${f.name}') || [];
+                          form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: ds } : r));
+                        },
+                        actionRender: (grandRow, _cfg, _doms) => [
+                          <a key="del" onClick={() => {
+                            const cur: any[] = form.getFieldValue('${f.name}') || [];
+                            form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: (r.${gf.name} || []).filter((g: any) => g.id !== grandRow.id) } : r));
+                            setGrandKeys((ks: React.Key[]) => ks.filter((k) => k !== grandRow.id));
+                          }} style={{ color: '#ff4d4f' }}>删除</a>,
+                        ],
+                      }}
+                      columns={[
+${grandEditableCols.join('\n')}
+                        { title: '操作', valueType: 'option', width: 60 },
+                      ]}
+                    />
+                    <Button type="dashed" size="small" block icon={<PlusOutlined />} style={{ marginTop: 4 }} onClick={() => {
+                      const tempId = Date.now().toString() + '_' + Math.random().toString(36).slice(2, 8);
+                      const newGrand = { id: tempId, ${grandEmptyRow} };
+                      const cur: any[] = form.getFieldValue('${f.name}') || [];
+                      form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: [...(r.${gf.name} || []), newGrand] } : r));
+                      setGrandKeys((ks: React.Key[]) => [...ks, tempId]);
+                    }}>添加${gf.description || gf.name}</Button>
+                  </>
+                );
+              },
+            },`;
+        });
 
         return `          <Form.Item name="${f.name}" label="${f.description || f.name}">
             <Form.Item noStyle shouldUpdate>
@@ -446,6 +616,7 @@ export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<st
                       }}
                       columns={[
 ${editableColumns.join('\n')}
+${grandchildColumnDefs.join('\n')}
                         { title: '操作', valueType: 'option', width: 60 },
                       ]}
                     />
@@ -683,6 +854,13 @@ ${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
         ? deriveNames(f.relationTable!).schemaType
         : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
       typeImports.push(childPascalType);
+      // Grandchild types
+      for (const gf of (f.detailFields || [])) {
+        if (gf.type === 'relation' && gf.relationType === 'one-to-many' && gf.detailFields && gf.detailFields.length > 0) {
+          const grandPascalType = toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}_${singularize(gf.name)}`);
+          typeImports.push(grandPascalType);
+        }
+      }
     }
   }
 
@@ -700,20 +878,35 @@ ${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
   const hasOneToMany = creatableFields.some((f) => f.type === 'relation' && f.relationType === 'one-to-many');
 
   const needsDayjs = hasTopLevelTimestampFields ||
-    (hasOneToMany && dto.fields.some((f: any) => f.type === 'relation' && f.relationType === 'one-to-many' && (f.detailFields || []).some((df: any) => df.type === 'timestamp')));
+    (hasOneToMany && dto.fields.some((f: any) => f.type === 'relation' && f.relationType === 'one-to-many' && (f.detailFields || []).some((df: any) => df.type === 'timestamp' || (df.type === 'relation' && df.relationType === 'one-to-many' && (df.detailFields || []).some((gdf: any) => gdf.type === 'timestamp')))));
   const manyToOneDictFields = dto.fields
     .filter((f) => f.type === 'relation' && (f.relationType === 'many-to-one' || f.relationType === 'many-to-many') && relationDictTypes.get(f.name))
     .map((f) => ({ field: f, dictType: relationDictTypes.get(f.name) as string }));
-  const hasDictFields = dictFields.length > 0 || manyToOneDictFields.length > 0;
+  const hasChildDictFields = dto.fields.some(
+    (f) => f.type === 'relation' && f.relationType === 'one-to-many' &&
+      (f.detailFields || []).some((df) => df.type === 'dict' && df.dictType),
+  );
+  const hasDictFields = dictFields.length > 0 || manyToOneDictFields.length > 0 || hasChildDictFields;
 
   const hasUploadFields = creatableFields.some((f) => f.type === 'image' || f.type === 'file');
 
   const oneToManyFields = dto.fields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields && f.detailFields.length > 0);
   const antdImports = ['Button', 'message', 'Popconfirm', 'Space', 'Form', 'Table', 'Input'];
   if (hasUploadFields) antdImports.push('Upload');
-  if (oneToManyFields.length > 1) antdImports.push('Tabs');
+  const needsTabsForExpand = oneToManyFields.length > 1 || oneToManyFields.some(f => f.detailFields!.filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0).length > 1);
+  if (needsTabsForExpand) antdImports.push('Tabs');
   for (const f2 of oneToManyFields) {
     for (const df of (f2.detailFields || [])) {
+      if (df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields) {
+        // Grandchild FK relations
+        for (const gdf of df.detailFields) {
+          if (gdf.type === 'relation' && gdf.relationTable && gdf.relationTable !== dto.tableName) {
+            const grandOptFn = `get${toPascalCase(singularize(gdf.relationTable))}Options`;
+            if (!apiFunctions.includes(grandOptFn)) apiFunctions.push(grandOptFn);
+          }
+        }
+        continue;
+      }
       if (df.type === 'relation' && df.relationTable && df.relationTable !== dto.tableName) {
         const childOptFn = `get${toPascalCase(singularize(df.relationTable))}Options`;
         if (!apiFunctions.includes(childOptFn)) apiFunctions.push(childOptFn);
@@ -912,19 +1105,38 @@ ${oneToManyFields.length > 0 ? `        expandable={{
           onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as string[]),
           rowExpandable: (record) => ${oneToManyFields.map(f => `(record.${f.name}?.length ?? 0) > 0`).join(' || ')},
           expandedRowRender: (record) => (
-            ${oneToManyFields.length === 1 ? `<Table
+            ${oneToManyFields.length === 1 ? (() => {
+              const f0 = oneToManyFields[0];
+              const f0DisplayCols = f0.detailFields!.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName) && !(df.type === 'relation' && df.relationType === 'one-to-many'));
+              const f0GrandFields = f0.detailFields!.filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0);
+              const grandExpandable = f0GrandFields.length > 0 ? `
+              expandable={{
+                rowExpandable: (r) => ${f0GrandFields.map(gf => `(r.${gf.name}?.length ?? 0) > 0`).join(' || ')},
+                expandedRowRender: (childRow) => (
+                  ${f0GrandFields.length === 1 ? `<Table size="small" rowKey="id" dataSource={childRow.${f0GrandFields[0].name} || []} pagination={false}
+                    columns={[${(f0GrandFields[0].detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]}
+                    style={{ margin: '0 24px' }} />` : `<Tabs style={{ margin: '0 24px' }} items={[${f0GrandFields.map(gf => `{ key: '${gf.name}', label: '${gf.description || gf.name}', children: <Table size="small" rowKey="id" dataSource={childRow.${gf.name} || []} pagination={false} columns={[${(gf.detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]} /> }`).join(', ')}]} />`}
+                ),
+              }}` : '';
+              return `<Table
               size="small"
               rowKey="id"
-              dataSource={record.${oneToManyFields[0].name} || []}
-              pagination={false}
+              dataSource={record.${f0.name} || []}
+              pagination={false}${grandExpandable}
               columns={[
-                ${oneToManyFields[0].detailFields!.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName)).map(df => (df.type === 'relation' ? `{ title: '${df.description || df.name}', dataIndex: '${df.name}', render: (_: any, r: any) => r.${df.name}_display || r.${df.name} }` : `{ title: '${df.description || df.name}', dataIndex: '${df.name}' }`)).join(',\n                ')},
+                ${f0DisplayCols.map(df => (df.type === 'relation' ? `{ title: '${df.description || df.name}', dataIndex: '${df.name}', render: (_: any, r: any) => r.${df.name}_display || r.${df.name} }` : `{ title: '${df.description || df.name}', dataIndex: '${df.name}' }`)).join(',\n                ')},
               ]}
               style={{ margin: '0 48px' }}
-            />` : `<Tabs
+            />`;
+            })() : `<Tabs
               style={{ margin: '0 48px' }}
               items={[
-                ${oneToManyFields.map(f => `{
+                ${oneToManyFields.map(f => {
+                  const displayCols = f.detailFields!.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName) && !(df.type === 'relation' && df.relationType === 'one-to-many'));
+                  const grandFields = f.detailFields!.filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0);
+                  const grandExpandable2 = grandFields.length > 0 ? `
+                    expandable={{ rowExpandable: (r) => ${grandFields.map(gf => `(r.${gf.name}?.length ?? 0) > 0`).join(' || ')}, expandedRowRender: (cr) => (${grandFields.length === 1 ? `<Table size="small" rowKey="id" dataSource={cr.${grandFields[0].name} || []} pagination={false} columns={[${(grandFields[0].detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]} />` : `<Tabs items={[${grandFields.map(gf => `{ key: '${gf.name}', label: '${gf.description || gf.name}', children: <Table size="small" rowKey="id" dataSource={cr.${gf.name} || []} pagination={false} columns={[${(gf.detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]} /> }`).join(', ')}]} />`}) }}` : '';
+                  return `{
                   key: '${f.name}',
                   label: '${f.description || f.name}',
                   children: (
@@ -932,13 +1144,14 @@ ${oneToManyFields.length > 0 ? `        expandable={{
                       size="small"
                       rowKey="id"
                       dataSource={record.${f.name} || []}
-                      pagination={false}
+                      pagination={false}${grandExpandable2}
                       columns={[
-                        ${f.detailFields!.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName)).map(df => (df.type === 'relation' ? `{ title: '${df.description || df.name}', dataIndex: '${df.name}', render: (_: any, r: any) => r.${df.name}_display || r.${df.name} }` : `{ title: '${df.description || df.name}', dataIndex: '${df.name}' }`)).join(',\n                        ')},
+                        ${displayCols.map(df => (df.type === 'relation' ? `{ title: '${df.description || df.name}', dataIndex: '${df.name}', render: (_: any, r: any) => r.${df.name}_display || r.${df.name} }` : `{ title: '${df.description || df.name}', dataIndex: '${df.name}' }`)).join(',\n                        ')},
                       ]}
                     />
                   ),
-                }`).join(',\n                ')}
+                }`;
+                }).join(',\n                ')}
               ]}
             />`}
           ),

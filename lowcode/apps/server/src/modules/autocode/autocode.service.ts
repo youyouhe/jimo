@@ -424,6 +424,61 @@ export class AutocodeService {
           }
         }
         this.logger.log(` mock: inserted ${childInserted} detail rows into '${childTable}' (${count} per main row)`);
+
+        // Grandchild (third-level) mock rows — one-to-many within child
+        if (!isExisting) {
+          // Collect inserted child IDs for FK linkage
+          let childIds: string[] = [];
+          try {
+            const childIdRes = await this.db.execute(
+              sql.raw(`SELECT id FROM "${childTable}" WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ${mainIds.length * count}`),
+            );
+            childIds = (childIdRes as unknown as any[]).map((r) => r.id);
+          } catch { /* ignore */ }
+
+          for (const gf of (f.detailFields || [])) {
+            if (gf.type !== 'relation' || gf.relationType !== 'one-to-many') continue;
+            if (!gf.detailFields || gf.detailFields.length === 0) continue;
+
+            const singularGrand = singularize(gf.name);
+            const grandTable = `lc_${singularMain}_${singularField}_${singularGrand}`;
+            const grandFkRaw = `${singularMain}_${singularField}`;
+            const grandFkColumn = grandFkRaw.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()) + '_id';
+            const grandFields = gf.detailFields.filter(
+              (gdf) => isBusinessColumn(gdf.name) && !(gdf.type === 'relation' && gdf.relationType === 'one-to-many'),
+            );
+            if (grandFields.length === 0 || childIds.length === 0) continue;
+
+            const grandRows: Record<string, string | number | boolean | null>[] = [];
+            for (const childId of childIds) {
+              for (let j = 0; j < count; j += 1) {
+                const row: Record<string, string | number | boolean | null> = { [grandFkColumn]: childId };
+                for (const gdf of grandFields) {
+                  row[gdf.name] = generateMockValue(gdf, ctx);
+                }
+                grandRows.push(row);
+              }
+            }
+
+            const grandColNames = [grandFkColumn, ...grandFields.map((gdf) => gdf.name)];
+            const grandCols = grandColNames.map((c) => `"${c}"`).join(', ');
+            let grandInserted = 0;
+            for (let i = 0; i < grandRows.length; i += CHUNK_SIZE) {
+              const chunk = grandRows.slice(i, i + CHUNK_SIZE);
+              const valuesSql = chunk
+                .map((row) => `(${grandColNames.map((c) => escapeValue(row[c] ?? null)).join(', ')})`)
+                .join(', ');
+              const insertSql = `INSERT INTO "${grandTable}" (${grandCols}) VALUES ${valuesSql} ON CONFLICT DO NOTHING`;
+              try {
+                await this.db.execute(sql.raw(insertSql));
+                grandInserted += chunk.length;
+              } catch (err: unknown) {
+                this.logger.warn(` mock: grandchild chunk insert failed for '${grandTable}': ${(err as Error).message}`);
+              }
+            }
+            this.logger.log(` mock: inserted ${grandInserted} grandchild rows into '${grandTable}' (${count} per child row)`);
+          }
+        }
       }
     }
   }
@@ -782,6 +837,15 @@ export class AutocodeService {
             const singularMain = singularize(tableName);
             const singularField = singularize(field.name);
             const childDbName = `lc_${singularMain}_${singularField}`;
+            // Drop grandchild tables first (one-to-many within child)
+            for (const gf of (field.detailFields || [])) {
+              if (gf.type !== 'relation' || gf.relationType !== 'one-to-many') continue;
+              const singularGrand = singularize(gf.name);
+              const grandDbName = `lc_${singularMain}_${singularField}_${singularGrand}`;
+              try {
+                await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${grandDbName}" CASCADE`));
+              } catch { /* Grandchild table may not exist, ignore */ }
+            }
             try {
               await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${childDbName}" CASCADE`));
             } catch { /* Child table may not exist, ignore */ }
@@ -2187,10 +2251,24 @@ export class AutocodeService {
 
     for (const f of dto.fields) {
       if (f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields?.length) {
-        const childTable = `lc_${singularize(n.tableName.replace(/^lc_/, ''))}_${singularize(f.name)}`;
-        const fkCol = `${singularize(n.tableName.replace(/^lc_/, '')).replace(/_([a-z])/g, (_, c) => c.toUpperCase())}_id`;
+        const singularMain = singularize(n.tableName.replace(/^lc_/, ''));
+        const childTable = `lc_${singularMain}_${singularize(f.name)}`;
+        const fkCol = `${singularMain.replace(/_([a-z])/g, (_, c) => c.toUpperCase())}_id`;
         const childSql = buildCreateTableSql(childTable, f.detailFields, fkCol, n.tableName);
         await this.db.execute(sql.raw(childSql));
+
+        // Grandchild tables (one-to-many within child)
+        for (const gf of f.detailFields) {
+          if (gf.type === 'relation' && gf.relationType === 'one-to-many' && gf.detailFields?.length) {
+            const singularChild = singularize(f.name);
+            const singularGrand = singularize(gf.name);
+            const grandTable = `lc_${singularMain}_${singularChild}_${singularGrand}`;
+            const grandFkColRaw = `${singularMain}_${singularChild}`;
+            const grandFkCol = grandFkColRaw.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()) + '_id';
+            const grandSql = buildCreateTableSql(grandTable, gf.detailFields, grandFkCol, childTable);
+            await this.db.execute(sql.raw(grandSql));
+          }
+        }
       }
     }
   }

@@ -78,7 +78,16 @@ export function generateSchema(dto: AutoCodeDto): string {
   }
   for (const field of oneToManyFields) {
     for (const df of field.detailFields || []) {
-      usedTypes.add(getDrizzleImportNames(df));
+      if (df.type === 'relation' && df.relationType === 'one-to-many') {
+        // Grandchild fields
+        for (const gdf of df.detailFields || []) {
+          if (gdf.type !== 'relation' || gdf.relationType !== 'one-to-many') {
+            usedTypes.add(getDrizzleImportNames(gdf));
+          }
+        }
+      } else {
+        usedTypes.add(getDrizzleImportNames(df));
+      }
     }
   }
   usedTypes.add('timestamp');
@@ -119,6 +128,7 @@ export function generateSchema(dto: AutoCodeDto): string {
     const childFieldLines = ["    id: uuid('id').defaultRandom().primaryKey(),"];
     for (const df of field.detailFields) {
       if (!df.name || df.name === 'id') continue;
+      if (df.type === 'relation' && df.relationType === 'one-to-many') continue;
       const drizzleType = toDrizzleType(df);
       const required = toRequired(df);
       const defaultVal = toDefaultValue(df);
@@ -141,6 +151,45 @@ ${childFieldLines.join('\n')}
 export type ${childPascalType} = typeof ${childSchemaVar}.$inferSelect;
 export type New${childPascalType} = typeof ${childSchemaVar}.$inferInsert;
 `;
+
+    // Second-level: grandchild tables (one-to-many within a child table)
+    for (const gf of field.detailFields) {
+      if (gf.type !== 'relation' || gf.relationType !== 'one-to-many') continue;
+      if (!gf.detailFields || gf.detailFields.length === 0) continue;
+
+      const singularChild = singularize(field.name);
+      const singularGrand = singularize(gf.name);
+      const grandTableName = `${singularMain}_${singularChild}_${singularGrand}`;
+      const grandSchemaVar = toCamelCase(grandTableName);
+      const grandPascalType = toPascalCase(grandTableName);
+      const grandFkColName = `${toCamelCase(`${singularMain}_${singularChild}`)}_id`;
+
+      const grandFieldLines = ["    id: uuid('id').defaultRandom().primaryKey(),"];
+      for (const gdf of gf.detailFields) {
+        if (!gdf.name || gdf.name === 'id') continue;
+        if (gdf.type === 'relation' && gdf.relationType === 'one-to-many') continue;
+        const drizzleType = toDrizzleType(gdf);
+        const required = toRequired(gdf);
+        const defaultVal = toDefaultValue(gdf);
+        grandFieldLines.push(`    ${gdf.name}: ${drizzleType}${required}${defaultVal},`);
+      }
+      grandFieldLines.push(`    ${grandFkColName}: uuid('${grandFkColName}').notNull().references(() => ${childSchemaVar}.id),`);
+      grandFieldLines.push("    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),");
+      grandFieldLines.push("    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),");
+      grandFieldLines.push("    deletedAt: timestamp('deleted_at', { withTimezone: true }),");
+
+      childTableSchemas += `
+export const ${grandSchemaVar} = pgTable(
+  'lc_${grandTableName}',
+  {
+${grandFieldLines.join('\n')}
+  },
+);
+
+export type ${grandPascalType} = typeof ${grandSchemaVar}.$inferSelect;
+export type New${grandPascalType} = typeof ${grandSchemaVar}.$inferInsert;
+`;
+    }
   }
 
   const allRelationImports = [...new Set([...relationImports, existingTableSchemaImports])].join('\n');
@@ -426,7 +475,7 @@ export function generateService(dto: AutoCodeDto): string {
       fkColName = `${toCamelCase(singularMain)}_id`;
       childImports += `import { ${childSchemaVar} } from '../../db/schema/${n.kebabName}';\n`;
     }
-    const detailCols = field.detailFields.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName));
+    const detailCols = field.detailFields.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName) && !(df.type === 'relation' && df.relationType === 'one-to-many'));
     const childRelFields = (field.detailFields || []).filter(df => df.name !== 'id' && df.type === 'relation' && df.relationTable && df.relationTable !== dto.tableName);
 
     let childRelImports = '';
@@ -441,15 +490,40 @@ export function generateService(dto: AutoCodeDto): string {
     }
     if (childRelImports) childImports += childRelImports;
 
+    // Build grandchild (one-to-many within child) field list for cascade operations
+    const grandchildFields = (field.detailFields || []).filter(
+      (gf) => gf.type === 'relation' && gf.relationType === 'one-to-many' && gf.detailFields && gf.detailFields.length > 0,
+    );
+    const grandchildAttach = grandchildFields.map((gf) => {
+      const singularChild = singularize(field.name);
+      const singularGrand = singularize(gf.name);
+      const grandTableName = `${singularMain}_${singularChild}_${singularGrand}`;
+      const grandSchemaVar2 = toCamelCase(grandTableName);
+      const grandFkCol = `${toCamelCase(`${singularMain}_${singularChild}`)}_id`;
+      const grandMethodName = toPascalCase(`${field.name}_${gf.name}`);
+      return { grandSchemaVar2, grandFkCol, grandMethodName, gf };
+    });
+
+    const grandAttachBlock = grandchildAttach.length > 0 ? `
+    if (rows.length > 0) {
+      const childIds = rows.map((r) => r.id);
+${grandchildAttach.map(({ grandSchemaVar2, grandFkCol, gf }) => `      const ${gf.name}Rows = await this.db.select().from(${grandSchemaVar2}).where(and(inArray(${grandSchemaVar2}.${grandFkCol}, childIds), isNull(${grandSchemaVar2}.deletedAt)));
+      const ${gf.name}ByChild = new Map<string, any[]>();
+      for (const r of ${gf.name}Rows) { if (r.${grandFkCol} == null) continue; const a = ${gf.name}ByChild.get(r.${grandFkCol}) || []; a.push(r); ${gf.name}ByChild.set(r.${grandFkCol}, a); }
+      for (const r of rows) { (r as any).${gf.name} = ${gf.name}ByChild.get(r.id) || []; }`).join('\n')}
+    }` : '';
+
     const getSelectExpr = childRelSelectFields
       ? `{\n      ${detailCols.map((c: any) => `${c.name}: ${childSchemaVar}.${c.name},\n      `).join('')}${childRelSelectFields}\n    }`
       : '';
     childMethods += `
   async get${toPascalCase(field.name)}(${fkColName}: string): Promise<any[]> {
-    return this.db
+    const rows = await this.db
       .select(${getSelectExpr || ''})
       .from(${childSchemaVar})${childRelJoins}
       .where(and(eq(${childSchemaVar}.${fkColName}, ${fkColName}), isNull(${childSchemaVar}.deletedAt)));
+${grandAttachBlock}
+    return rows;
   }
 
   async create${toPascalCase(field.name)}(${fkColName}: string, details: any[]): Promise<void> {
@@ -458,7 +532,14 @@ export function generateService(dto: AutoCodeDto): string {
       ${fkColName},
       ${detailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : ${c.required ? 'new Date()' : 'null'}` : `${c.name}: d.${c.name}`).join(',\n      ')},
     }));
-    await this.db.insert(${childSchemaVar}).values(values);
+    const inserted = await this.db.insert(${childSchemaVar}).values(values).returning();
+${grandchildAttach.length > 0 ? `    for (let i = 0; i < inserted.length; i++) {
+      const d = details[i];
+      const childId = inserted[i].id;
+${grandchildAttach.map(({ grandMethodName, gf }) => `      if (d.${gf.name} && (d.${gf.name} as any[]).length > 0) {
+        await this.create${grandMethodName}(childId, d.${gf.name} as any[]);
+      }`).join('\n')}
+    }` : ''}
   }
 
   async update${toPascalCase(field.name)}(${fkColName}: string, details: any[]): Promise<void> {
@@ -469,6 +550,9 @@ export function generateService(dto: AutoCodeDto): string {
     // Soft-delete rows no longer present
     const toDelete = existing.filter((r) => !incomingIds.has(r.id));
     if (toDelete.length > 0) {
+${grandchildAttach.length > 0 ? `      for (const del of toDelete) {
+${grandchildAttach.map(({ grandMethodName }) => `        await this.remove${grandMethodName}(del.id);`).join('\n')}
+      }` : ''}
       await this.db
         .update(${childSchemaVar})
         .set({ deletedAt: sql\`NOW()\` })
@@ -484,6 +568,9 @@ export function generateService(dto: AutoCodeDto): string {
           updatedAt: sql\`NOW()\`,
         })
         .where(eq(${childSchemaVar}.id, d.id));
+${grandchildAttach.length > 0 ? `${grandchildAttach.map(({ grandMethodName, gf }) => `      if (d.${gf.name} !== undefined) {
+        await this.update${grandMethodName}(d.id, d.${gf.name} as any[]);
+      }`).join('\n')}` : ''}
     }
 
     // Insert new rows (no id or temp id)
@@ -494,12 +581,90 @@ export function generateService(dto: AutoCodeDto): string {
   }
 
   async remove${toPascalCase(field.name)}(${fkColName}: string): Promise<void> {
+${grandchildAttach.length > 0 ? `    const childRows = await this.db.select({ id: ${childSchemaVar}.id }).from(${childSchemaVar}).where(and(eq(${childSchemaVar}.${fkColName}, ${fkColName}), isNull(${childSchemaVar}.deletedAt)));
+    for (const cr of childRows) {
+${grandchildAttach.map(({ grandMethodName }) => `      await this.remove${grandMethodName}(cr.id);`).join('\n')}
+    }` : ''}
     await this.db
       .update(${childSchemaVar})
       .set({ deletedAt: sql\`NOW()\` })
       .where(and(eq(${childSchemaVar}.${fkColName}, ${fkColName}), isNull(${childSchemaVar}.deletedAt)));
   }
 `;
+
+    // Grandchild CRUD methods for one-to-many within this child table
+    for (const gf of field.detailFields) {
+      if (gf.type !== 'relation' || gf.relationType !== 'one-to-many') continue;
+      if (!gf.detailFields || gf.detailFields.length === 0) continue;
+
+      const singularChild = singularize(field.name);
+      const singularGrand = singularize(gf.name);
+      const grandTableName = `${singularMain}_${singularChild}_${singularGrand}`;
+      const grandSchemaVar = toCamelCase(grandTableName);
+      const grandFkColName = `${toCamelCase(`${singularMain}_${singularChild}`)}_id`;
+
+      childImports += `import { ${grandSchemaVar} } from '../../db/schema/${n.kebabName}';\n`;
+
+      const grandDetailCols = gf.detailFields.filter(
+        (gdf) => gdf.name !== 'id' && !(gdf.type === 'relation' && gdf.relationType === 'one-to-many'),
+      );
+
+      const grandMethodName = toPascalCase(`${field.name}_${gf.name}`);
+
+      childMethods += `
+  async get${grandMethodName}(${grandFkColName}: string): Promise<any[]> {
+    return this.db
+      .select()
+      .from(${grandSchemaVar})
+      .where(and(eq(${grandSchemaVar}.${grandFkColName}, ${grandFkColName}), isNull(${grandSchemaVar}.deletedAt)));
+  }
+
+  async create${grandMethodName}(${grandFkColName}: string, details: any[]): Promise<void> {
+    if (details.length === 0) return;
+    const values = details.map((d) => ({
+      ${grandFkColName},
+      ${grandDetailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : ${c.required ? 'new Date()' : 'null'}` : `${c.name}: d.${c.name}`).join(',\n      ')},
+    }));
+    await this.db.insert(${grandSchemaVar}).values(values);
+  }
+
+  async update${grandMethodName}(${grandFkColName}: string, details: any[]): Promise<void> {
+    const existing = await this.get${grandMethodName}(${grandFkColName});
+    const existingIds = new Set(existing.map((r) => r.id));
+    const incomingIds = new Set(details.filter((d) => d.id).map((d) => d.id));
+
+    const toDelete = existing.filter((r) => !incomingIds.has(r.id));
+    if (toDelete.length > 0) {
+      await this.db
+        .update(${grandSchemaVar})
+        .set({ deletedAt: sql\`NOW()\` })
+        .where(and(inArray(${grandSchemaVar}.id, toDelete.map((r) => r.id)), isNull(${grandSchemaVar}.deletedAt)));
+    }
+
+    for (const d of details.filter((d) => d.id && existingIds.has(d.id))) {
+      await this.db
+        .update(${grandSchemaVar})
+        .set({
+          ${grandDetailCols.map(c => c.type === 'decimal' ? `${c.name}: String(d.${c.name})` : c.type === 'timestamp' ? `${c.name}: d.${c.name} ? new Date(d.${c.name}) : ${c.required ? 'new Date()' : 'null'}` : `${c.name}: d.${c.name}`).join(',\n          ')},
+          updatedAt: sql\`NOW()\`,
+        })
+        .where(eq(${grandSchemaVar}.id, d.id));
+    }
+
+    const newRows = details.filter((d) => !d.id);
+    if (newRows.length > 0) {
+      await this.create${grandMethodName}(${grandFkColName}, newRows);
+    }
+  }
+
+  async remove${grandMethodName}(${grandFkColName}: string): Promise<void> {
+    await this.db
+      .update(${grandSchemaVar})
+      .set({ deletedAt: sql\`NOW()\` })
+      .where(and(eq(${grandSchemaVar}.${grandFkColName}, ${grandFkColName}), isNull(${grandSchemaVar}.deletedAt)));
+  }
+`;
+    }
   }
 
   const oneToManyAttachInFindAll = oneToManyFields.length > 0 ? `
