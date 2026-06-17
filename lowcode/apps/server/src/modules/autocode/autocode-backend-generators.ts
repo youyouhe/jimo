@@ -693,11 +693,28 @@ ${oneToManyFields.map((field) => {
       const batchSelectExpr = childBatchRelSelect2
         ? `{\n          id: ${childSchemaVar}.id,\n          ${fkColName}: ${childSchemaVar}.${fkColName},${detailCols.map((c: any) => `\n          ${c.name}: ${childSchemaVar}.${c.name},`).join('')}${childBatchRelSelect2}\n        }`
         : '';
+      // grandchild attach block for findAll
+      const grandchildAttachInFindAll = (field.detailFields || [])
+        .filter(gf => gf.type === 'relation' && gf.relationType === 'one-to-many' && gf.detailFields && gf.detailFields.length > 0)
+        .map(gf => {
+          const singularMain2 = singularize(dto.tableName);
+          const singularChild2 = singularize(field.name);
+          const singularGrand2 = singularize(gf.name);
+          const grandSchemaVar2 = toCamelCase(`${singularMain2}_${singularChild2}_${singularGrand2}`);
+          const grandFkCol2 = toCamelCase(`${singularMain2}_${singularChild2}`) + '_id';
+          return `      if (${field.name}Rows.length > 0) {
+        const ${field.name}ChildIds = ${field.name}Rows.map((r: any) => r.id);
+        const ${gf.name}Rows2 = await this.db.select().from(${grandSchemaVar2}).where(and(inArray(${grandSchemaVar2}.${grandFkCol2}, ${field.name}ChildIds), isNull(${grandSchemaVar2}.deletedAt)));
+        const ${gf.name}ByChild = new Map<string, any[]>();
+        for (const r of ${gf.name}Rows2) { if (r.${grandFkCol2} == null) continue; const a = ${gf.name}ByChild.get(r.${grandFkCol2}) || []; a.push(r); ${gf.name}ByChild.set(r.${grandFkCol2}, a); }
+        for (const r of ${field.name}Rows) { (r as any).${gf.name} = ${gf.name}ByChild.get(r.id) || []; }
+      }`;
+        }).join('\n');
 	  return `      const ${field.name}Rows = await this.db
         .select(${batchSelectExpr || ''})
         .from(${childSchemaVar})${childBatchRelJoins2}
         .where(and(inArray(${childSchemaVar}.${fkColName}, masterIds), isNull(${childSchemaVar}.deletedAt)));
-      const ${field.name}ByMaster = new Map<string, any[]>();
+${grandchildAttachInFindAll ? grandchildAttachInFindAll + '\n' : ''}      const ${field.name}ByMaster = new Map<string, any[]>();
       for (const row of ${field.name}Rows) {
         if (row.${fkColName} == null) continue;
         const arr = ${field.name}ByMaster.get(row.${fkColName}) || [];
