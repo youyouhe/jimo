@@ -589,8 +589,7 @@ ${grandEditableCols.join('\n')}
           return `            {
               title: '${gf.description || gf.name}',
               dataIndex: '${gf.name}',
-              valueType: 'option',
-              width: 200,
+              editable: () => false,
               render: (_: any, row: any) => <${compName} row={row} form={form} />,
             },`;
         });
