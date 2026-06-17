@@ -2,8 +2,16 @@ import { Injectable, Logger, Inject } from '@nestjs/common';
 import type { Response } from 'express';
 import { streamText, tool, jsonSchema, type CoreMessage } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
+import { eq, isNull } from 'drizzle-orm';
 import { AI_GENERATOR_SYSTEM_PROMPT } from './ai-generator.prompt';
-import { PROPOSE_ENTITY_TOOL, CREATE_DICT_TOOL, CREATE_PACKAGE_TOOL } from './ai-generator.tool';
+import {
+  PROPOSE_ENTITY_TOOL,
+  CREATE_DICT_TOOL,
+  CREATE_PACKAGE_TOOL,
+  LIST_TABLES_TOOL,
+  LIST_DICTS_TOOL,
+  LIST_PACKAGES_TOOL,
+} from './ai-generator.tool';
 import type { AiChatRequestDto } from './ai-generator.dto';
 import { DATABASE_CONNECTION, type DrizzleDb } from '../../db/connection';
 import { sysDictionaries } from '../../db/schema/dictionaries';
@@ -16,12 +24,12 @@ import { AutocodeService } from './autocode.service';
  * AI 实体生成器服务。
  *
  * 多轮 tool calling 流程:
- *  1. 用户描述需求 → AI 检查现有字典
- *  2. 若无匹配字典,AI 调 create_dict → 后端执行 → 返回 dictType
- *  3. AI 调 propose_entity(含正确 dictType) → 前端展示方案卡
+ *  1. AI 可用 list_tables / list_dicts / list_packages 查询当前状态（只读）
+ *  2. 若需字典不存在，调 create_dict 创建（幂等：先查后建）
+ *  3. 调 propose_entity 提交方案 → 前端展示方案卡
  *  4. 用户确认 → 前端调现有 autocode/generate
  *
- * 使用 Vercel AI SDK streamText() 驱动多步 tool calling,maxSteps: 12 替代手动 for 循环。
+ * 使用 Vercel AI SDK streamText() 驱动多步 tool calling，maxSteps: 15。
  */
 @Injectable()
 export class AiGeneratorService {
@@ -71,65 +79,62 @@ export class AiGeneratorService {
     });
 
     try {
-      // 运行时查现有字典列表 → 追加到 system prompt
-      let dictCtx = '';
-      try {
-        const dictRows = await this.db
+      // 查询当前系统状态，注入为对话首条消息对（高注意力位置）
+      const [dictRows, pkgRows, entityRows] = await Promise.all([
+        this.db
           .select({ type: sysDictionaries.type, name: sysDictionaries.name })
           .from(sysDictionaries)
-          .limit(100);
-        dictCtx = dictRows.map((d) => `\`${d.type}\` — ${d.name}`).join('\n');
-      } catch {
-        dictCtx = '(查询失败)';
-      }
-
-      // 运行时查现有 Package 列表 → 追加到 system prompt
-      let packageCtx = '';
-      try {
-        const pkgRows = await this.db
+          .catch(() => [] as { type: string; name: string }[]),
+        this.db
           .select({ id: sysAutoCodePackages.id, name: sysAutoCodePackages.name })
           .from(sysAutoCodePackages)
-          .limit(100);
-        packageCtx = pkgRows.map((p) => `\`${p.id}\` — ${p.name}`).join('\n');
-      } catch {
-        packageCtx = '(查询失败)';
-      }
-
-      // 运行时查已生成实体列表 → 追加到 system prompt(避免 AI 重复创建)
-      let entityCtx = '';
-      try {
-        const entityRows = await this.db
+          .catch(() => [] as { id: string; name: string }[]),
+        this.db
           .selectDistinct({ tableName: sysAutoCodeHistories.tableName })
-          .from(sysAutoCodeHistories);
-        entityCtx = entityRows.map((e) => `\`${e.tableName}\``).join(', ');
-      } catch {
-        entityCtx = '(查询失败)';
-      }
+          .from(sysAutoCodeHistories)
+          .catch(() => [] as { tableName: string }[]),
+      ]);
 
-      // 结构化运行时上下文:清晰的分段标签 + 顶部硬约束,降低模型忽略的概率。
-      const systemWithCtx =
-        AI_GENERATOR_SYSTEM_PROMPT +
-        '\n\n## ⛔ 已生成的实体表(这些表已存在,绝对不要再提议同名表;relation 可直接引用)\n' +
-        (entityCtx || '(暂无已生成实体)') +
-        '\n\n## 📕 现有字典(优先匹配下列 dictType;若都不匹配再调 create_dict 创建)\n' +
-        (dictCtx || '(暂无字典)') +
-        '\n\n## 📦 现有 Package(用户指定 package 时按名称匹配;无匹配且用户明确要 package 再 create_package)\n' +
-        (packageCtx || '(暂无 Package)');
+      const dictList = dictRows.map((d) => `\`${d.type}\`（${d.name}）`).join('、') || '（暂无）';
+      const pkgList = pkgRows.map((p) => `\`${p.id}\`（${p.name}）`).join('、') || '（暂无）';
+      const tableList = entityRows.map((e) => `\`${e.tableName}\``).join('、') || '（暂无）';
 
-      const messages = dto.messages.map((m) => ({ role: m.role, content: m.content }));
+      // 将状态注入为对话开头的 user/assistant 消息对，模型注意力最高
+      const stateMessage: CoreMessage = {
+        role: 'user',
+        content: `## 系统当前状态（请在本次对话中严格遵守）
+
+### 已生成的实体表（⛔ 绝对不要再 propose_entity 同名表；relation 可直接引用）
+${tableList}
+
+### 现有字典（✅ 优先匹配这些 dictType；确认不存在再调 create_dict）
+${dictList}
+
+### 现有 Package（✅ 优先匹配这些 id；确认不存在且用户指定了 package 再调 create_package）
+${pkgList}`,
+      };
+      const stateAck: CoreMessage = {
+        role: 'assistant',
+        content: '已收到系统状态，我会在本次对话中：① 不重复提议已存在的表；② 优先复用现有字典和 Package；③ 需要时用 list_tables/list_dicts/list_packages 实时查询最新状态。',
+      };
+
+      const userMessages = dto.messages.map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      }));
+
+      const messages: CoreMessage[] = [stateMessage, stateAck, ...userMessages];
 
       const openaiProvider = createOpenAI({ baseURL: baseUrl.replace(/\/+$/, ''), apiKey: aiKey });
-      // Cast to any: @ai-sdk/openai@3 returns LanguageModelV3 but ai@4 expects LanguageModelV1.
-      // The protocol difference is only in TypeScript types; runtime behavior is compatible.
       const modelInstance = openaiProvider(model) as any;
 
       this.logger.log(`[AiGenerator] AI baseURL: ${baseUrl.replace(/\/+$/, '')}`);
 
       const result = streamText({
         model: modelInstance,
-        system: systemWithCtx,
-        messages: messages as CoreMessage[],
-        maxSteps: 12,
+        system: AI_GENERATOR_SYSTEM_PROMPT,
+        messages,
+        maxSteps: 15,
         tools: {
           propose_entity: tool({
             description: PROPOSE_ENTITY_TOOL.function.description,
@@ -147,22 +152,69 @@ export class AiGeneratorService {
               return { ok: true };
             },
           }),
+
           create_dict: tool({
             description: CREATE_DICT_TOOL.function.description,
             parameters: jsonSchema(CREATE_DICT_TOOL.function.parameters as any),
             execute: async (args: any) => {
               write({ kind: 'progress', content: `正在创建字典 "${args.name}"…` });
-              const result = await this.executeCreateDict(args);
-              return result;
+              return await this.executeCreateDict(args);
             },
           }),
+
           create_package: tool({
             description: CREATE_PACKAGE_TOOL.function.description,
             parameters: jsonSchema(CREATE_PACKAGE_TOOL.function.parameters as any),
             execute: async (args: any) => {
               write({ kind: 'progress', content: `正在创建 Package "${args.name}"…` });
-              const result = await this.executeCreatePackage(args);
-              return result;
+              return await this.executeCreatePackage(args);
+            },
+          }),
+
+          list_tables: tool({
+            description: LIST_TABLES_TOOL.function.description,
+            parameters: jsonSchema(LIST_TABLES_TOOL.function.parameters as any),
+            execute: async () => {
+              try {
+                const rows = await this.db
+                  .selectDistinct({ tableName: sysAutoCodeHistories.tableName })
+                  .from(sysAutoCodeHistories);
+                return { tables: rows.map((r) => r.tableName) };
+              } catch (e: any) {
+                return { tables: [], error: e?.message };
+              }
+            },
+          }),
+
+          list_dicts: tool({
+            description: LIST_DICTS_TOOL.function.description,
+            parameters: jsonSchema(LIST_DICTS_TOOL.function.parameters as any),
+            execute: async () => {
+              try {
+                const rows = await this.db
+                  .select({ type: sysDictionaries.type, name: sysDictionaries.name })
+                  .from(sysDictionaries)
+                  .limit(200);
+                return { dicts: rows.map((r) => ({ type: r.type, name: r.name })) };
+              } catch (e: any) {
+                return { dicts: [], error: e?.message };
+              }
+            },
+          }),
+
+          list_packages: tool({
+            description: LIST_PACKAGES_TOOL.function.description,
+            parameters: jsonSchema(LIST_PACKAGES_TOOL.function.parameters as any),
+            execute: async () => {
+              try {
+                const rows = await this.db
+                  .select({ id: sysAutoCodePackages.id, name: sysAutoCodePackages.name })
+                  .from(sysAutoCodePackages)
+                  .limit(200);
+                return { packages: rows.map((r) => ({ id: r.id, name: r.name })) };
+              } catch (e: any) {
+                return { packages: [], error: e?.message };
+              }
             },
           }),
         },
@@ -174,7 +226,6 @@ export class AiGeneratorService {
         },
       });
 
-      // Consume the stream (required to trigger onChunk callbacks and tool execution)
       for await (const _ of result.textStream) {
         if (aborted) break;
       }
@@ -193,7 +244,7 @@ export class AiGeneratorService {
     }
   }
 
-  /** 执行 create_dict:插入字典大类 + 明细项,返回 dictType 供 AI 引用 */
+  /** create_dict：先查后建，幂等 */
   private async executeCreateDict(args: {
     type: string;
     name: string;
@@ -201,6 +252,17 @@ export class AiGeneratorService {
   }): Promise<{ ok: boolean; dictType: string; message: string }> {
     const { type, name, items = [] } = args;
     try {
+      // 幂等：若 type 已存在则直接返回
+      const existing = await this.db
+        .select({ id: sysDictionaries.id })
+        .from(sysDictionaries)
+        .where(eq(sysDictionaries.type, type))
+        .limit(1);
+      if (existing.length > 0) {
+        this.logger.log(`[AiGenerator] create_dict skip (already exists) type="${type}"`);
+        return { ok: true, dictType: type, message: `字典 "${type}" 已存在，直接复用` };
+      }
+
       const dictRows = await this.db
         .insert(sysDictionaries)
         .values({ type, name, status: 1, sort: 0 })
@@ -227,22 +289,32 @@ export class AiGeneratorService {
     }
   }
 
-  /** 执行 create_package:插入 Package 记录,返回 packageId 和 name 供 AI 引用 */
+  /** create_package：先查后建，幂等（按名称匹配） */
   private async executeCreatePackage(args: {
     name: string;
     description?: string;
   }): Promise<{ ok: boolean; packageId: string; name: string; message: string }> {
     const { name, description } = args;
     try {
+      // 幂等：按名称查现有 package
+      const existing = await this.db
+        .select({ id: sysAutoCodePackages.id })
+        .from(sysAutoCodePackages)
+        .where(eq(sysAutoCodePackages.name, name))
+        .limit(1);
+      if (existing.length > 0) {
+        const packageId = existing[0].id;
+        this.logger.log(`[AiGenerator] create_package skip (already exists) name="${name}" id=${packageId}`);
+        return { ok: true, packageId, name, message: `Package "${name}" 已存在，直接复用 id=${packageId}` };
+      }
+
       const pkg = await this.autocodeService.createPackage({
         name,
         description: description || '',
         templates: {},
       });
       const packageId = pkg.id;
-      this.logger.log(
-        `[AiGenerator] create_package ✓ name="${name}" id=${packageId}`,
-      );
+      this.logger.log(`[AiGenerator] create_package ✓ name="${name}" id=${packageId}`);
       return { ok: true, packageId, name, message: `Package "${name}" 创建成功` };
     } catch (e: any) {
       this.logger.error(`[AiGenerator] create_package ✗ name="${name}": ${e?.message}`);
@@ -250,7 +322,7 @@ export class AiGeneratorService {
     }
   }
 
-  /** 测试 BYOC 配置连通性(非流式极简请求) */
+  /** 测试 BYOK 配置连通性（非流式极简请求） */
   async testConnection(
     aiKey: string | undefined,
     baseUrl: string | undefined,

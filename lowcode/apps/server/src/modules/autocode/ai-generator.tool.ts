@@ -1,19 +1,81 @@
 /**
- * propose_entity function-calling 工具定义。
- * arguments schema 与 AutoCodeDto 对齐,AI 产出的 JSON 可直接用于 POST /autocode/generate。
+ * AI 实体生成器 tool 定义。
+ * arguments schema 与 AutoCodeDto 对齐，AI 产出的 JSON 可直接用于 POST /autocode/generate。
  */
+
+/** 单个字段的 JSON Schema（用于 fields[] 和 detailFields[] 复用） */
+const FIELD_SCHEMA = {
+  type: 'object',
+  properties: {
+    name: { type: 'string', description: 'snake_case 字段名' },
+    type: {
+      type: 'string',
+      enum: [
+        'varchar', 'text', 'integer', 'bigint', 'decimal',
+        'boolean', 'timestamp', 'uuid', 'image', 'file', 'relation', 'dict',
+      ],
+    },
+    length: { type: 'number', description: 'varchar 长度(可选)' },
+    required: { type: 'boolean' },
+    unique: { type: 'boolean' },
+    description: { type: 'string', description: '中文说明' },
+    searchable: { type: 'boolean' },
+    listable: { type: 'boolean' },
+    creatable: { type: 'boolean' },
+    editable: { type: 'boolean' },
+    // relation 字段
+    relationType: { type: 'string', enum: ['many-to-one', 'many-to-many', 'one-to-many'] },
+    relationTable: { type: 'string', description: '目标表 snake_case' },
+    relationDisplayField: { type: 'string' },
+    // one-to-many 子表字段（子子表，第三层）
+    detailFields: {
+      type: 'array',
+      description: 'one-to-many 孙子表字段（第三层），结构同父级字段，不含 id',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'snake_case 字段名' },
+          type: {
+            type: 'string',
+            enum: [
+              'varchar', 'text', 'integer', 'bigint', 'decimal',
+              'boolean', 'timestamp', 'uuid', 'image', 'file', 'relation', 'dict',
+            ],
+          },
+          length: { type: 'number' },
+          required: { type: 'boolean' },
+          unique: { type: 'boolean' },
+          description: { type: 'string' },
+          searchable: { type: 'boolean' },
+          listable: { type: 'boolean' },
+          creatable: { type: 'boolean' },
+          editable: { type: 'boolean' },
+          relationType: { type: 'string', enum: ['many-to-one', 'many-to-many', 'one-to-many'] },
+          relationTable: { type: 'string' },
+          relationDisplayField: { type: 'string' },
+          dictType: { type: 'string' },
+        },
+        required: ['name', 'type', 'required', 'unique', 'description'],
+      },
+    },
+    // dict 字段
+    dictType: { type: 'string', description: '字典类型 key' },
+  },
+  required: ['name', 'type', 'required', 'unique', 'description'],
+};
+
 export const PROPOSE_ENTITY_TOOL = {
   type: 'function' as const,
   function: {
     name: 'propose_entity',
     description:
-      '提议一个实体表的完整定义(AutoCodeDto)。用户确认后系统会据此生成全栈代码(schema/dto/service/controller/module/前端)。',
+      '提议一个实体表的完整定义(AutoCodeDto)。用户确认后系统会据此生成全栈代码。支持：独立表、主表+子表(1:N，fields 含 one-to-many 字段，子表字段放 detailFields)、主表+子表+孙子表(三层，子表字段的 detailFields 里再嵌 detailFields)。',
     parameters: {
       type: 'object',
       properties: {
         tableName: {
           type: 'string',
-          description: '表名,snake_case 复数,如 employees / orders / order_details',
+          description: '表名，snake_case 复数，如 orders / order_items',
         },
         description: {
           type: 'string',
@@ -21,48 +83,16 @@ export const PROPOSE_ENTITY_TOOL = {
         },
         packageId: {
           type: 'string',
-          description: '模板包 UUID(可选,通过 create_package 工具获取或从现有 Package 列表匹配)',
+          description: '模板包 UUID（可选，通过 list_packages 查询或 create_package 创建后获取）',
         },
         generateWeb: {
           type: 'boolean',
-          description: '是否同时生成前端页面,默认 true',
+          description: '是否同时生成前端页面，默认 true',
         },
         fields: {
           type: 'array',
-          description: '字段定义数组。不要含 id / created_at / updated_at 等系统字段。',
-          items: {
-            type: 'object',
-            properties: {
-              name: { type: 'string', description: 'snake_case 字段名' },
-              type: {
-                type: 'string',
-                enum: [
-                  'varchar', 'text', 'integer', 'bigint', 'decimal',
-                  'boolean', 'timestamp', 'uuid', 'image', 'file', 'relation', 'dict',
-                ],
-              },
-              length: { type: 'number', description: 'varchar 长度(可选)' },
-              required: { type: 'boolean' },
-              unique: { type: 'boolean' },
-              description: { type: 'string', description: '中文说明' },
-              searchable: { type: 'boolean' },
-              listable: { type: 'boolean' },
-              creatable: { type: 'boolean' },
-              editable: { type: 'boolean' },
-              // relation 字段
-              relationType: { type: 'string', enum: ['many-to-one', 'many-to-many', 'one-to-many'] },
-              relationTable: { type: 'string', description: '目标表 snake_case' },
-              relationDisplayField: { type: 'string' },
-              detailFields: {
-                type: 'array',
-                description: 'one-to-many 子表字段定义(结构同 field,不含 id)',
-                items: { type: 'object' },
-              },
-              // dict 字段
-              dictType: { type: 'string' },
-            },
-            required: ['name', 'type', 'required', 'unique', 'description'],
-          },
+          description: '字段定义数组。不要含 id / created_at / updated_at 等系统字段。one-to-many 字段的子表字段放 detailFields。',
+          items: FIELD_SCHEMA,
         },
       },
       required: ['tableName', 'description', 'fields'],
@@ -70,27 +100,22 @@ export const PROPOSE_ENTITY_TOOL = {
   },
 };
 
-/**
- * create_dict — 创建系统字典(大类+明细项)。
- * 当需要的 dict 类型在现有列表中不存在时,AI 先调此工具创建字典,
- * 再用 propose_entity 引用刚创建的 dictType。
- */
 export const CREATE_DICT_TOOL = {
   type: 'function' as const,
   function: {
     name: 'create_dict',
     description:
-      '创建系统字典(大类+明细项)。当需要的字典类型在系统中不存在时调用。创建成功后返回 dictType,可在 propose_entity 中引用。',
+      '创建系统字典（大类+明细项）。调用前请先用 list_dicts 确认该类型不存在，避免重复创建。创建成功后返回 dictType，可在 propose_entity 中引用。',
     parameters: {
       type: 'object',
       properties: {
         type: {
           type: 'string',
-          description: '字典类型 key(snake_case 英文),如 gender、employee_status',
+          description: '字典类型 key（snake_case 英文），如 gender、employee_status',
         },
         name: {
           type: 'string',
-          description: '字典显示名称,如 性别、在职状态',
+          description: '字典显示名称，如 性别、在职状态',
         },
         items: {
           type: 'array',
@@ -98,8 +123,8 @@ export const CREATE_DICT_TOOL = {
           items: {
             type: 'object',
             properties: {
-              label: { type: 'string', description: '项显示名,如 男' },
-              value: { type: 'string', description: '项值,如 male' },
+              label: { type: 'string', description: '项显示名，如 男' },
+              value: { type: 'string', description: '项值，如 male' },
             },
             required: ['label', 'value'],
           },
@@ -110,26 +135,70 @@ export const CREATE_DICT_TOOL = {
   },
 };
 
-/**
- * create_package — 创建模板包(Package)。
- * 当用户指定了 package 名称但系统中不存在匹配项时,AI 先调此工具创建,
- * 再用 propose_entity 引用新创建的 packageId。
- */
 export const CREATE_PACKAGE_TOOL = {
   type: 'function' as const,
   function: {
     name: 'create_package',
     description:
-      '创建新的模板包(Package)。当用户在提示词中指定了 package 名称但系统中不存在匹配的 package 时调用。创建成功后返回 packageId 和 name,可在后续 propose_entity 中引用。',
+      '创建新的模板包（Package）。调用前请先用 list_packages 确认同名 package 不存在。创建成功后返回 packageId，可在 propose_entity 中引用。',
     parameters: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'Package 名称(中文,如 电商系统、用户中心)' },
-        description: { type: 'string', description: 'Package 描述(可选)' },
+        name: { type: 'string', description: 'Package 名称（如 电商系统、用户中心）' },
+        description: { type: 'string', description: 'Package 描述（可选）' },
       },
       required: ['name'],
     },
   },
 };
 
-export const ALL_TOOLS = [PROPOSE_ENTITY_TOOL, CREATE_DICT_TOOL, CREATE_PACKAGE_TOOL];
+export const LIST_TABLES_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'list_tables',
+    description:
+      '查询系统中已生成的实体表列表（来自代码生成历史）。在 propose_entity 前调用，确认目标表是否已存在，已存在的表可直接被 relation 字段引用。',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+export const LIST_DICTS_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'list_dicts',
+    description:
+      '查询系统中现有的字典列表（type + name）。在使用 dict 字段前调用，优先匹配已有 dictType；只有在确认不存在时才调 create_dict。',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+export const LIST_PACKAGES_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'list_packages',
+    description:
+      '查询系统中现有的 Package 列表（id + name）。在关联 package 前调用，按名称匹配；只有在确认不存在时才调 create_package。',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+export const ALL_TOOLS = [
+  PROPOSE_ENTITY_TOOL,
+  CREATE_DICT_TOOL,
+  CREATE_PACKAGE_TOOL,
+  LIST_TABLES_TOOL,
+  LIST_DICTS_TOOL,
+  LIST_PACKAGES_TOOL,
+];
