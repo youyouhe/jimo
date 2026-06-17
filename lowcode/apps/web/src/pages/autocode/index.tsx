@@ -1432,25 +1432,243 @@ export default function AutocodePage() {
                                     {(detailFields, { add: addDetail, remove: removeDetail }) => (
                                       <>
                                         {detailFields.map(({ name: dName, key: dKey, ...dRest }) => (
-                                          <Space key={dKey} align="baseline" style={{ marginBottom: 4 }}>
+                                          <div key={dKey} style={{ border: '1px dashed #d9d9d9', borderRadius: 4, padding: '8px 8px 4px', marginBottom: 6, background: '#fff' }}>
+                                            <Space align="baseline" wrap style={{ marginBottom: 0 }}>
+                                              <Form.Item
+                                                {...dRest}
+                                                name={[dName, 'name']}
+                                                rules={[{ required: true, pattern: /^[a-z][a-z0-9_]*$/, message: 'snake_case' }]}
+                                                style={{ marginBottom: 0 }}
+                                              >
+                                                <Input placeholder="field_name" style={{ width: 130 }} />
+                                              </Form.Item>
+                                              <Form.Item {...dRest} name={[dName, 'type']} style={{ marginBottom: 0 }}>
+                                                <Select
+                                                  style={{ width: 150 }}
+                                                  options={FIELD_TYPE_OPTIONS.filter(o => o.value !== 'code')}
+                                                  onChange={() => {
+                                                    form.setFieldValue(['fields', name, 'detailFields', dName, 'relationType'], undefined);
+                                                    form.setFieldValue(['fields', name, 'detailFields', dName, 'relationTable'], undefined);
+                                                    form.setFieldValue(['fields', name, 'detailFields', dName, 'relationDisplayField'], undefined);
+                                                    form.setFieldValue(['fields', name, 'detailFields', dName, 'dictType'], undefined);
+                                                    form.setFieldValue(['fields', name, 'detailFields', dName, 'detailFields'], []);
+                                                  }}
+                                                />
+                                              </Form.Item>
+                                              <Form.Item {...dRest} name={[dName, 'description']} style={{ marginBottom: 0 }}>
+                                                <Input placeholder="描述" style={{ width: 120 }} />
+                                              </Form.Item>
+                                              <Form.Item {...dRest} name={[dName, 'required']} valuePropName="checked" style={{ marginBottom: 0 }}>
+                                                <Switch size="small" />
+                                              </Form.Item>
+                                              <DeleteOutlined onClick={() => removeDetail(dName)} style={{ color: '#ff4d4f', cursor: 'pointer' }} />
+                                            </Space>
+                                            {/* Relation config for child detail field */}
                                             <Form.Item
-                                              {...dRest}
-                                              name={[dName, 'name']}
-                                              rules={[{ required: true, pattern: /^[a-z][a-z0-9_]*$/, message: 'snake_case' }]}
+                                              noStyle
+                                              shouldUpdate={(prev, cur) => {
+                                                const prevDf = prev.fields?.[name as number]?.detailFields?.[dName as number];
+                                                const curDf = cur.fields?.[name as number]?.detailFields?.[dName as number];
+                                                return prevDf?.type !== curDf?.type
+                                                  || prevDf?.relationType !== curDf?.relationType
+                                                  || prevDf?.relationTable !== curDf?.relationTable
+                                                  || prevDf?.relationTableFieldOpts !== curDf?.relationTableFieldOpts;
+                                              }}
                                             >
-                                              <Input placeholder="field_name" style={{ width: 140 }} />
+                                              {({ getFieldValue }) => {
+                                                const dfType = getFieldValue(['fields', name, 'detailFields', dName, 'type']);
+                                                if (dfType !== 'relation') return null;
+                                                const dfRelType = getFieldValue(['fields', name, 'detailFields', dName, 'relationType']);
+                                                const dfRelTable = getFieldValue(['fields', name, 'detailFields', dName, 'relationTable']);
+                                                const dfFieldOpts = getFieldValue(['fields', name, 'detailFields', dName, 'relationTableFieldOpts'])
+                                                  || (dfRelTable ? relationTableColumnsCache.current.get(dfRelTable) : []) || [];
+                                                return (
+                                                  <div style={{ marginTop: 6, paddingLeft: 8, borderLeft: '2px solid #1677ff44', paddingBottom: 4 }}>
+                                                    <Space align="baseline" wrap style={{ marginBottom: dfRelType === 'one-to-many' ? 4 : 0 }}>
+                                                      <Form.Item
+                                                        {...dRest}
+                                                        name={[dName, 'relationType']}
+                                                        label="关系类型"
+                                                        rules={[{ required: true, message: 'Required' }]}
+                                                        style={{ marginBottom: 0 }}
+                                                      >
+                                                        <Select
+                                                          style={{ width: 190 }}
+                                                          options={[
+                                                            { value: 'many-to-one', label: '多对一 (N:1)' },
+                                                            { value: 'one-to-many', label: '一对多 (1:N) 子子表' },
+                                                          ]}
+                                                          onChange={() => {
+                                                            form.setFieldValue(['fields', name, 'detailFields', dName, 'relationTable'], undefined);
+                                                            form.setFieldValue(['fields', name, 'detailFields', dName, 'relationDisplayField'], undefined);
+                                                            form.setFieldValue(['fields', name, 'detailFields', dName, 'detailFields'], []);
+                                                          }}
+                                                        />
+                                                      </Form.Item>
+                                                      {dfRelType === 'many-to-one' && (
+                                                        <>
+                                                          <Form.Item
+                                                            {...dRest}
+                                                            name={[dName, 'relationTable']}
+                                                            label="目标表"
+                                                            rules={[{ required: true, message: 'Required' }]}
+                                                            style={{ marginBottom: 0 }}
+                                                          >
+                                                            <Select
+                                                              showSearch
+                                                              style={{ width: 140 }}
+                                                              placeholder="选择表..."
+                                                              options={tableOptions}
+                                                              filterOption={(input, option) =>
+                                                                (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+                                                              }
+                                                              onChange={async (tbl: string) => {
+                                                                form.setFieldValue(['fields', name, 'detailFields', dName, 'relationDisplayField'], undefined);
+                                                                if (!tbl) return;
+                                                                try {
+                                                                  const latest = await getLatestVersion(tbl);
+                                                                  const cols = ((latest.fields as AutoCodeField[]) || [])
+                                                                    .filter(f => !['id','createdAt','updatedAt','deletedAt','createdBy','updatedBy'].includes(f.name) && f.type !== 'relation')
+                                                                    .map(f => ({ value: f.name, label: `${f.name}${f.description ? ` (${f.description})` : ''}` }));
+                                                                  relationTableColumnsCache.current.set(tbl, cols);
+                                                                  form.setFieldValue(['fields', name, 'detailFields', dName, 'relationTableFieldOpts'], cols);
+                                                                } catch {
+                                                                  message.error('加载表字段失败');
+                                                                }
+                                                              }}
+                                                            />
+                                                          </Form.Item>
+                                                          <Form.Item
+                                                            {...dRest}
+                                                            name={[dName, 'relationDisplayField']}
+                                                            label="展示字段"
+                                                            rules={[{ required: true, message: '请选择展示字段' }]}
+                                                            style={{ marginBottom: 0 }}
+                                                          >
+                                                            <Select
+                                                              showSearch
+                                                              style={{ width: 140 }}
+                                                              placeholder={dfFieldOpts.length === 0 ? '请先选择目标表' : '选择字段...'}
+                                                              options={dfFieldOpts}
+                                                              disabled={dfFieldOpts.length === 0}
+                                                              filterOption={(input, option) =>
+                                                                (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+                                                              }
+                                                            />
+                                                          </Form.Item>
+                                                        </>
+                                                      )}
+                                                    </Space>
+                                                    {/* one-to-many: grandchild fields editor */}
+                                                    {dfRelType === 'one-to-many' && (
+                                                      <div style={{ paddingLeft: 8, borderLeft: '2px solid #52c41a44', marginTop: 4 }}>
+                                                        <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>子子表字段</div>
+                                                        <Form.List name={[dName as number, 'detailFields']}>
+                                                          {(grandFields, { add: addGrand, remove: removeGrand }) => (
+                                                            <>
+                                                              {grandFields.map(({ name: gName, key: gKey, ...gRest }) => (
+                                                                <Space key={gKey} align="baseline" wrap style={{ marginBottom: 4 }}>
+                                                                  <Form.Item
+                                                                    {...gRest}
+                                                                    name={[gName, 'name']}
+                                                                    rules={[{ required: true, pattern: /^[a-z][a-z0-9_]*$/, message: 'snake_case' }]}
+                                                                    style={{ marginBottom: 0 }}
+                                                                  >
+                                                                    <Input placeholder="field_name" style={{ width: 120 }} />
+                                                                  </Form.Item>
+                                                                  <Form.Item {...gRest} name={[gName, 'type']} style={{ marginBottom: 0 }}>
+                                                                    <Select
+                                                                      style={{ width: 130 }}
+                                                                      options={FIELD_TYPE_OPTIONS.filter(o => o.value !== 'relation' && o.value !== 'code')}
+                                                                      onChange={() => {
+                                                                        form.setFieldValue(['fields', name, 'detailFields', dName, 'detailFields', gName, 'dictType'], undefined);
+                                                                      }}
+                                                                    />
+                                                                  </Form.Item>
+                                                                  <Form.Item {...gRest} name={[gName, 'description']} style={{ marginBottom: 0 }}>
+                                                                    <Input placeholder="描述" style={{ width: 100 }} />
+                                                                  </Form.Item>
+                                                                  <Form.Item {...gRest} name={[gName, 'required']} valuePropName="checked" style={{ marginBottom: 0 }}>
+                                                                    <Switch size="small" />
+                                                                  </Form.Item>
+                                                                  <Form.Item
+                                                                    noStyle
+                                                                    shouldUpdate={(prev, cur) =>
+                                                                      prev.fields?.[name as number]?.detailFields?.[dName as number]?.detailFields?.[gName as number]?.type
+                                                                        !== cur.fields?.[name as number]?.detailFields?.[dName as number]?.detailFields?.[gName as number]?.type
+                                                                    }
+                                                                  >
+                                                                    {({ getFieldValue: gfv }) => {
+                                                                      const gType = gfv(['fields', name, 'detailFields', dName, 'detailFields', gName, 'type']);
+                                                                      if (gType !== 'dict') return null;
+                                                                      return (
+                                                                        <Form.Item {...gRest} name={[gName, 'dictType']} style={{ marginBottom: 0 }}>
+                                                                          <Select
+                                                                            showSearch
+                                                                            placeholder="字典类型"
+                                                                            style={{ width: 130 }}
+                                                                            options={dictOptions}
+                                                                            filterOption={(input, option) =>
+                                                                              (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+                                                                            }
+                                                                          />
+                                                                        </Form.Item>
+                                                                      );
+                                                                    }}
+                                                                  </Form.Item>
+                                                                  <DeleteOutlined onClick={() => removeGrand(gName)} style={{ color: '#ff4d4f', cursor: 'pointer' }} />
+                                                                </Space>
+                                                              ))}
+                                                              <Button
+                                                                type="dashed"
+                                                                size="small"
+                                                                onClick={() => addGrand({ name: '', type: 'varchar', required: false, unique: false, description: '', searchable: false, listable: true, creatable: true, editable: true })}
+                                                                style={{ marginTop: 4 }}
+                                                              >
+                                                                + 添加子子表字段
+                                                              </Button>
+                                                            </>
+                                                          )}
+                                                        </Form.List>
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                );
+                                              }}
                                             </Form.Item>
-                                            <Form.Item {...dRest} name={[dName, 'type']}>
-                                              <Select style={{ width: 120 }} options={FIELD_TYPE_OPTIONS.filter(o => o.value !== 'relation' && o.value !== 'dict' && o.value !== 'code')} />
+                                            {/* Dict config for child detail field */}
+                                            <Form.Item
+                                              noStyle
+                                              shouldUpdate={(prev, cur) =>
+                                                prev.fields?.[name as number]?.detailFields?.[dName as number]?.type
+                                                  !== cur.fields?.[name as number]?.detailFields?.[dName as number]?.type
+                                              }
+                                            >
+                                              {({ getFieldValue }) => {
+                                                const dfType = getFieldValue(['fields', name, 'detailFields', dName, 'type']);
+                                                if (dfType !== 'dict') return null;
+                                                return (
+                                                  <Form.Item
+                                                    {...dRest}
+                                                    name={[dName, 'dictType']}
+                                                    label="字典类型"
+                                                    rules={[{ required: true, message: '请选择字典类型' }]}
+                                                    style={{ marginBottom: 0, marginTop: 6 }}
+                                                  >
+                                                    <Select
+                                                      showSearch
+                                                      placeholder="请选择字典类型"
+                                                      style={{ width: 220 }}
+                                                      options={dictOptions}
+                                                      filterOption={(input, option) =>
+                                                        (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+                                                      }
+                                                    />
+                                                  </Form.Item>
+                                                );
+                                              }}
                                             </Form.Item>
-                                            <Form.Item {...dRest} name={[dName, 'description']}>
-                                              <Input placeholder="描述" style={{ width: 120 }} />
-                                            </Form.Item>
-                                            <Form.Item {...dRest} name={[dName, 'required']} valuePropName="checked">
-                                              <Switch size="small" />
-                                            </Form.Item>
-                                            <DeleteOutlined onClick={() => removeDetail(dName)} style={{ color: '#ff4d4f' }} />
-                                          </Space>
+                                          </div>
                                         ))}
                                         <Button
                                           type="dashed"

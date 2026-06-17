@@ -433,6 +433,7 @@ export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<st
 
   // Form fields for create/edit
   // 'code' fields are auto-generated — skip in create form, show disabled in edit only
+  const grandchildSubComponents: string[] = [];
   const formFields = creatableFields.map((f) => {
     const component = getProFormComponent(f);
     const requiredRule = f.required ? `rules={[{ required: true, message: '请${f.type === 'relation' ? '选择' : '输入'}${f.description || f.name}' }]}` : '';
@@ -537,56 +538,60 @@ export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<st
             return `${gdf.name}: ${gdf.type === 'integer' || gdf.type === 'bigint' || gdf.type === 'decimal' ? '0' : gdf.type === 'timestamp' ? 'null' : "''"}`;
           }).join(', ');
 
+          const compName = `${toPascalCase(singularize(dto.tableName))}${toPascalCase(singularize(f.name))}${toPascalCase(singularize(gf.name))}Editor`;
+          grandchildSubComponents.push(`
+function ${compName}({ row, form }: { row: any; form: any }) {
+  const grandRows: any[] = row.${gf.name} || [];
+  const [grandKeys, setGrandKeys] = useState<React.Key[]>(() => grandRows.map((r: any) => r.id));
+  return (
+    <>
+      <EditableProTable<${grandPascalType}>
+        rowKey="id"
+        size="small"
+        value={grandRows}
+        onChange={(data) => {
+          const cur: any[] = form.getFieldValue('${f.name}') || [];
+          form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: data ?? [] } : r));
+        }}
+        recordCreatorProps={false}
+        editable={{
+          type: 'multiple',
+          editableKeys: grandKeys,
+          onChange: setGrandKeys,
+          onValuesChange: (_r, ds) => {
+            const cur: any[] = form.getFieldValue('${f.name}') || [];
+            form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: ds } : r));
+          },
+          actionRender: (grandRow, _cfg, _doms) => [
+            <a key="del" onClick={() => {
+              const cur: any[] = form.getFieldValue('${f.name}') || [];
+              form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: (r.${gf.name} || []).filter((g: any) => g.id !== grandRow.id) } : r));
+              setGrandKeys((ks: React.Key[]) => ks.filter((k) => k !== grandRow.id));
+            }} style={{ color: '#ff4d4f' }}>删除</a>,
+          ],
+        }}
+        columns={[
+${grandEditableCols.join('\n')}
+          { title: '操作', valueType: 'option', width: 60 },
+        ]}
+      />
+      <Button type="dashed" size="small" block icon={<PlusOutlined />} style={{ marginTop: 4 }} onClick={() => {
+        const tempId = Date.now().toString() + '_' + Math.random().toString(36).slice(2, 8);
+        const newGrand = { id: tempId, ${grandEmptyRow} };
+        const cur: any[] = form.getFieldValue('${f.name}') || [];
+        form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: [...(r.${gf.name} || []), newGrand] } : r));
+        setGrandKeys((ks: React.Key[]) => [...ks, tempId]);
+      }}>添加${gf.description || gf.name}</Button>
+    </>
+  );
+}
+`);
           return `            {
               title: '${gf.description || gf.name}',
               dataIndex: '${gf.name}',
               valueType: 'option',
               width: 200,
-              render: (_: any, row: any) => {
-                const grandRows: any[] = row.${gf.name} || [];
-                const [grandKeys, setGrandKeys] = React.useState<React.Key[]>(() => grandRows.map((r: any) => r.id));
-                return (
-                  <>
-                    <EditableProTable<${grandPascalType}>
-                      rowKey="id"
-                      size="small"
-                      value={grandRows}
-                      onChange={(data) => {
-                        const cur: any[] = form.getFieldValue('${f.name}') || [];
-                        form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: data ?? [] } : r));
-                      }}
-                      recordCreatorProps={false}
-                      editable={{
-                        type: 'multiple',
-                        editableKeys: grandKeys,
-                        onChange: setGrandKeys,
-                        onValuesChange: (_r, ds) => {
-                          const cur: any[] = form.getFieldValue('${f.name}') || [];
-                          form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: ds } : r));
-                        },
-                        actionRender: (grandRow, _cfg, _doms) => [
-                          <a key="del" onClick={() => {
-                            const cur: any[] = form.getFieldValue('${f.name}') || [];
-                            form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: (r.${gf.name} || []).filter((g: any) => g.id !== grandRow.id) } : r));
-                            setGrandKeys((ks: React.Key[]) => ks.filter((k) => k !== grandRow.id));
-                          }} style={{ color: '#ff4d4f' }}>删除</a>,
-                        ],
-                      }}
-                      columns={[
-${grandEditableCols.join('\n')}
-                        { title: '操作', valueType: 'option', width: 60 },
-                      ]}
-                    />
-                    <Button type="dashed" size="small" block icon={<PlusOutlined />} style={{ marginTop: 4 }} onClick={() => {
-                      const tempId = Date.now().toString() + '_' + Math.random().toString(36).slice(2, 8);
-                      const newGrand = { id: tempId, ${grandEmptyRow} };
-                      const cur: any[] = form.getFieldValue('${f.name}') || [];
-                      form.setFieldValue('${f.name}', cur.map((r: any) => r.id === row.id ? { ...r, ${gf.name}: [...(r.${gf.name} || []), newGrand] } : r));
-                      setGrandKeys((ks: React.Key[]) => [...ks, tempId]);
-                    }}>添加${gf.description || gf.name}</Button>
-                  </>
-                );
-              },
+              render: (_: any, row: any) => <${compName} row={row} form={form} />,
             },`;
         });
 
@@ -758,10 +763,14 @@ ${grandchildColumnDefs.join('\n')}
     if (f.type === 'relation' && f.relationType === 'one-to-many') {
       const tsFields = (f.detailFields || []).filter((df: any) => df.type === 'timestamp' && df.name !== 'id');
       const tsOverrides = tsFields.map((df: any) => `            ${df.name}: d.${df.name} && typeof d.${df.name} === 'object' ? d.${df.name}.toISOString() : d.${df.name},`).join('\n');
+      const grandchildNormalize = (f.detailFields || [])
+        .filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0)
+        .map(gf => `            ${gf.name}: (d.${gf.name} || []).map((g: any) => ({ ...g, id: g.id?.length < 36 ? undefined : g.id })),`)
+        .join('\n');
       return `          ${f.name}: (values.${f.name} || []).map((d: any) => ({
             ...d,
             id: d.id?.length < 36 ? undefined : d.id,
-${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
+${grandchildNormalize ? grandchildNormalize + '\n' : ''}${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
     }
     if (f.type === 'boolean') {
       return `          ${f.name}: values.${f.name} ?? false,`;
@@ -797,10 +806,14 @@ ${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
     if (f.type === 'relation' && f.relationType === 'one-to-many') {
       const tsFields = (f.detailFields || []).filter((df: any) => df.type === 'timestamp' && df.name !== 'id');
       const tsOverrides = tsFields.map((df: any) => `            ${df.name}: d.${df.name} && typeof d.${df.name} === 'object' ? d.${df.name}.toISOString() : d.${df.name},`).join('\n');
+      const grandchildNormalize = (f.detailFields || [])
+        .filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0)
+        .map(gf => `            ${gf.name}: (d.${gf.name} || []).map((g: any) => ({ ...g, id: g.id?.length < 36 ? undefined : g.id })),`)
+        .join('\n');
       return `          ${f.name}: (values.${f.name} || []).map((d: any) => ({
             ...d,
             id: d.id?.length < 36 ? undefined : d.id,
-${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
+${grandchildNormalize ? grandchildNormalize + '\n' : ''}${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
     }
     if (f.type === 'boolean') {
       return `          ${f.name}: values.${f.name} ?? false,`;
@@ -936,6 +949,7 @@ import {
 } from '@/services/${n.kebabSingular}';
 import { getMyBtnPerms } from '@/services/authority-btn';${hasUploadFields ? `\nimport { uploadFile } from '@/services/file';` : ''}${hasDictFields ? `\nimport { getDictDetailsByType } from '@/services/dictionary';` : ''}
 
+${grandchildSubComponents.join('')}
 export default function ${n.pascalName}Page() {
   const actionRef = useRef<ActionType>(undefined);
   const [modalOpen, setModalOpen] = useState(false);
