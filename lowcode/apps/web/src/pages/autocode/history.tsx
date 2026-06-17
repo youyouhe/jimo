@@ -25,6 +25,7 @@ import {
   type GenerateStep,
   type GenerateJobStatus,
 } from '@/services/autocode';
+import request from '@/services/request';
 import { useUserStore } from '@/stores/user';
 
 const { Text, Title } = Typography;
@@ -417,6 +418,173 @@ function clearDeleteJob() {
 }
 
 // ---------------------------------------------------------------------------
+// Wait for backend to come back up after hot-reload triggered by file deletion
+// ---------------------------------------------------------------------------
+
+async function waitForBackend(timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await request.get('/health');
+      return;
+    } catch {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  // Timed out — proceed anyway, the delete request will surface any real error
+}
+
+// ---------------------------------------------------------------------------
+// Batch Delete Modal
+// ---------------------------------------------------------------------------
+
+interface BatchDeleteItem {
+  id: string;
+  tableName: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  error?: string;
+}
+
+interface BatchDeleteModalProps {
+  open: boolean;
+  items: BatchDeleteItem[];
+  onClose: () => void;
+  onComplete: () => void;
+}
+
+function BatchDeleteModal({ open, items: initialItems, onClose, onComplete }: BatchDeleteModalProps) {
+  const [items, setItems] = useState<BatchDeleteItem[]>([]);
+  const [running, setRunning] = useState(false);
+  const [done, setDone] = useState(false);
+  const abortRef = useRef(false);
+
+  useEffect(() => {
+    if (open) {
+      setItems(initialItems.map(i => ({ ...i, status: 'pending' })));
+      setRunning(false);
+      setDone(false);
+      abortRef.current = false;
+    }
+  }, [open, initialItems]);
+
+  const runBatch = async () => {
+    setRunning(true);
+    let hasError = false;
+
+    for (let i = 0; i < items.length; i++) {
+      if (abortRef.current) break;
+      const item = items[i];
+
+      setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: 'running' } : it));
+
+      try {
+        const { jobId } = await deleteAutoCodeHistory(item.id, false);
+
+        // Poll until complete
+        let attempts = 0;
+        while (attempts < 60) {
+          if (abortRef.current) break;
+          await new Promise(r => setTimeout(r, 1000));
+          try {
+            const s = await getDeleteStatus(jobId);
+            if (s.status === 'completed') break;
+            if (s.status === 'failed') throw new Error(s.error || '删除失败');
+          } catch (pollErr: any) {
+            // Backend may restart mid-delete — treat as done if > 5 polls passed
+            if (attempts > 5) break;
+          }
+          attempts++;
+        }
+
+        setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: 'completed' } : it));
+
+        // Backend may restart (watch mode recompiles after file deletion) — wait until healthy before next delete
+        if (i < items.length - 1) {
+          await waitForBackend();
+        }
+      } catch (err: any) {
+        hasError = true;
+        setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: 'failed', error: err.message } : it));
+      }
+    }
+
+    setRunning(false);
+    setDone(true);
+    if (!hasError) {
+      setTimeout(onComplete, 800);
+    }
+  };
+
+  const completedCount = items.filter(i => i.status === 'completed').length;
+  const failedCount = items.filter(i => i.status === 'failed').length;
+
+  return (
+    <Modal
+      title={
+        <Space>
+          {done
+            ? failedCount > 0 ? <CloseCircleOutlined style={{ color: '#ff4d4f' }} /> : <CheckCircleOutlined style={{ color: '#52c41a' }} />
+            : running ? <LoadingOutlined spin /> : <DeleteOutlined />}
+          批量删除 ({items.length} 条记录)
+        </Space>
+      }
+      open={open}
+      onCancel={!running ? onClose : undefined}
+      closable={!running}
+      maskClosable={false}
+      width={480}
+      footer={
+        done ? (
+          <Button type="primary" onClick={failedCount > 0 ? onClose : onComplete}>完成</Button>
+        ) : running ? null : (
+          <Space>
+            <Button onClick={onClose}>取消</Button>
+            <Button type="primary" danger onClick={runBatch} icon={<DeleteOutlined />}>
+              确认删除全部
+            </Button>
+          </Space>
+        )
+      }
+    >
+      {!running && !done && (
+        <div style={{ marginBottom: 12 }}>
+          <Text type="warning">以下 {items.length} 条历史记录将被删除（仅删除历史记录，不级联删除生成文件和数据表）：</Text>
+        </div>
+      )}
+      {running && (
+        <Progress
+          percent={Math.round((completedCount / items.length) * 100)}
+          status={failedCount > 0 ? 'exception' : 'active'}
+          style={{ marginBottom: 12 }}
+        />
+      )}
+      <div style={{ background: '#fafafa', borderRadius: 6, padding: '8px 12px', maxHeight: 320, overflowY: 'auto' }}>
+        {items.map((item, idx) => (
+          <div
+            key={item.id}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0',
+              borderBottom: idx < items.length - 1 ? '1px solid #f0f0f0' : 'none',
+            }}
+          >
+            <StepIcon status={item.status} />
+            <Text style={{ flex: 1 }}>{item.tableName}</Text>
+            {item.status === 'failed' && (
+              <Text type="danger" style={{ fontSize: 12 }}>{item.error || '失败'}</Text>
+            )}
+          </div>
+        ))}
+      </div>
+      {done && failedCount > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <Text type="secondary">{completedCount} 成功，{failedCount} 失败</Text>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // History page
 // ---------------------------------------------------------------------------
 
@@ -424,6 +592,10 @@ export default function AutocodeHistoryPage() {
   const actionRef = useRef<ActionType>(undefined);
   const userRole = useUserStore((s) => s.userInfo?.role);
   const isSuperAdmin = userRole === 'super_admin';
+
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [batchDeleteItems, setBatchDeleteItems] = useState<BatchDeleteItem[]>([]);
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState<AutoCodeHistory | null>(null);
@@ -716,6 +888,33 @@ export default function AutocodeHistoryPage() {
         actionRef={actionRef}
         rowKey="id"
         columns={columns}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: (keys) => setSelectedRowKeys(keys as string[]),
+        }}
+        tableAlertRender={({ selectedRowKeys: keys, onCleanSelected }) => (
+          <Space>
+            <span>已选 {keys.length} 条</span>
+            <Button size="small" onClick={onCleanSelected}>取消选择</Button>
+          </Space>
+        )}
+        tableAlertOptionRender={({ selectedRows, onCleanSelected }) => (
+          <Button
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => {
+              setBatchDeleteItems(selectedRows.map(r => ({
+                id: r.id,
+                tableName: r.tableName,
+                status: 'pending' as const,
+              })));
+              setBatchDeleteOpen(true);
+            }}
+          >
+            批量删除 ({selectedRows.length})
+          </Button>
+        )}
         request={async (params) => {
           const { current: page, pageSize } = params;
           const result = await getAutoCodeHistory({ page, pageSize });
@@ -767,6 +966,19 @@ export default function AutocodeHistoryPage() {
         tableName={deleteTableName}
         onClose={() => { clearDeleteJob(); setDeleteProgressOpen(false); }}
         onComplete={handleDeleteComplete}
+      />
+
+      {/* Batch delete modal */}
+      <BatchDeleteModal
+        open={batchDeleteOpen}
+        items={batchDeleteItems}
+        onClose={() => setBatchDeleteOpen(false)}
+        onComplete={() => {
+          setBatchDeleteOpen(false);
+          setSelectedRowKeys([]);
+          message.success('批量删除完成');
+          actionRef.current?.reload();
+        }}
       />
     </div>
   );

@@ -907,6 +907,16 @@ ${grandchildNormalize ? grandchildNormalize + '\n' : ''}${tsOverrides ? tsOverri
   if (hasUploadFields) antdImports.push('Upload');
   const needsTabsForExpand = oneToManyFields.length > 1 || oneToManyFields.some(f => f.detailFields!.filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0).length > 1);
   if (needsTabsForExpand) antdImports.push('Tabs');
+  const _descText = dto.description || n.pascalName;
+  const _parenIdx = _descText.indexOf('（');
+  const _parenAsciiIdx = _descText.indexOf('(');
+  const _splitIdx = _parenIdx > 0 ? _parenIdx : (_parenAsciiIdx > 0 ? _parenAsciiIdx : -1);
+  const headerShortName = _splitIdx > 0 ? _descText.slice(0, _splitIdx).trim() : _descText;
+  const headerTooltip = _splitIdx > 0 ? _descText.slice(_splitIdx + 1).replace(/[）)]\s*$/, '').trim() : '';
+  if (headerTooltip) antdImports.push('Tooltip');
+  const headerTitleAttr = headerTooltip
+    ? `headerTitle={<Tooltip title="${headerTooltip}"><span>${headerShortName}</span></Tooltip>}`
+    : `headerTitle="${headerShortName}"`;
   for (const f2 of oneToManyFields) {
     for (const df of (f2.detailFields || [])) {
       if (df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields) {
@@ -1109,7 +1119,7 @@ ${createDtoFields.join('\n')}
   return (
     <>
       <ProTable<${n.pascalSingular}>
-        headerTitle="${dto.description || n.pascalName}"
+        ${headerTitleAttr}
         actionRef={actionRef}
         rowKey="id"
         columns={columns}

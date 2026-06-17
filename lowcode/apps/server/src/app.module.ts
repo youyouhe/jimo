@@ -28,7 +28,19 @@ import { OperationInterceptor } from './common/interceptors/operation.intercepto
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { AuthzGuard } from './common/guards/authz.guard';
-import { EncodingRuleModule } from './modules/encoding-rule/encoding-rule.module.js';
+import { SupplierModule } from './modules/supplier/supplier.module';
+import { PurchaseOrderModule } from './modules/purchase-order/purchase-order.module';
+import { TrainingCoursModule } from './modules/training-cours/training-cours.module';
+import { DepartmentModule } from './modules/department/department.module';
+import { StudentModule } from './modules/student/student.module';
+import { ClubModule } from './modules/club/club.module';
+import { ProjectTaskModule } from './modules/project-task/project-task.module';
+import { StudentClubModule } from './modules/student-club/student-club.module';
+import { ProjectModule } from './modules/project/project.module';
+import { CompanyModule } from './modules/company/company.module';
+import { PolicyModule } from './modules/policy/policy.module';
+import { PolicyDetailModule } from './modules/policy-detail/policy-detail.module';
+import { BillModule } from './modules/bill/bill.module';
 
 @Module({
   imports: [
@@ -45,8 +57,20 @@ import { EncodingRuleModule } from './modules/encoding-rule/encoding-rule.module
     MinioModule,
     DictionaryModule,
     DictionaryDetailModule,
-    OperationRecordModule,    EncodingRuleModule,
-    ApiModule,
+    OperationRecordModule,
+    BillModule,
+    PolicyDetailModule,
+    PolicyModule,
+    CompanyModule,
+    ProjectModule,
+    StudentClubModule,
+    ProjectTaskModule,
+    ClubModule,
+    StudentModule,
+    DepartmentModule,
+    TrainingCoursModule,
+    PurchaseOrderModule,
+    SupplierModule,    ApiModule,
     AutocodeModule,
     JwtBlacklistModule,
     SystemModule,

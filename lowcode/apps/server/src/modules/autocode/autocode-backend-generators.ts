@@ -389,6 +389,7 @@ export function generateService(dto: AutoCodeDto): string {
   for (const field of updateFields) {
     const valueExpr = field.type === 'decimal' ? `String(dto.${field.name})`
       : field.type === 'timestamp' ? `dto.${field.name} ? new Date(dto.${field.name}) : undefined`
+      : (field.type === 'relation' && field.relationType === 'many-to-one') ? `dto.${field.name} ?? undefined`
       : `dto.${field.name}`;
     updateDataBuilder += `    if (dto.${field.name} !== undefined) updateData.${field.name} = ${valueExpr};\n`;
   }

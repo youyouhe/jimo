@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { history } from '@umijs/max';
-import { Button, Drawer, message, Popconfirm, Space, Typography, Tabs, Input, Tag } from 'antd';
-import { PlusOutlined, EyeOutlined, RocketOutlined } from '@ant-design/icons';
+import { Button, Drawer, message, Popconfirm, Space, Typography, Tabs, Input, Tag, Switch } from 'antd';
+import { PlusOutlined, EyeOutlined, RocketOutlined, DeleteOutlined } from '@ant-design/icons';
 import { ActionType, ProColumns, ProTable, ModalForm, ProFormText, ProFormTextArea } from '@ant-design/pro-components';
 import {
   getAutoCodePackages,
@@ -32,6 +32,7 @@ function getFileLabel(path: string): string {
 
 export default function AutocodePackagesPage() {
   const actionRef = useRef<ActionType>(undefined);
+  const [includeDeleted, setIncludeDeleted] = useState(false);
 
   // Create/Edit modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -157,6 +158,20 @@ export default function AutocodePackagesPage() {
       search: false,
     },
     {
+      title: 'Deleted At',
+      dataIndex: 'deletedAt',
+      valueType: 'dateTime',
+      width: 180,
+      search: false,
+      hideInTable: !includeDeleted,
+      render: (_, record) =>
+        record.deletedAt ? (
+          <Tag color="red" icon={<DeleteOutlined />}>
+            {new Date(record.deletedAt).toLocaleString()}
+          </Tag>
+        ) : '-',
+    },
+    {
       title: 'Action',
       key: 'action',
       width: 260,
@@ -244,7 +259,7 @@ export default function AutocodePackagesPage() {
         columns={columns}
         request={async (params) => {
           const { current: page, pageSize, name } = params;
-          const result = await getAutoCodePackages({ page, pageSize, name });
+          const result = await getAutoCodePackages({ page, pageSize, name, includeDeleted });
           return {
             data: result.list,
             total: result.total,
@@ -252,6 +267,17 @@ export default function AutocodePackagesPage() {
           };
         }}
         toolBarRender={() => [
+          <Space key="deleted-toggle">
+            <span style={{ color: '#666', fontSize: 13 }}>Show Deleted</span>
+            <Switch
+              size="small"
+              checked={includeDeleted}
+              onChange={(v) => {
+                setIncludeDeleted(v);
+                actionRef.current?.reload();
+              }}
+            />
+          </Space>,
           <Button
             key="create"
             type="primary"

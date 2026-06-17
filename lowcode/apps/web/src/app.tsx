@@ -11,7 +11,18 @@ if (process.env.NODE_ENV === 'development') {
   };
 }
 import { Dropdown } from 'antd';
-import { LogoutOutlined } from '@ant-design/icons';
+import { LogoutOutlined, AppstoreOutlined, TableOutlined, FolderOutlined } from '@ant-design/icons';
+
+const ICON_MAP: Record<string, React.ReactElement> = {
+  AppstoreOutlined: React.createElement(AppstoreOutlined),
+  TableOutlined: React.createElement(TableOutlined),
+  FolderOutlined: React.createElement(FolderOutlined),
+};
+
+function resolveIconString(icon: string | undefined): React.ReactElement | undefined {
+  if (!icon || typeof icon !== 'string') return undefined;
+  return ICON_MAP[icon];
+}
 import { useUserStore } from '@/stores/user';
 import { getAccessibleMenus, type MenuItem } from '@/services/menu';
 import { logout as logoutApi } from '@/services/auth';
@@ -248,9 +259,12 @@ function buildRouteTree(
     if (menu.id) visited.add(menu.id);
     if (menu.menuType === 3) continue; // button — not a route
 
-    const routeObj = menu.path ? routeMap.get(menu.path) : undefined;
-    if (menu.path && !routeObj) {
-      // DB menu has a path but .umirc.ts has no matching route object — skip it.
+    // /pkg/* directories are runtime-created and never in .umirc.ts. Force synthesize
+    // so they are always pathless in React Router (absolute-path children cannot be
+    // nested under a path-bearing parent — React Router v6 invariant).
+    const isPkgDir = menu.menuType === 1 && !!menu.path?.startsWith('/pkg/');
+    const routeObj = (menu.path && !isPkgDir) ? routeMap.get(menu.path) : undefined;
+    if (menu.path && !routeObj && menu.menuType !== 1) {
       console.warn(`[patchClientRoutes] no route for menu path=${menu.path}, skipped`);
       continue;
     }
@@ -279,10 +293,13 @@ function buildRouteTree(
 
     let node: any;
     if (!routeObj) {
-      // Pure container directory (path null) — synthesize a placeholder node.
+      // Container directory — synthesize a layout wrapper node WITHOUT a path.
+      // React Router forbids absolute-path children nested under a path-bearing parent,
+      // so directory nodes must be pathless. ProLayout uses `name`/`icon` for the sidebar.
       node = {
         name: menu.name,
-        icon: menu.icon || undefined,
+        key: menu.id,
+        icon: resolveIconString(menu.icon ?? undefined),
         component: emptyComponent,
         id: nodeId,
         parentId: parentRouteId,

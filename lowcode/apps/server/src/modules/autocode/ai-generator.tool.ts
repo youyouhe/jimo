@@ -24,9 +24,15 @@ const FIELD_SCHEMA = {
     creatable: { type: 'boolean' },
     editable: { type: 'boolean' },
     // relation 字段
-    relationType: { type: 'string', enum: ['many-to-one', 'many-to-many', 'one-to-many'] },
+    relationType: { type: 'string', enum: ['many-to-one', 'one-to-many'] },
     relationTable: { type: 'string', description: '目标表 snake_case' },
     relationDisplayField: { type: 'string' },
+    // one-to-many: 'new' 新建子表（默认）; 'existing' 挂载已有表作为子表
+    detailMode: { type: 'string', enum: ['new', 'existing'] },
+    // one-to-many + existing: 目标已有表的 snake_case 名称（不含 lc_ 前缀）
+    relationExistingTable: { type: 'boolean', description: 'detailMode=existing 时设为 true' },
+    // one-to-many + existing: 已有子表上指向当前主表的 FK 列名（snake_case）
+    relationFkColumn: { type: 'string', description: '已有子表上的 FK 列名，如 student_id' },
     // one-to-many 子表字段（子子表，第三层）
     detailFields: {
       type: 'array',
@@ -50,7 +56,7 @@ const FIELD_SCHEMA = {
           listable: { type: 'boolean' },
           creatable: { type: 'boolean' },
           editable: { type: 'boolean' },
-          relationType: { type: 'string', enum: ['many-to-one', 'many-to-many', 'one-to-many'] },
+          relationType: { type: 'string', enum: ['many-to-one', 'one-to-many'] },
           relationTable: { type: 'string' },
           relationDisplayField: { type: 'string' },
           dictType: { type: 'string' },
@@ -194,6 +200,112 @@ export const LIST_PACKAGES_TOOL = {
   },
 };
 
+export const GENERATE_MOCK_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'generate_mock',
+    description:
+      '为已生成的实体表插入 mock 测试数据。表必须已通过 propose_entity 确认并生成代码后才可调用。count 默认 10，最大 100。',
+    parameters: {
+      type: 'object',
+      properties: {
+        tableName: {
+          type: 'string',
+          description: '目标表名（snake_case，不含 lc_ 前缀），如 employees',
+        },
+        count: {
+          type: 'number',
+          description: '插入条数，默认 10，最大 100',
+        },
+      },
+      required: ['tableName'],
+    },
+  },
+};
+
+export const LIST_HISTORY_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'list_history',
+    description:
+      '查询最近生成的实体表历史记录，返回 id、tableName、changeLog、operation、createdAt。用于找到需要删除的记录的 id。',
+    parameters: {
+      type: 'object',
+      properties: {
+        tableName: {
+          type: 'string',
+          description: '按表名过滤（可选，模糊匹配）',
+        },
+        limit: {
+          type: 'number',
+          description: '返回条数，默认 20，最大 50',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+export const DELETE_ENTITY_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'delete_entity',
+    description:
+      '删除一条代码生成历史记录及其所有生成物（代码文件、数据库表、菜单注册）。调用前必须先用 list_history 确认 id。此操作不可逆，仅用于撤销错误建表。',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: '历史记录 UUID，从 list_history 结果中获取',
+        },
+        cascade: {
+          type: 'boolean',
+          description: '是否级联删除引用该表的外键表，默认 false',
+        },
+      },
+      required: ['id'],
+    },
+  },
+};
+
+export const LIST_MENUS_BY_PACKAGE_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'list_menus_by_package',
+    description:
+      '查询所有 Package 及各自包含的实体表列表，用于了解当前菜单分类现状。返回 [{id, name, tables:[tableName,...]}]，id 为空表示未分类。',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+export const ASSIGN_TO_PACKAGE_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'assign_to_package',
+    description:
+      '将一张已生成的实体表重新归属到指定 Package（同时更新菜单父节点和历史记录）。调用前先用 list_menus_by_package 确认 packageId。',
+    parameters: {
+      type: 'object',
+      properties: {
+        tableName: {
+          type: 'string',
+          description: '要移动的实体表名（snake_case，不含 lc_ 前缀）',
+        },
+        packageId: {
+          type: 'string',
+          description: '目标 Package 的 UUID，从 list_menus_by_package 或 list_packages 结果中获取',
+        },
+      },
+      required: ['tableName', 'packageId'],
+    },
+  },
+};
+
 export const ALL_TOOLS = [
   PROPOSE_ENTITY_TOOL,
   CREATE_DICT_TOOL,
@@ -201,4 +313,9 @@ export const ALL_TOOLS = [
   LIST_TABLES_TOOL,
   LIST_DICTS_TOOL,
   LIST_PACKAGES_TOOL,
+  GENERATE_MOCK_TOOL,
+  LIST_HISTORY_TOOL,
+  DELETE_ENTITY_TOOL,
+  LIST_MENUS_BY_PACKAGE_TOOL,
+  ASSIGN_TO_PACKAGE_TOOL,
 ];

@@ -349,12 +349,14 @@ export interface AutoCodePackage {
   menuId: string | null;
   createdAt: string;
   updatedAt: string;
+  deletedAt?: string | null;
 }
 
 export interface AutoCodePackageListParams {
   page?: number;
   pageSize?: number;
   name?: string;
+  includeDeleted?: boolean;
 }
 
 export interface AutoCodePackageListResult {

@@ -2,9 +2,12 @@ import request from './request';
 
 export interface Supplier {
   id: string;
-  supplier_name: string;
-  contact_phone: string | null;
-  balance: string;
+  name: string;
+  contact_person: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  is_active: boolean;
   createdAt: string;
   updatedAt: string;
   createdBy: string | null;
@@ -14,8 +17,9 @@ export interface Supplier {
 export interface SupplierListParams {
   page?: number;
   pageSize?: number;
-    supplier_name?: string;
-    contact_phone?: string;
+    name?: string;
+    contact_person?: string;
+    phone?: string;
 }
 
 export interface SupplierListResult {
@@ -26,15 +30,21 @@ export interface SupplierListResult {
 }
 
 export interface CreateSupplierDto {
-    supplier_name: string;
-    contact_phone?: string;
-    balance: string;
+    name: string;
+    contact_person?: string;
+    phone?: string;
+    email?: string;
+    address?: string;
+    is_active: boolean;
 }
 
 export interface UpdateSupplierDto {
-    supplier_name?: string;
-    contact_phone?: string;
-    balance?: string;
+    name?: string;
+    contact_person?: string;
+    phone?: string;
+    email?: string;
+    address?: string;
+    is_active?: boolean;
 }
 
 export interface BatchDeleteDto {
@@ -44,36 +54,36 @@ export interface BatchDeleteDto {
 /**
  * Get paginated suppliers list.
  */
-export async function getSuppliers(params?: SupplierListParams): Promise<SupplierListResult> {
-  return request.get('/suppliers', { params });
+export async function getSuppliersList(params?: SupplierListParams): Promise<SupplierListResult> {
+  return request.get('/lc/suppliers', { params });
 }
 
 /**
  * Get a single supplier by ID.
  */
 export async function getSupplier(id: string): Promise<Supplier> {
-  return request.get(`/suppliers/${id}`);
+  return request.get(`/lc/suppliers/${id}`);
 }
 
 /**
  * Create a new supplier.
  */
 export async function createSupplier(dto: CreateSupplierDto): Promise<Supplier> {
-  return request.post('/suppliers', dto);
+  return request.post('/lc/suppliers', dto);
 }
 
 /**
  * Update an existing supplier.
  */
 export async function updateSupplier(id: string, dto: UpdateSupplierDto): Promise<Supplier> {
-  return request.patch(`/suppliers/${id}`, dto);
+  return request.patch(`/lc/suppliers/${id}`, dto);
 }
 
 /**
  * Delete a supplier by ID (soft delete).
  */
 export async function deleteSupplier(id: string): Promise<void> {
-  return request.delete(`/suppliers/${id}`);
+  return request.delete(`/lc/suppliers/${id}`);
 }
 
 /**
@@ -81,5 +91,6 @@ export async function deleteSupplier(id: string): Promise<void> {
  * Returns { count: number }.
  */
 export async function batchDeleteSuppliers(ids: string[]): Promise<{ count: number }> {
-  return request.delete('/suppliers/batch', { data: { ids } });
+  return request.delete('/lc/suppliers/batch', { data: { ids } });
 }
+

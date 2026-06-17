@@ -69,6 +69,24 @@ import {
 } from './autocode-frontend-generators';
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * 从 description 中提取菜单显示名。
+ * AI 生成的 description 格式约定为「中文名（备注）」，取括号前的部分。
+ * 无括号时原样返回（兼容手动填写的 description）。
+ */
+function extractMenuName(description: string | undefined, fallback: string): string {
+  if (!description) return fallback;
+  const paren = description.indexOf('（');
+  if (paren > 0) return description.slice(0, paren).trim();
+  const parenAscii = description.indexOf('(');
+  if (parenAscii > 0) return description.slice(0, parenAscii).trim();
+  return description;
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
@@ -2099,12 +2117,12 @@ export class AutocodeService {
   // Package CRUD
   // =========================================================================
 
-  async findAllPackages(params: { page?: number; pageSize?: number; name?: string }): Promise<{ list: SysAutoCodePackage[]; total: number; page: number; pageSize: number }> {
+  async findAllPackages(params: { page?: number; pageSize?: number; name?: string; includeDeleted?: boolean }): Promise<{ list: SysAutoCodePackage[]; total: number; page: number; pageSize: number }> {
     const page = params.page ?? 1;
     const pageSize = params.pageSize ?? 10;
     const offset = (page - 1) * pageSize;
 
-    const conditions = [isNull(sysAutoCodePackages.deletedAt)];
+    const conditions = params.includeDeleted ? [] : [isNull(sysAutoCodePackages.deletedAt)];
     if (params.name) {
       conditions.push(ilike(sysAutoCodePackages.name, `%${params.name}%`));
     }
@@ -2232,6 +2250,112 @@ export class AutocodeService {
       .where(and(eq(sysAutoCodePackages.id, id), isNull(sysAutoCodePackages.deletedAt)));
   }
 
+  /** 查询所有 package 及其下已生成的实体列表（按 packageName 匹配） */
+  async listMenusByPackage(): Promise<{ id: string; name: string; tables: string[] }[]> {
+    const pkgs = await this.db
+      .select({ id: sysAutoCodePackages.id, name: sysAutoCodePackages.name })
+      .from(sysAutoCodePackages)
+      .where(isNull(sysAutoCodePackages.deletedAt));
+
+    // Get latest packageName per tableName via raw SQL subquery
+    const rawRows = await this.db.execute<{ table_name: string; package_name: string }>(
+      sql`SELECT DISTINCT ON (table_name) table_name, package_name
+          FROM sys_auto_code_histories
+          ORDER BY table_name, created_at DESC`,
+    );
+    const histories = Array.isArray(rawRows) ? rawRows : (rawRows as any).rows ?? [];
+
+    const result = pkgs.map((pkg) => ({
+      id: pkg.id,
+      name: pkg.name,
+      tables: histories
+        .filter((h: any) => h.package_name === pkg.name)
+        .map((h: any) => h.table_name as string),
+    }));
+
+    const unassigned = histories
+      .filter((h: any) => !h.package_name)
+      .map((h: any) => h.table_name as string);
+    if (unassigned.length > 0) {
+      result.push({ id: '', name: '(未分类)', tables: unassigned });
+    }
+
+    return result;
+  }
+
+  /** 将一张实体表重新归属到指定 package（更新菜单 parentId + 所有 history.packageName） */
+  async assignToPackage(tableName: string, packageId: string): Promise<{ ok: boolean; movedMenu: boolean }> {
+    let pkg = await this.findOnePackage(packageId);
+
+    // If package has no menuId or its menuId is the shared "untitled" directory, rebuild a proper one
+    let targetMenuId = pkg.menuId;
+    if (!targetMenuId) {
+      targetMenuId = await this.ensureDirectoryMenu(pkg.name);
+      await this.db
+        .update(sysAutoCodePackages)
+        .set({ menuId: targetMenuId, updatedAt: new Date() })
+        .where(eq(sysAutoCodePackages.id, packageId));
+    } else {
+      // Verify the directory menu is not shared (same path = multiple packages pointing to it)
+      const dirMenu = await this.db
+        .select({ path: sysMenus.path })
+        .from(sysMenus)
+        .where(eq(sysMenus.id, targetMenuId))
+        .limit(1);
+      if (dirMenu.length > 0 && dirMenu[0]!.path === '/pkg/untitled') {
+        // The menu is the broken shared fallback — create a proper one
+        targetMenuId = await this.ensureDirectoryMenu(pkg.name);
+        await this.db
+          .update(sysAutoCodePackages)
+          .set({ menuId: targetMenuId, updatedAt: new Date() })
+          .where(eq(sysAutoCodePackages.id, packageId));
+      }
+    }
+
+    const n = deriveNames(tableName);
+    const componentPath = `./${n.kebabName}/index`;
+
+    // Update menu parentId
+    let movedMenu = false;
+    const menuRows = await this.db
+      .select({ id: sysMenus.id })
+      .from(sysMenus)
+      .where(and(eq(sysMenus.component, componentPath), isNull(sysMenus.deletedAt)))
+      .limit(1);
+
+    if (menuRows.length > 0) {
+      await this.db
+        .update(sysMenus)
+        .set({ parentId: targetMenuId })
+        .where(eq(sysMenus.id, menuRows[0]!.id));
+      // Ensure this entity menu is visible to admin roles
+      const adminRoles = await this.db
+        .select({ id: sysRoles.id })
+        .from(sysRoles)
+        .where(inArray(sysRoles.code, ['super_admin', 'admin']));
+      if (adminRoles.length > 0) {
+        await this.db
+          .insert(sysRoleMenus)
+          .values(adminRoles.map((role) => ({ roleId: role.id, menuId: menuRows[0]!.id })))
+          .onConflictDoNothing();
+        // Also ensure the parent directory menu is accessible
+        await this.db
+          .insert(sysRoleMenus)
+          .values(adminRoles.map((role) => ({ roleId: role.id, menuId: targetMenuId! })))
+          .onConflictDoNothing();
+      }
+      movedMenu = true;
+    }
+
+    // Update all history records for this tableName
+    await this.db
+      .update(sysAutoCodeHistories)
+      .set({ packageName: pkg.name })
+      .where(eq(sysAutoCodeHistories.tableName, tableName));
+
+    return { ok: true, movedMenu };
+  }
+
   // =========================================================================
   // Menu auto-creation
   // =========================================================================
@@ -2277,17 +2401,9 @@ export class AutocodeService {
     const n = deriveNames(dto.tableName);
     const componentName = `./${n.kebabName}/index`;
 
-    let menuPath = n.routePath;
-    if (parentMenuId) {
-      const parentRows = await this.db
-        .select({ path: sysMenus.path })
-        .from(sysMenus)
-        .where(eq(sysMenus.id, parentMenuId))
-        .limit(1);
-      if (parentRows.length > 0) {
-        menuPath = `${parentRows[0].path}/${n.kebabName}`;
-      }
-    }
+    // Entity menu path is always the canonical /lc/<kebab> route registered in .umirc.ts.
+    // parentMenuId only sets the sidebar hierarchy (parentId), never the URL path.
+    const menuPath = n.routePath;
 
     const existing = await this.db
       .select({ id: sysMenus.id })
@@ -2311,7 +2427,7 @@ export class AutocodeService {
     const menuRows = await this.db
       .insert(sysMenus)
       .values({
-        name: dto.description || n.pascalName,
+        name: extractMenuName(dto.description, n.pascalName),
         path: menuPath,
         component: componentName,
         icon: 'TableOutlined',
@@ -2421,7 +2537,7 @@ export class AutocodeService {
             method: def.method,
             path: p,
             permission,
-            description: `${def.desc}${dto.description || n.pascalName}`,
+            description: `${def.desc}${extractMenuName(dto.description, n.pascalName)}`,
             apiGroup,
           });
         }
@@ -2442,7 +2558,7 @@ export class AutocodeService {
     }
 
     this.logger.log(
-      `[AutocodeService] Auto-created menu '${dto.description || n.pascalName}' (${menuPath}), ` +
+      `[AutocodeService] Auto-created menu '${extractMenuName(dto.description, n.pascalName)}' (${menuPath}), ` +
       `parent=${parentMenuId ?? 'root'}, assigned to ${adminRoles.length} roles, ` +
       `${crudCount} CRUD permissions`,
     );
@@ -2454,18 +2570,26 @@ export class AutocodeService {
   // =========================================================================
 
   private async ensureDirectoryMenu(packageName: string): Promise<string> {
-    const kebabDirName = toKebabCase(packageName).replace(/[^a-z0-9-]/g, '') || 'untitled';
-    const dirPath = `/pkg/${kebabDirName}`;
-
-    const existingMenu = await this.db
+    // Look up by name first — handles Chinese names that would otherwise all collapse to 'untitled'
+    const existingByName = await this.db
       .select({ id: sysMenus.id })
       .from(sysMenus)
-      .where(and(eq(sysMenus.path, dirPath), isNull(sysMenus.deletedAt)))
+      .where(and(
+        eq(sysMenus.name, packageName),
+        eq(sysMenus.menuType, 1),
+        isNull(sysMenus.parentId),
+        isNull(sysMenus.deletedAt),
+      ))
       .limit(1);
 
-    if (existingMenu.length > 0) {
-      return existingMenu[0].id;
+    if (existingByName.length > 0) {
+      return existingByName[0]!.id;
     }
+
+    // Build a unique path: ASCII kebab + short uuid suffix to avoid collisions
+    const kebabPart = toKebabCase(packageName).replace(/[^a-z0-9-]/g, '') || 'pkg';
+    const shortId = crypto.randomUUID().slice(0, 8);
+    const dirPath = `/pkg/${kebabPart}-${shortId}`;
 
     const maxSortRows = await this.db
       .select({ maxSort: sql<number>`COALESCE(MAX(${sysMenus.sort}), -1)` })
@@ -2585,6 +2709,27 @@ export class AutocodeService {
   }
 
   // =========================================================================
+  // Mock data (public, for AI tool)
+  // =========================================================================
+
+  async generateMockForTable(tableName: string, count: number): Promise<{ inserted: number }> {
+    const latest = await this.getLatestVersion(tableName);
+    if (!latest) throw new Error(`表 '${tableName}' 不存在（无生成历史）`);
+    const fields = (latest.fields as any[]) ?? [];
+    if (fields.length === 0) throw new Error(`表 '${tableName}' 无字段信息，无法生成 mock 数据`);
+
+    const dto = {
+      tableName,
+      description: '',
+      fields,
+      generateWeb: false,
+      mockData: { enabled: true, count },
+    };
+    await this.insertMockData(dto as any);
+    return { inserted: count };
+  }
+
+  // =========================================================================
   // Entry point updaters
   // =========================================================================
 
@@ -2642,56 +2787,9 @@ export class AutocodeService {
     const umircPath = path.join(projectRoot, 'release/lowcode/apps/web/.umirc.ts');
     let content = await fs.readFile(umircPath, 'utf-8');
 
-    if (dto.packageId) {
-      let pkg: SysAutoCodePackage | null = null;
-      try { pkg = await this.findOnePackage(dto.packageId); } catch { /* fall back to flat route */ }
-
-      if (pkg?.menuId) {
-        const parentMenu = await this.db
-          .select({ path: sysMenus.path, name: sysMenus.name })
-          .from(sysMenus)
-          .where(eq(sysMenus.id, pkg.menuId))
-          .limit(1);
-
-        if (parentMenu.length > 0 && parentMenu[0].path) {
-          const dirPath = parentMenu[0].path;
-          const dirName = parentMenu[0].name;
-          const childPath = `${dirPath}/${n.kebabName}`;
-
-          if (content.includes(`path: '${childPath}'`)) return;
-
-          const childEntry = `      { path: '${childPath}', name: '${dto.description || n.pascalName}', icon: 'TableOutlined', component: './${n.kebabName}/index' },`;
-
-          const dirMarker = `path: '${dirPath}'`;
-          if (content.includes(dirMarker)) {
-            const dirRegex = new RegExp(
-              `(\\{[^}]*path:\\s*'${dirPath.replace(/\//g, '\\/')}'[^}]*routes:\\s*\\[[^\\]]*)(\\][^}]*\\},)`,
-              's',
-            );
-            const match = content.match(dirRegex);
-            if (match) {
-              content = content.replace(dirRegex, `$1\n${childEntry}\n      $2`);
-            }
-          } else {
-            const dirBlock = `    {
-      path: '${dirPath}',
-      name: '${dirName}',
-      icon: 'AppstoreOutlined',
-      routes: [
-${childEntry}
-      ],
-    },`;
-            content = content.replace(
-              /    \{ path: '\/\*', redirect: '\/dashboard' \},?/,
-              `${dirBlock}\n    { path: '/*', redirect: '/dashboard' },`,
-            );
-          }
-
-          await fs.writeFile(umircPath, content, 'utf-8');
-          return;
-        }
-      }
-    }
+    // Package membership is expressed in the DB menu hierarchy (parentId), NOT in the
+    // .umirc.ts path. All generated entity routes always use the flat /lc/<kebab> path
+    // so React Router never sees absolute-path children nested under /pkg/... parents.
 
     const routePath = n.routePath;
     const routePattern = `path: '${routePath}'`;
@@ -2708,7 +2806,7 @@ ${childEntry}
 
     const routeEntry = `    {
       path: '${routePath}',
-      name: '${dto.description || n.pascalName}',
+      name: '${extractMenuName(dto.description, n.pascalName)}',
       icon: 'TableOutlined',
       component: './${n.kebabName}/index',
     },`;

@@ -247,8 +247,9 @@ export class AutocodeController {
     @Query('page') page?: number,
     @Query('pageSize') pageSize?: number,
     @Query('name') name?: string,
+    @Query('includeDeleted') includeDeleted?: string,
   ): Promise<PaginatedResponse<SysAutoCodePackage>> {
-    const data = await this.autocodeService.findAllPackages({ page, pageSize, name });
+    const data = await this.autocodeService.findAllPackages({ page, pageSize, name, includeDeleted: includeDeleted === 'true' });
     return { code: 0, msg: 'success', data };
   }
 

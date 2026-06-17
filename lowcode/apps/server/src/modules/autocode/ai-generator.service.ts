@@ -11,6 +11,11 @@ import {
   LIST_TABLES_TOOL,
   LIST_DICTS_TOOL,
   LIST_PACKAGES_TOOL,
+  GENERATE_MOCK_TOOL,
+  LIST_HISTORY_TOOL,
+  DELETE_ENTITY_TOOL,
+  LIST_MENUS_BY_PACKAGE_TOOL,
+  ASSIGN_TO_PACKAGE_TOOL,
 } from './ai-generator.tool';
 import type { AiChatRequestDto } from './ai-generator.dto';
 import { DATABASE_CONNECTION, type DrizzleDb } from '../../db/connection';
@@ -210,10 +215,96 @@ ${pkgList}`,
                 const rows = await this.db
                   .select({ id: sysAutoCodePackages.id, name: sysAutoCodePackages.name })
                   .from(sysAutoCodePackages)
+                  .where(isNull(sysAutoCodePackages.deletedAt))
                   .limit(200);
                 return { packages: rows.map((r) => ({ id: r.id, name: r.name })) };
               } catch (e: any) {
                 return { packages: [], error: e?.message };
+              }
+            },
+          }),
+
+          generate_mock: tool({
+            description: GENERATE_MOCK_TOOL.function.description,
+            parameters: jsonSchema(GENERATE_MOCK_TOOL.function.parameters as any),
+            execute: async (args: unknown) => {
+              const { tableName, count } = args as { tableName: string; count?: number };
+              try {
+                const safeCount = Math.min(Math.max(count ?? 10, 1), 100);
+                const result = await this.autocodeService.generateMockForTable(tableName, safeCount);
+                write({ kind: 'progress', content: `已为 '${tableName}' 插入 ${result.inserted} 条 mock 数据` });
+                return { ok: true, tableName, inserted: result.inserted };
+              } catch (e: any) {
+                return { ok: false, tableName, error: e?.message };
+              }
+            },
+          }),
+
+          list_history: tool({
+            description: LIST_HISTORY_TOOL.function.description,
+            parameters: jsonSchema(LIST_HISTORY_TOOL.function.parameters as any),
+            execute: async (args: unknown) => {
+              const { tableName, limit } = (args as any) ?? {};
+              const safeLimit = Math.min(Math.max(limit ?? 20, 1), 50);
+              const result = await this.autocodeService.findAllHistory({ page: 1, pageSize: safeLimit, tableName });
+              return result.list.map((h) => ({
+                id: h.id,
+                tableName: h.tableName,
+                changeLog: h.changeLog,
+                operation: h.operation,
+                createdAt: h.createdAt,
+              }));
+            },
+          }),
+
+          list_menus_by_package: tool({
+            description: LIST_MENUS_BY_PACKAGE_TOOL.function.description,
+            parameters: jsonSchema(LIST_MENUS_BY_PACKAGE_TOOL.function.parameters as any),
+            execute: async () => {
+              return await this.autocodeService.listMenusByPackage();
+            },
+          }),
+
+          assign_to_package: tool({
+            description: ASSIGN_TO_PACKAGE_TOOL.function.description,
+            parameters: jsonSchema(ASSIGN_TO_PACKAGE_TOOL.function.parameters as any),
+            execute: async (args: unknown) => {
+              const { tableName, packageId } = (args as any) ?? {};
+              try {
+                const result = await this.autocodeService.assignToPackage(tableName, packageId);
+                write({ kind: 'progress', content: `已将 '${tableName}' 归入 package ${packageId}（菜单移动: ${result.movedMenu}）` });
+                return { ok: true, tableName, packageId, movedMenu: result.movedMenu };
+              } catch (e: any) {
+                return { ok: false, tableName, error: e?.message };
+              }
+            },
+          }),
+
+          delete_entity: tool({
+            description: DELETE_ENTITY_TOOL.function.description,
+            parameters: jsonSchema(DELETE_ENTITY_TOOL.function.parameters as any),
+            execute: async (args: unknown) => {
+              const { id, cascade } = (args as any) ?? {};
+              try {
+                write({ kind: 'progress', content: `正在删除历史记录 ${id}…` });
+                const jobId = await this.autocodeService.startDeleteHistory(id, cascade === true);
+                // Poll until done (max 60s)
+                const deadline = Date.now() + 60_000;
+                while (Date.now() < deadline) {
+                  await new Promise(r => setTimeout(r, 1500));
+                  const status = await this.autocodeService.getJobStatus(jobId);
+                  if (!status) break;
+                  if (status.status === 'completed') {
+                    write({ kind: 'progress', content: `删除完成` });
+                    return { ok: true, id };
+                  }
+                  if (status.status === 'failed') {
+                    return { ok: false, id, error: status.steps?.find(s => s.status === 'failed')?.label ?? '删除失败' };
+                  }
+                }
+                return { ok: false, id, error: '删除超时' };
+              } catch (e: any) {
+                return { ok: false, id, error: e?.message };
               }
             },
           }),

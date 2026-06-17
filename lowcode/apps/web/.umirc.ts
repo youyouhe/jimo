@@ -84,6 +84,84 @@ export default defineConfig({
     // Generated business module routes are added by updateUmiRoutes() at
     // code-generation time.  patchClientRoutes filters them at runtime
     // against the DB menu tree for role-based access control.
+    {
+      path: '/lc/suppliers',
+      name: '供应商（类型1：独立业务表示例）',
+      icon: 'TableOutlined',
+      component: './suppliers/index',
+    },
+    {
+      path: '/lc/purchase-orders',
+      name: '采购订单（类型2：主表+子表示例）',
+      icon: 'TableOutlined',
+      component: './purchase-orders/index',
+    },
+    {
+      path: '/lc/training-courses',
+      name: '培训课程（类型3：三层嵌套示例）',
+      icon: 'TableOutlined',
+      component: './training-courses/index',
+    },
+    {
+      path: '/lc/departments',
+      name: '部门表（为类型4挂载已有表准备）',
+      icon: 'TableOutlined',
+      component: './departments/index',
+    },
+    {
+      path: '/lc/students',
+      name: '学生表（为类型5 M:N准备）',
+      icon: 'TableOutlined',
+      component: './students/index',
+    },
+    {
+      path: '/lc/clubs',
+      name: '社团表（为类型5 M:N准备）',
+      icon: 'TableOutlined',
+      component: './clubs/index',
+    },
+    {
+      path: '/lc/project-tasks',
+      name: '项目任务表（类型4准备：含 project_id FK，后续被 projects 挂载）',
+      icon: 'TableOutlined',
+      component: './project-tasks/index',
+    },
+    {
+      path: '/lc/student-clubs',
+      name: '学生社团关联表（类型5 M:N中间表）',
+      icon: 'TableOutlined',
+      component: './student-clubs/index',
+    },
+    {
+      path: '/lc/projects',
+      name: '项目表（类型4：挂载已有表示例 - 用 existing 模式挂 project_tasks）',
+      icon: 'TableOutlined',
+      component: './projects/index',
+    },
+    {
+      path: '/lc/companies',
+      name: '公司',
+      icon: 'TableOutlined',
+      component: './companies/index',
+    },
+    {
+      path: '/lc/policies',
+      name: '制度',
+      icon: 'TableOutlined',
+      component: './policies/index',
+    },
+    {
+      path: '/lc/policy-details',
+      name: '制度明细',
+      icon: 'TableOutlined',
+      component: './policy-details/index',
+    },
+    {
+      path: '/lc/bills',
+      name: '账单',
+      icon: 'TableOutlined',
+      component: './bills/index',
+    },
     { path: '/*', redirect: '/dashboard' },
   ],
   proxy: {

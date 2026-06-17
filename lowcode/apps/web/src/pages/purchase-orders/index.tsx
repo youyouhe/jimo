@@ -13,104 +13,34 @@ import {
   ProFormDateTimePicker,
 } from '@ant-design/pro-components';
 import {
-  getOrdersList,
-  createOrder,
-  updateOrder,
-  deleteOrder,
-  batchDeleteOrders,
-  type Order,
-  type CreateOrderDto,
-  type UpdateOrderDto,
-  type OrderOrderItem,
-  type OrderOrderItemProductBatche,
-} from '@/services/order';
+  getPurchaseOrdersList,
+  createPurchaseOrder,
+  updatePurchaseOrder,
+  deletePurchaseOrder,
+  batchDeletePurchaseOrders,
+  getSupplierOptions,
+  type PurchaseOrder,
+  type CreatePurchaseOrderDto,
+  type UpdatePurchaseOrderDto,
+  type PurchaseOrderItem,
+} from '@/services/purchase-order';
 import { getMyBtnPerms } from '@/services/authority-btn';
 import { getDictDetailsByType } from '@/services/dictionary';
 
 
-function OrderOrderItemProductBatcheEditor({ row, form }: { row: any; form: any }) {
-  const grandRows: any[] = row.product_batches || [];
-  const [grandKeys, setGrandKeys] = useState<React.Key[]>(() => grandRows.map((r: any) => r.id));
-  return (
-    <>
-      <EditableProTable<OrderOrderItemProductBatche>
-        rowKey="id"
-        size="small"
-        value={grandRows}
-        onChange={(data) => {
-          const cur: any[] = form.getFieldValue('order_items') || [];
-          form.setFieldValue('order_items', cur.map((r: any) => r.id === row.id ? { ...r, product_batches: data ?? [] } : r));
-        }}
-        recordCreatorProps={false}
-        editable={{
-          type: 'multiple',
-          editableKeys: grandKeys,
-          onChange: setGrandKeys,
-          onValuesChange: (_r, ds) => {
-            const cur: any[] = form.getFieldValue('order_items') || [];
-            form.setFieldValue('order_items', cur.map((r: any) => r.id === row.id ? { ...r, product_batches: ds } : r));
-          },
-          actionRender: (grandRow, _cfg, _doms) => [
-            <a key="del" onClick={() => {
-              const cur: any[] = form.getFieldValue('order_items') || [];
-              form.setFieldValue('order_items', cur.map((r: any) => r.id === row.id ? { ...r, product_batches: (r.product_batches || []).filter((g: any) => g.id !== grandRow.id) } : r));
-              setGrandKeys((ks: React.Key[]) => ks.filter((k) => k !== grandRow.id));
-            }} style={{ color: '#ff4d4f' }}>删除</a>,
-          ],
-        }}
-        columns={[
-              {
-                title: '批次号',
-                dataIndex: 'batch_no',
-                valueType: 'text',
-                formItemProps: { rules: [{ required: true }] },
-              },
-              {
-                title: '仓库名称',
-                dataIndex: 'warehouse',
-                valueType: 'text',
-                formItemProps: { rules: [{ required: true }] },
-              },
-              {
-                title: '该批次出货数量',
-                dataIndex: 'batch_quantity',
-                valueType: 'digit',
-                formItemProps: { rules: [{ required: true }] },
-              },
-              {
-                title: '生产日期',
-                dataIndex: 'production_date',
-                valueType: 'dateTime',
-                formItemProps: { rules: [{ required: false }] },
-              },
-          { title: '操作', valueType: 'option', width: 60 },
-        ]}
-      />
-      <Button type="dashed" size="small" block icon={<PlusOutlined />} style={{ marginTop: 4 }} onClick={() => {
-        const tempId = Date.now().toString() + '_' + Math.random().toString(36).slice(2, 8);
-        const newGrand = { id: tempId, batch_no: '', warehouse: '', batch_quantity: 0, production_date: null };
-        const cur: any[] = form.getFieldValue('order_items') || [];
-        form.setFieldValue('order_items', cur.map((r: any) => r.id === row.id ? { ...r, product_batches: [...(r.product_batches || []), newGrand] } : r));
-        setGrandKeys((ks: React.Key[]) => [...ks, tempId]);
-      }}>添加商品批次（该订单商品来自哪些库存批次）</Button>
-    </>
-  );
-}
-
-export default function OrdersPage() {
+export default function PurchaseOrdersPage() {
   const actionRef = useRef<ActionType>(undefined);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<Order | null>(null);
+  const [editingRecord, setEditingRecord] = useState<PurchaseOrder | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [form] = Form.useForm();
-  const [orderItemsEditableKeys, setOrderItemsEditableKeys] = useState<React.Key[]>([]);
+  const [itemsEditableKeys, setItemsEditableKeys] = useState<React.Key[]>([]);
   const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([]);
-  const currentDataRef = useRef<Order[]>([]);
-  const [orderStatusOptions, setOrderStatusOptions] = useState<Record<string, { text: string }>>({});
+  const currentDataRef = useRef<PurchaseOrder[]>([]);
+  const [statusOptions, setStatusOptions] = useState<Record<string, { text: string }>>({});
   const [searchOrderNo, setSearchOrderNo] = useState('');
-  const [searchCustomerName, setSearchCustomerName] = useState('');
-  const [searchOrderStatus, setSearchOrderStatus] = useState('');
-  const [searchOrderDate, setSearchOrderDate] = useState('');
+  const [searchSupplierId, setSearchSupplierId] = useState('');
+  const [searchStatus, setSearchStatus] = useState('');
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const makeDebounce = useCallback((setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -122,7 +52,7 @@ export default function OrdersPage() {
     getDictDetailsByType('order_status').then((list: any[]) => {
       const map: Record<string, { text: string }> = {};
       list.forEach((item: any) => { map[item.value] = { text: item.label }; });
-      setOrderStatusOptions(map);
+      setStatusOptions(map);
     }).catch(() => {});
 
   }, []);
@@ -133,11 +63,11 @@ export default function OrdersPage() {
   const [btnPerms, setBtnPerms] = useState<Set<string>>(new Set());
   useEffect(() => {
     getMyBtnPerms().then((perms) => {
-      setBtnPerms(new Set(perms['./orders/index'] ?? []));
+      setBtnPerms(new Set(perms['./purchase-orders/index'] ?? []));
     }).catch(() => setBtnPerms(new Set()));
   }, []);
 
-  const columns: ProColumns<Order>[] = [
+  const columns: ProColumns<PurchaseOrder>[] = [
     {
       title: '订单编号',
       dataIndex: 'order_no',
@@ -146,44 +76,34 @@ export default function OrdersPage() {
       sorter: (a, b) => String(a.order_no ?? '').localeCompare(String(b.order_no ?? '')),
     },
     {
-      title: '客户名称',
-      dataIndex: 'customer_name',
+      title: '供应商',
+      dataIndex: 'supplier_id',
       valueType: 'text',
       width: 180,
-      sorter: (a, b) => String(a.customer_name ?? '').localeCompare(String(b.customer_name ?? '')),
-    },
-    {
-      title: '订单状态',
-      dataIndex: 'order_status',
-      valueType: 'select',
-      width: 120,
       search: false,
-      valueEnum: orderStatusOptions,
+      render: (_, record) => record.supplier_id_display || record.supplier_id,
     },
     {
-      title: '订单总金额',
-      dataIndex: 'total_amount',
-      valueType: 'text',
-      width: 180,
-      sorter: (a, b) => (Number(a.total_amount ?? 0) - Number(b.total_amount ?? 0)),
-    },
-    {
-      title: '下单日期',
+      title: '订单日期',
       dataIndex: 'order_date',
       valueType: 'dateTime',
       width: 180,
       sorter: (a, b) => new Date(a.order_date as string).getTime() - new Date(b.order_date as string).getTime(),
     },
     {
-      title: '订单商品明细',
-      dataIndex: 'order_items',
-      valueType: 'text',
-      width: 150,
+      title: '订单状态',
+      dataIndex: 'status',
+      valueType: 'select',
+      width: 120,
       search: false,
-      render: (_, record) => {
-        const items = record.order_items || [];
-        return items.length > 0 ? items.length + ' 条' : '-';
-      },
+      valueEnum: statusOptions,
+    },
+    {
+      title: '总金额',
+      dataIndex: 'total_amount',
+      valueType: 'text',
+      width: 180,
+      sorter: (a, b) => (Number(a.total_amount ?? 0) - Number(b.total_amount ?? 0)),
     },
     {
       title: '创建时间',
@@ -216,14 +136,14 @@ export default function OrdersPage() {
                 form.resetFields();
                 form.setFieldsValue({
                   order_no: record.order_no,
-                  customer_name: record.customer_name,
-                  order_status: record.order_status,
-                  total_amount: record.total_amount,
+                  supplier_id: record.supplier_id,
                   order_date: record.order_date ? dayjs(record.order_date) : null,
-                  order_items: record.order_items || [],
+                  status: record.status,
+                  remark: record.remark,
+                  items: record.items || [],
                 });
                 setEditingRecord(record);
-                setOrderItemsEditableKeys((record.order_items || []).map((d: any) => d.id));
+                setItemsEditableKeys((record.items || []).map((d: any) => d.id));
                 setModalOpen(true);
               }}
             >
@@ -236,7 +156,7 @@ export default function OrdersPage() {
               description="删除后无法恢复。"
               onConfirm={async () => {
                 try {
-                  await deleteOrder(record.id);
+                  await deletePurchaseOrder(record.id);
                   message.success('删除成功');
                   actionRef.current?.reload();
                 } catch (err: any) {
@@ -259,34 +179,31 @@ export default function OrdersPage() {
   const handleSubmit = async (values: Record<string, any>) => {
     try {
       if (editingRecord) {
-        const dto: UpdateOrderDto = {
-          order_no: values.order_no || '',
-          customer_name: values.customer_name || '',
-          order_status: values.order_status || '',
-          total_amount: String(values.total_amount ?? '0'),
+        const dto: UpdatePurchaseOrderDto = {
+          supplier_id: values.supplier_id || undefined,
           order_date: values.order_date && typeof values.order_date === 'object' ? values.order_date.toISOString() : values.order_date || undefined,
-          order_items: (values.order_items || []).map((d: any) => ({
+          status: values.status || '',
+          remark: values.remark || '',
+          items: (values.items || []).map((d: any) => ({
             ...d,
             id: d.id?.length < 36 ? undefined : d.id,
-            product_batches: (d.product_batches || []).map((g: any) => ({ ...g, id: g.id?.length < 36 ? undefined : g.id })),
           })),
         };
-        await updateOrder(editingRecord.id, dto);
+        await updatePurchaseOrder(editingRecord.id, dto);
         message.success('更新成功');
       } else {
-        const dto: CreateOrderDto = {
+        const dto: CreatePurchaseOrderDto = {
           order_no: values.order_no || '',
-          customer_name: values.customer_name || '',
-          order_status: values.order_status || '',
-          total_amount: String(values.total_amount ?? '0'),
+          supplier_id: values.supplier_id || undefined,
           order_date: values.order_date && typeof values.order_date === 'object' ? values.order_date.toISOString() : values.order_date || undefined,
-          order_items: (values.order_items || []).map((d: any) => ({
+          status: values.status || '',
+          remark: values.remark || '',
+          items: (values.items || []).map((d: any) => ({
             ...d,
             id: d.id?.length < 36 ? undefined : d.id,
-            product_batches: (d.product_batches || []).map((g: any) => ({ ...g, id: g.id?.length < 36 ? undefined : g.id })),
           })),
         };
-        await createOrder(dto);
+        await createPurchaseOrder(dto);
         message.success('创建成功');
       }
       setModalOpen(false);
@@ -301,7 +218,7 @@ export default function OrdersPage() {
 
   const handleBatchDelete = async () => {
     try {
-      const result = await batchDeleteOrders(selectedRowKeys);
+      const result = await batchDeletePurchaseOrders(selectedRowKeys);
       message.success(`成功删除 ${result.count} 条记录`);
       setSelectedRowKeys([]);
       actionRef.current?.reload();
@@ -312,48 +229,41 @@ export default function OrdersPage() {
 
   return (
     <>
-      <ProTable<Order>
-        headerTitle="订单表，记录客户订单信息，包含订单商品及商品批次的嵌套结构"
+      <ProTable<PurchaseOrder>
+        headerTitle="采购订单（类型2：主表+子表示例）"
         actionRef={actionRef}
         rowKey="id"
         columns={columns}
         expandable={{
           expandedRowKeys,
           onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as string[]),
-          rowExpandable: (record) => (record.order_items?.length ?? 0) > 0,
+          rowExpandable: (record) => (record.items?.length ?? 0) > 0,
           expandedRowRender: (record) => (
             <Table
               size="small"
               rowKey="id"
-              dataSource={record.order_items || []}
+              dataSource={record.items || []}
               pagination={false}
-              expandable={{
-                rowExpandable: (r) => (r.product_batches?.length ?? 0) > 0,
-                expandedRowRender: (childRow) => (
-                  <Table size="small" rowKey="id" dataSource={childRow.product_batches || []} pagination={false}
-                    columns={[{ title: '批次号', dataIndex: 'batch_no' }, { title: '仓库名称', dataIndex: 'warehouse' }, { title: '该批次出货数量', dataIndex: 'batch_quantity' }, { title: '生产日期', dataIndex: 'production_date' }]}
-                    style={{ margin: '0 24px' }} />
-                ),
-              }}
               columns={[
-                { title: '商品名称', dataIndex: 'product_name' },
-                { title: '商品数量', dataIndex: 'quantity' },
-                { title: '商品单价', dataIndex: 'unit_price' },
-                { title: '小计金额', dataIndex: 'subtotal' },
+                { title: '物料名称', dataIndex: 'material_name' },
+                { title: '规格型号', dataIndex: 'specification' },
+                { title: '数量', dataIndex: 'quantity' },
+                { title: '单价', dataIndex: 'unit_price' },
+                { title: '小计金额', dataIndex: 'amount' },
               ]}
               style={{ margin: '0 48px' }}
             />
           ),
         }}
         search={false}
-        params={{ searchOrderNo, searchCustomerName, searchOrderStatus, searchOrderDate }}
+        params={{ searchOrderNo, searchSupplierId, searchStatus }}
         rowSelection={{
           selectedRowKeys,
           onChange: (keys) => setSelectedRowKeys(keys as string[]),
         }}
         request={async (params) => {
           const { current: page, pageSize } = params;
-          const result = await getOrdersList({ page, pageSize, order_no: searchOrderNo || undefined, customer_name: searchCustomerName || undefined, order_status: searchOrderStatus || undefined, order_date: searchOrderDate || undefined });
+          const result = await getPurchaseOrdersList({ page, pageSize, order_no: searchOrderNo || undefined, supplier_id: searchSupplierId || undefined, status: searchStatus || undefined });
           currentDataRef.current = result.list;
           setExpandedRowKeys([]);
           return {
@@ -368,7 +278,7 @@ export default function OrdersPage() {
             size="small"
             onClick={() => {
               const expandable = currentDataRef.current
-                .filter(r => (r.order_items?.length ?? 0) > 0)
+                .filter(r => (r.items?.length ?? 0) > 0)
                 .map(r => r.id);
               if (expandedRowKeys.length === expandable.length) {
                 setExpandedRowKeys([]);
@@ -390,31 +300,22 @@ export default function OrdersPage() {
             onClear={() => setSearchOrderNo('')}
           />,
           <Input
-            key="search-customer_name"
-            placeholder="搜索客户名称"
+            key="search-supplier_id"
+            placeholder="搜索供应商"
             prefix={<SearchOutlined />}
             allowClear
             style={{ width: 180 }}
-            onChange={makeDebounce(setSearchCustomerName)}
-            onClear={() => setSearchCustomerName('')}
+            onChange={makeDebounce(setSearchSupplierId)}
+            onClear={() => setSearchSupplierId('')}
           />,
           <Input
-            key="search-order_status"
+            key="search-status"
             placeholder="搜索订单状态"
             prefix={<SearchOutlined />}
             allowClear
             style={{ width: 180 }}
-            onChange={makeDebounce(setSearchOrderStatus)}
-            onClear={() => setSearchOrderStatus('')}
-          />,
-          <Input
-            key="search-order_date"
-            placeholder="搜索下单日期"
-            prefix={<SearchOutlined />}
-            allowClear
-            style={{ width: 180 }}
-            onChange={makeDebounce(setSearchOrderDate)}
-            onClear={() => setSearchOrderDate('')}
+            onChange={makeDebounce(setSearchStatus)}
+            onClear={() => setSearchStatus('')}
           />,
           </Space>,
           btnPerms.has('add') && (
@@ -425,7 +326,7 @@ export default function OrdersPage() {
               onClick={() => {
                 form.resetFields();
                 setEditingRecord(null);
-                setOrderItemsEditableKeys([]);
+                setItemsEditableKeys([]);
                 setModalOpen(true);
               }}
             >
@@ -456,7 +357,7 @@ export default function OrdersPage() {
         onOpenChange={(open) => {
           setModalOpen(open);
           if (!open) {
-            setOrderItemsEditableKeys([]);
+            setItemsEditableKeys([]);
             setTimeout(() => setEditingRecord(null), 300);
           }
         }}
@@ -471,16 +372,26 @@ export default function OrdersPage() {
             disabled={!!editingRecord}
           />
 
-          <ProFormText
-            name="customer_name"
-            label="客户名称"
-            placeholder="客户名称"
-            rules={[{ required: true, message: '请输入客户名称' }]}
+          <ProFormSelect
+            name="supplier_id"
+            label="供应商"
+            rules={[{ required: true, message: '请选择供应商' }]}
+            request={async () => {
+              const res = await getSupplierOptions();
+              return res.map((item: any) => ({ label: item.name, value: item.id }));
+            }}
+          />
+
+          <ProFormDateTimePicker
+            name="order_date"
+            label="订单日期"
+            placeholder="订单日期"
+            rules={[{ required: true, message: '请输入订单日期' }]}
             
           />
 
           <ProFormSelect
-            name="order_status"
+            name="status"
             label="订单状态"
             rules={[{ required: true, message: '请选择订单状态' }]}
             request={async () => {
@@ -489,77 +400,70 @@ export default function OrdersPage() {
             }}
           />
 
-          <ProFormDigit
-            name="total_amount"
-            label="订单总金额"
-            placeholder="订单总金额"
+          <ProFormTextArea
+            name="remark"
+            label="备注"
+            placeholder="备注"
             
-            
+            fieldProps={{ rows: 3 }}
           />
 
-          <ProFormDateTimePicker
-            name="order_date"
-            label="下单日期"
-            placeholder="下单日期"
-            rules={[{ required: true, message: '请输入下单日期' }]}
-            
-          />
-
-          <Form.Item name="order_items" label="订单商品明细">
+          <Form.Item name="items" label="订单明细">
             <Form.Item noStyle shouldUpdate>
               {() => {
-                const rows: any[] = form.getFieldValue('order_items') || [];
+                const rows: any[] = form.getFieldValue('items') || [];
                 return (
                   <>
-                    <EditableProTable<OrderOrderItem>
+                    <EditableProTable<PurchaseOrderItem>
                       rowKey="id"
                       value={rows}
-                      onChange={(data) => { form.setFieldValue('order_items', data ?? []); }}
+                      onChange={(data) => { form.setFieldValue('items', data ?? []); }}
                       recordCreatorProps={false}
                       editable={{
                         type: 'multiple',
-                        editableKeys: orderItemsEditableKeys,
-                        onChange: setOrderItemsEditableKeys,
-                        onValuesChange: (_record, dataSource) => { form.setFieldValue('order_items', dataSource); },
+                        editableKeys: itemsEditableKeys,
+                        onChange: setItemsEditableKeys,
+                        onValuesChange: (_record, dataSource) => { form.setFieldValue('items', dataSource); },
                         actionRender: (row, _config, _defaultDoms) => [
                           <a key="delete" onClick={() => {
-                            const cur: any[] = form.getFieldValue('order_items') || [];
-                            form.setFieldValue('order_items', cur.filter((r: any) => r.id !== row.id));
-                            setOrderItemsEditableKeys((keys: React.Key[]) => keys.filter((k) => k !== row.id));
+                            const cur: any[] = form.getFieldValue('items') || [];
+                            form.setFieldValue('items', cur.filter((r: any) => r.id !== row.id));
+                            setItemsEditableKeys((keys: React.Key[]) => keys.filter((k) => k !== row.id));
                           }} style={{ color: '#ff4d4f' }}>删除</a>,
                         ],
                       }}
                       columns={[
         {
-          title: '商品名称',
-          dataIndex: 'product_name',
+          title: '物料名称',
+          dataIndex: 'material_name',
           valueType: 'text',
           formItemProps: { rules: [{ required: true }] },
         },
         {
-          title: '商品数量',
+          title: '规格型号',
+          dataIndex: 'specification',
+          valueType: 'text',
+          formItemProps: { rules: [{ required: false }] },
+        },
+        {
+          title: '数量',
           dataIndex: 'quantity',
           valueType: 'digit',
           formItemProps: { rules: [{ required: true }] },
         },
         {
-          title: '商品单价',
+          title: '单价',
           dataIndex: 'unit_price',
           valueType: 'digit',
           formItemProps: { rules: [{ required: true }] },
         },
         {
           title: '小计金额',
-          dataIndex: 'subtotal',
+          dataIndex: 'amount',
           valueType: 'digit',
           formItemProps: { rules: [{ required: false }] },
         },
-            {
-              title: '商品批次（该订单商品来自哪些库存批次）',
-              dataIndex: 'product_batches',
-              editable: () => false,
-              render: (_: any, row: any) => <OrderOrderItemProductBatcheEditor row={row} form={form} />,
-            },
+
                         { title: '操作', valueType: 'option', width: 60 },
                       ]}
                     />
@@ -570,12 +474,12 @@ export default function OrdersPage() {
                       style={{ marginTop: 8 }}
                       onClick={() => {
                         const tempId = Date.now().toString() + '_' + Math.random().toString(36).slice(2, 8);
-                        const newRow = { id: tempId, product_name: '', quantity: 0, unit_price: 0, subtotal: 0, product_batches: [] };
-                        form.setFieldValue('order_items', [...rows, newRow]);
-                        setOrderItemsEditableKeys((keys: React.Key[]) => [...keys, tempId]);
+                        const newRow = { id: tempId, material_name: '', specification: '', quantity: 0, unit_price: 0, amount: 0 };
+                        form.setFieldValue('items', [...rows, newRow]);
+                        setItemsEditableKeys((keys: React.Key[]) => [...keys, tempId]);
                       }}
                     >
-                      添加订单商品明细
+                      添加订单明细
                     </Button>
                   </>
                 );
