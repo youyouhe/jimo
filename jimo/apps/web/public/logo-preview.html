@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Jimo Logo Preview</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f5f5f5; padding: 40px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; max-width: 900px; }
+  .card { background: white; border-radius: 12px; padding: 32px 24px; text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+  .card h3 { margin: 16px 0 6px; font-size: 14px; color: #333; }
+  .card p { font-size: 12px; color: #888; margin: 0; }
+  .preview { display: flex; align-items: center; gap: 8px; justify-content: center; margin-bottom: 16px; }
+  .preview-text { font-size: 18px; font-weight: 600; color: #1a1a1a; }
+  .dark { background: #001529; }
+  .dark .preview-text { color: white; }
+</style>
+</head>
+<body>
+<h2 style="margin-bottom:24px;color:#333">Jimo Logo 预览 — 选一个</h2>
+<div class="grid">
+
+  <!-- Option A: 积木堆叠 -->
+  <div class="card">
+    <div class="preview">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <rect x="2" y="19" width="13" height="11" rx="3" fill="#4361EE"/>
+        <rect x="10" y="11" width="13" height="11" rx="3" fill="#7209B7" opacity="0.9"/>
+        <rect x="18" y="3" width="12" height="11" rx="3" fill="#4CC9F0"/>
+      </svg>
+      <span class="preview-text">Jimo</span>
+    </div>
+    <div class="dark preview" style="padding:8px 12px;border-radius:8px">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <rect x="2" y="19" width="13" height="11" rx="3" fill="#4361EE"/>
+        <rect x="10" y="11" width="13" height="11" rx="3" fill="#7209B7" opacity="0.9"/>
+        <rect x="18" y="3" width="12" height="11" rx="3" fill="#4CC9F0"/>
+      </svg>
+      <span class="preview-text">Jimo</span>
+    </div>
+    <h3>A — 积木堆叠</h3>
+    <p>三块错落的方块，直接呼应"积木"命名</p>
+  </div>
+
+  <!-- Option B: 几何字母 J -->
+  <div class="card">
+    <div class="preview">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <rect width="32" height="32" rx="8" fill="url(#bg-b)"/>
+        <defs>
+          <linearGradient id="bg-b" x1="0" y1="0" x2="32" y2="32">
+            <stop offset="0%" stop-color="#4361EE"/>
+            <stop offset="100%" stop-color="#7209B7"/>
+          </linearGradient>
+        </defs>
+        <path d="M21 7h-3v13c0 2.5-1.5 4-3.5 4S11 22.5 11 20v-2H8v2c0 4 2.5 6.5 6.5 6.5S21 24 21 20V7z" fill="white"/>
+        <rect x="13" y="7" width="8" height="3" rx="1.5" fill="white"/>
+      </svg>
+      <span class="preview-text">Jimo</span>
+    </div>
+    <div class="dark preview" style="padding:8px 12px;border-radius:8px">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <rect width="32" height="32" rx="8" fill="url(#bg-b2)"/>
+        <defs>
+          <linearGradient id="bg-b2" x1="0" y1="0" x2="32" y2="32">
+            <stop offset="0%" stop-color="#4361EE"/>
+            <stop offset="100%" stop-color="#7209B7"/>
+          </linearGradient>
+        </defs>
+        <path d="M21 7h-3v13c0 2.5-1.5 4-3.5 4S11 22.5 11 20v-2H8v2c0 4 2.5 6.5 6.5 6.5S21 24 21 20V7z" fill="white"/>
+        <rect x="13" y="7" width="8" height="3" rx="1.5" fill="white"/>
+      </svg>
+      <span class="preview-text">Jimo</span>
+    </div>
+    <h3>B — 字母 J 渐变</h3>
+    <p>渐变底色 + 白色 J 字，App icon 感强</p>
+  </div>
+
+  <!-- Option C: 等距立方体 -->
+  <div class="card">
+    <div class="preview">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <path d="M16 3L30 10.5V18L16 25.5L2 18V10.5L16 3Z" fill="#4CC9F0"/>
+        <path d="M2 18L16 25.5V30L2 22.5V18Z" fill="#4361EE"/>
+        <path d="M30 18L16 25.5V30L30 22.5V18Z" fill="#3A0CA3"/>
+      </svg>
+      <span class="preview-text">Jimo</span>
+    </div>
+    <div class="dark preview" style="padding:8px 12px;border-radius:8px">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <path d="M16 3L30 10.5V18L16 25.5L2 18V10.5L16 3Z" fill="#4CC9F0"/>
+        <path d="M2 18L16 25.5V30L2 22.5V18Z" fill="#4361EE"/>
+        <path d="M30 18L16 25.5V30L30 22.5V18Z" fill="#3A0CA3"/>
+      </svg>
+      <span class="preview-text">Jimo</span>
+    </div>
+    <h3>C — 等距立方体</h3>
+    <p>三面不同色的立方体，技术感与立体感兼备</p>
+  </div>
+
+  <!-- Option D: 圆点矩阵 J -->
+  <div class="card">
+    <div class="preview">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <!-- J shape in dots: 4 cols x 5 rows -->
+        <!-- row1: dots at col2,3,4 -->
+        <circle cx="13" cy="4"  r="2.5" fill="#4361EE"/>
+        <circle cx="20" cy="4"  r="2.5" fill="#4361EE"/>
+        <circle cx="27" cy="4"  r="2.5" fill="#4361EE"/>
+        <!-- row2: dot at col4 -->
+        <circle cx="27" cy="11" r="2.5" fill="#4361EE"/>
+        <!-- row3: dot at col4 -->
+        <circle cx="27" cy="18" r="2.5" fill="#4361EE"/>
+        <!-- row4: dots col1,4 -->
+        <circle cx="6"  cy="25" r="2.5" fill="#7209B7"/>
+        <circle cx="13" cy="25" r="2.5" fill="#7209B7"/>
+        <circle cx="20" cy="25" r="2.5" fill="#7209B7"/>
+        <circle cx="27" cy="25" r="2.5" fill="#4361EE"/>
+        <!-- accent dot top-right -->
+        <circle cx="27" cy="4"  r="2.5" fill="#F72585"/>
+      </svg>
+      <span class="preview-text">Jimo</span>
+    </div>
+    <div class="dark preview" style="padding:8px 12px;border-radius:8px">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <circle cx="13" cy="4"  r="2.5" fill="#4CC9F0"/>
+        <circle cx="20" cy="4"  r="2.5" fill="#4CC9F0"/>
+        <circle cx="27" cy="4"  r="2.5" fill="#4CC9F0"/>
+        <circle cx="27" cy="11" r="2.5" fill="#4CC9F0"/>
+        <circle cx="27" cy="18" r="2.5" fill="#4CC9F0"/>
+        <circle cx="6"  cy="25" r="2.5" fill="#7209B7"/>
+        <circle cx="13" cy="25" r="2.5" fill="#7209B7"/>
+        <circle cx="20" cy="25" r="2.5" fill="#7209B7"/>
+        <circle cx="27" cy="25" r="2.5" fill="#4CC9F0"/>
+        <circle cx="27" cy="4"  r="2.5" fill="#F72585"/>
+      </svg>
+      <span class="preview-text">Jimo</span>
+    </div>
+    <h3>D — 圆点矩阵</h3>
+    <p>像素/点阵风，J 字轮廓 + 品牌色点缀</p>
+  </div>
+
+</div>
+<p style="margin-top:32px;color:#888;font-size:13px">上下两行分别是浅色/深色背景效果。告诉我选哪个，或者要调整颜色。</p>
+</body>
+</html>
