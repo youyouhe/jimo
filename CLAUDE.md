@@ -9,65 +9,65 @@ This `release/` directory is a **low-code admin platform** — a pnpm monorepo w
 - **Backend**: NestJS 11 + Drizzle ORM + PostgreSQL 16 + Redis 7
 - **Frontend**: React 18 + Ant Design Pro (Umi 4 Max) + Zustand
 - **BPM**: Spring Boot 2.7 + Flowable 6.8 + MySQL 8
-- **Shared**: `@lowcode/shared` package with ApiResponse types and enums
+- **Shared**: `@jimo/shared` package with ApiResponse types and enums
 - **Infra**: Docker Compose for dev with hot reload
 - Node ≥ 18.16, pnpm ≥ 8, Java 17
 
 ## Commands
 
-All commands run from the `release/lowcode/` directory unless noted otherwise.
+All commands run from the `release/jimo/` directory unless noted otherwise.
 
 ### Development
 
 ```bash
 # 一键启停（推荐）
-cd release/lowcode && bash scripts/dev.sh              # 启动后端 + 前端
-cd release/lowcode && bash scripts/dev.sh stop         # 停止全部
-cd release/lowcode && bash scripts/dev.sh restart      # 重启全部
-cd release/lowcode && bash scripts/dev.sh status       # 查看状态
+cd release/jimo && bash scripts/dev.sh              # 启动后端 + 前端
+cd release/jimo && bash scripts/dev.sh stop         # 停止全部
+cd release/jimo && bash scripts/dev.sh restart      # 重启全部
+cd release/jimo && bash scripts/dev.sh status       # 查看状态
 
 # 单独启动
-cd release/lowcode && bash scripts/dev.sh start backend
-cd release/lowcode && bash scripts/dev.sh start frontend
+cd release/jimo && bash scripts/dev.sh start backend
+cd release/jimo && bash scripts/dev.sh start frontend
 
 # 查看日志
-cd release/lowcode && bash scripts/dev.sh logs        # 全部
-cd release/lowcode && bash scripts/dev.sh logs backend  # 只看后端
+cd release/jimo && bash scripts/dev.sh logs        # 全部
+cd release/jimo && bash scripts/dev.sh logs backend  # 只看后端
 ```
 
 脚本自动处理：`.env` 加载、shared 包编译检查、僵尸进程清理。
 
 ```bash
 # Install all workspace dependencies
-cd release/lowcode && pnpm install
+cd release/jimo && pnpm install
 
 # Start infrastructure only (PostgreSQL, MySQL, Redis, MinIO)
 docker compose -f release/infrastructure/docker-compose.dev.yml up -d postgres mysql redis minio
 
 # Run a single NestJS test
-cd release/lowcode/apps/server && pnpm run test -- -t "test name pattern"
+cd release/jimo/apps/server && pnpm run test -- -t "test name pattern"
 ```
 
 ### Build
 
 ```bash
 # Build the shared package first
-cd release/lowcode/packages/shared && pnpm run build
+cd release/jimo/packages/shared && pnpm run build
 
 # Build backend
-cd release/lowcode/apps/server && pnpm run build
+cd release/jimo/apps/server && pnpm run build
 
 # Build frontend
-cd release/lowcode/apps/web && pnpm run build
+cd release/jimo/apps/web && pnpm run build
 
-# Build all via Turborepo (from lowcode root)
-cd release/lowcode && pnpm run build
+# Build all via Turborepo (from jimo root)
+cd release/jimo && pnpm run build
 ```
 
 ### Database
 
 ```bash
-cd release/lowcode/apps/server
+cd release/jimo/apps/server
 pnpm run db:generate    # Generate Drizzle migrations from schema changes
 pnpm run db:migrate     # Apply pending migrations
 pnpm run db:seed        # Seed initial data (admin user, roles, menus)
@@ -85,7 +85,7 @@ mvn spring-boot:run               # Run directly (needs MySQL on localhost:3306)
 ### Lint & Format
 
 ```bash
-cd release/lowcode
+cd release/jimo
 pnpm run lint         # Lint all workspaces via Turbo
 pnpm run format       # Prettier across all TypeScript files
 ```
@@ -96,10 +96,10 @@ pnpm run format       # Prettier across all TypeScript files
 
 ```
 release/
-├── lowcode/                  # pnpm monorepo (NestJS + React)
-│   ├── apps/server/          # NestJS backend (@lowcode/server)
-│   ├── apps/web/             # React frontend (@lowcode/web)
-│   ├── packages/shared/      # Shared types & enums (@lowcode/shared)
+├── jimo/                  # pnpm monorepo (NestJS + React)
+│   ├── apps/server/          # NestJS backend (@jimo/server)
+│   ├── apps/web/             # React frontend (@jimo/web)
+│   ├── packages/shared/      # Shared types & enums (@jimo/shared)
 │   ├── docker/               # Dockerfiles (dev + prod)
 │   └── scripts/dev.sh        # Dev start/stop/status script
 ├── bpm/bpm-service/          # Java Spring Boot + Flowable BPM
@@ -150,7 +150,7 @@ Other key directories:
 
 - **Response envelope**: `{ code: number, msg: string, data: T }` — `code: 0` = success
 - **Pagination**: `{ code: 0, data: { list: T[], total: number, page: number, pageSize: number } }`
-- **Error codes** (from `@lowcode/shared`): `1xxx` auth, `2xxx` validation, `3xxx` domain, `5xxx` server
+- **Error codes** (from `@jimo/shared`): `1xxx` auth, `2xxx` validation, `3xxx` domain, `5xxx` server
 - Every API must be decorated with `@ApiTags()`, `@ApiOperation()`, and response DTOs for Swagger
 - Swagger UI: `http://localhost:8888/api/docs`
 
@@ -168,11 +168,11 @@ Other key directories:
 - **Initial state**: `getInitialState()` in `app.tsx` fetches accessible menus on load, persisted in `useUserStore.menuTree`.
 - **Access control**: `access.ts` provides role-based flags (`isSuperAdmin`, `isAdmin`, etc.) for Umi's access plugin.
 
-### Shared Package (`@lowcode/shared`)
+### Shared Package (`@jimo/shared`)
 
 - `api.ts` — `ApiResponse<T>`, `PaginatedData<T>`, `ok()`, `err()` response helpers
 - `enums.ts` — `UserStatus`, `RoleCode`, `ApiErrorCode`
-- Imported by both `@lowcode/server` and `@lowcode/web` as `workspace:*`
+- Imported by both `@jimo/server` and `@jimo/web` as `workspace:*`
 - Must be built first before other packages can import: `cd packages/shared && pnpm run build`
 
 ### BPM Service (Java / Spring Boot)
@@ -185,7 +185,7 @@ Other key directories:
 
 ## Environment Variables
 
-Required (set in `release/lowcode/.env` for local dev or passed to Docker):
+Required (set in `release/jimo/.env` for local dev or passed to Docker):
 
 | Variable | Purpose |
 |----------|---------|
@@ -201,9 +201,9 @@ Optional: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `MYSQL_ROOT_PASSW
 ## Key Constraints
 
 - **Never read files under `node_modules/`** — use lock files, configs, or official docs instead
-- `@lowcode/shared` must be built before `@lowcode/server` or `@lowcode/web` — the workspace dependency resolves to its `dist/` output
+- `@jimo/shared` must be built before `@jimo/server` or `@jimo/web` — the workspace dependency resolves to its `dist/` output
 - Backend uses **soft delete**: set `deletedAt` via `sql\`NOW()\``, never hard-delete rows. All queries must include `isNull(table.deletedAt)`.
 - The `ResponseInterceptor` auto-wraps controller return values. If a controller returns `{ code, ... }` directly, the interceptor passes it through unchanged.
 - Casbin uses `keyMatch2` for path matching — `:id` segments in policies match any path segment.
-- The `release/lowcode/docker/` directory contains Dockerfiles. Dev Dockerfiles mount source as volumes for hot reload; prod Dockerfiles copy built artifacts.
+- The `release/jimo/docker/` directory contains Dockerfiles. Dev Dockerfiles mount source as volumes for hot reload; prod Dockerfiles copy built artifacts.
 - Frontend `.umirc.ts` proxy directs `/api` to `http://localhost:8888` in dev. In Docker Compose, the web container is a standalone Umi dev server.

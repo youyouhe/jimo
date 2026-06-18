@@ -6,7 +6,7 @@ SHELL = /bin/bash
 # Run from repo root: make -f release/Makefile <target>
 # =============================================================
 
-LOWCODE_DIR = release/lowcode
+LOWCODE_DIR = release/jimo
 INFRA_DIR  = release/infrastructure
 
 # ---- Low-Code Platform ----

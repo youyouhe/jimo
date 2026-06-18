@@ -122,7 +122,7 @@ services:
   server:
     build:
       context: ..
-      dockerfile: release/lowcode/docker/Dockerfile.server.dev
+      dockerfile: release/jimo/docker/Dockerfile.server.dev
     container_name: lowcode-server
     restart: unless-stopped
     env_file: .env
@@ -134,8 +134,8 @@ services:
     ports:
       - "8888:8888"
     volumes:
-      - ./release/lowcode/apps/server/src:/app/apps/server/src:ro
-      - ./release/lowcode/packages/shared/src:/app/packages/shared/src:ro
+      - ./release/jimo/apps/server/src:/app/apps/server/src:ro
+      - ./release/jimo/packages/shared/src:/app/packages/shared/src:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -154,7 +154,7 @@ services:
   web:
     build:
       context: ..
-      dockerfile: release/lowcode/docker/Dockerfile.web.dev
+      dockerfile: release/jimo/docker/Dockerfile.web.dev
     container_name: lowcode-web
     restart: unless-stopped
     environment:
@@ -162,8 +162,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./release/lowcode/apps/web/src:/app/apps/web/src:ro
-      - ./release/lowcode/apps/web/.umirc.ts:/app/apps/web/.umirc.ts:ro
+      - ./release/jimo/apps/web/src:/app/apps/web/src:ro
+      - ./release/jimo/apps/web/.umirc.ts:/app/apps/web/.umirc.ts:ro
     depends_on:
       server:
         condition: service_healthy
