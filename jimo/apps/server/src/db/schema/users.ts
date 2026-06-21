@@ -8,6 +8,7 @@ import {
   index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { sysDepartments } from './sys-departments.js';
 
 export const UserRole = {
   SUPER_ADMIN: 'super_admin',
@@ -34,6 +35,8 @@ export const sysUsers = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    deptId: uuid('dept_id').references(() => sysDepartments.id, { onDelete: 'set null' }),
+    bpmUserId: varchar('bpm_user_id', { length: 32 }),
   },
   (t) => [
     uniqueIndex('idx_sys_users_username_active')
@@ -48,6 +51,12 @@ export const sysUsers = pgTable(
     index('idx_sys_users_status_active')
       .on(t.status)
       .where(sql`${t.deletedAt} IS NULL`),
+    index('idx_sys_users_dept_active')
+      .on(t.deptId)
+      .where(sql`${t.deletedAt} IS NULL AND ${t.deptId} IS NOT NULL`),
+    index('idx_sys_users_bpm_user_id')
+      .on(t.bpmUserId)
+      .where(sql`${t.bpmUserId} IS NOT NULL`),
   ],
 );
 

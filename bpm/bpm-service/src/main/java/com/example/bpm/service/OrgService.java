@@ -55,4 +55,40 @@ public class OrgService {
     public String getUserDept(String userId) {
         return orgRepository.getUserDept(userId);
     }
+
+    // ============== Sync write API (NestJS → BPM org mirror) ==============
+
+    public boolean deptExists(String deptId) {
+        return orgRepository.deptExists(deptId);
+    }
+
+    /** Create a BPM user; generates and returns the EMP id. */
+    public String createUser(String name, String deptId, String email, String title) {
+        String id = orgRepository.nextUserId();
+        orgRepository.createUser(id, name, deptId, email, title);
+        // Default approver role (R02 = ROLE_CONTRACT_MGR, has process:view / approve perms)
+        // so synced users can participate in approvals. Role mapping is a future refinement.
+        orgRepository.assignRole(id, "R02");
+        return id;
+    }
+
+    public void updateUser(String id, String name, String deptId, String email, String title) {
+        orgRepository.updateUser(id, name, deptId, email, title);
+    }
+
+    public void deleteUser(String id) {
+        orgRepository.deleteUser(id);
+    }
+
+    public void createDept(String id, String name, String parentId, String leadId) {
+        orgRepository.createDept(id, name, parentId, leadId);
+    }
+
+    public void updateDept(String id, String name, String parentId, String leadId) {
+        orgRepository.updateDept(id, name, parentId, leadId);
+    }
+
+    public void deleteDept(String id) {
+        orgRepository.deleteDept(id);
+    }
 }

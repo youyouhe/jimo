@@ -37,3 +37,29 @@ export const ApiErrorCode = {
 } as const;
 
 export type ApiErrorCodeValue = (typeof ApiErrorCode)[keyof typeof ApiErrorCode];
+
+/**
+ * Approval lifecycle status for a business record.
+ * Stored on `lc_business_approvals.status` and used by both the BPM callback
+ * path and the built-in NestJS approval engine.
+ */
+export enum BusinessApprovalStatus {
+  DRAFT = 'DRAFT',
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  PUBLISHED = 'PUBLISHED',
+  WITHDRAWN = 'WITHDRAWN',
+}
+
+/**
+ * Which engine executes the approval flow for a business record.
+ * Stored on `lc_business_approvals.executor` to route through the unified
+ * ApprovalService facade.
+ */
+export enum ApprovalExecutor {
+  /** Legacy contract flow runs in the external BPM (Flowable) service. */
+  BPM = 'bpm',
+  /** Low-code tables use the built-in NestJS state machine. */
+  NESTJS = 'nestjs',
+}

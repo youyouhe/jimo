@@ -105,7 +105,7 @@ load_env() {
     return 0
   else
     warn ".env 文件不存在 ($ENV_FILE)，后端可能因缺少 DATABASE_URL 等变量启动失败"
-    warn "请执行: cp release/lowcode/.env.example release/lowcode/.env"
+    warn "请执行: cp release/jimo/.env.example release/jimo/.env"
     return 1
   fi
 }

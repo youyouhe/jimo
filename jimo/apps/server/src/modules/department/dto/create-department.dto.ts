@@ -6,21 +6,26 @@ export class CreateDepartmentDto {
   @IsNotEmpty()
   @IsString()
   @MaxLength(100)
-  name: string = '';
+  name!: string;
 
   @ApiProperty({ description: '部门编码', maxLength: 50 })
   @IsNotEmpty()
   @IsString()
   @MaxLength(50)
-  code: string = '';
+  code!: string;
 
   @ApiPropertyOptional({ description: '部门描述' })
   @IsOptional()
   @IsString()
   description: string = '';
 
-  @ApiPropertyOptional({ description: '上级部门' })
+  @ApiPropertyOptional({ description: '上级部门 (sys_departments.id)' })
   @IsOptional()
   @IsUUID()
-  parent_id: string | null = null;
+  parentId: string | null = null;
+
+  @ApiPropertyOptional({ description: '部门负责人 (sys_users.id)' })
+  @IsOptional()
+  @IsUUID()
+  leadId: string | null = null;
 }

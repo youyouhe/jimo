@@ -214,6 +214,9 @@ public class ContractController {
         taskService.addComment(t.getId(), t.getProcessInstanceId(), record);
 
         runtimeService.setVariable(t.getProcessInstanceId(), "assignee_" + t.getId(), userId);
+        // Stamp the latest decision so the status-change webhook can carry who acted.
+        runtimeService.setVariable(t.getProcessInstanceId(), "lastApprover", userId);
+        runtimeService.setVariable(t.getProcessInstanceId(), "lastApprovalComment", comment);
 
         Map<String, Object> vars = new HashMap<>();
         if ("approvalStep".equals(t.getTaskDefinitionKey()) || "managerReview".equals(t.getTaskDefinitionKey())) {

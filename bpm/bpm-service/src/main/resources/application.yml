@@ -7,7 +7,7 @@ spring:
   application:
     name: bpm-service
   datasource:
-    url: jdbc:mysql://localhost:3306/gin_vue_admin?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=utf8mb4
+    url: jdbc:mysql://localhost:3306/gin_vue_admin?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8
     username: root
     password: 123456
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -20,6 +20,15 @@ spring:
 flowable:
   database-schema-update: true
   async-executor-activate: false
+
+# Outbound approval-outcome webhook to the NestJS low-code platform.
+# The shared secret MUST match NestJS's BPM_CALLBACK_SECRET.
+nestjs:
+  callback:
+    enabled: ${NESTJS_CALLBACK_ENABLED:true}
+    url: ${NESTJS_CALLBACK_URL:http://localhost:8888/api/v1/webhooks/bpm/approval}
+    secret: ${NESTJS_CALLBACK_SECRET:change-me-in-prod}
+    timeout: 5000
 
 logging:
   level:

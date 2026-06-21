@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:flowable="http://flowable.org/bpmn"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+             targetNamespace="http://flowable.org/bpmn">
+
+    <!--
+      Generic approval process for ANY low-code business table.
+      Same data-driven N-level chain as contractApprovalUniversal, but with
+      generic variables (businessType / businessKey) and the genericApprovalListener.
+      Variables expected: initiator, businessType, businessKey, approvalChain (JSON array),
+      chainIndex. The caller (ApprovalController.start, via NestJS) supplies the chain.
+    -->
+    <process id="genericApproval" name="通用审批流程" isExecutable="true">
+
+        <startEvent id="start" name="开始"/>
+
+        <scriptTask id="setRule" name="解析审批规则" scriptFormat="groovy">
+            <script><![CDATA[
+                import groovy.json.JsonSlurper
+                def chain = new JsonSlurper().parseText(approvalChain)
+                int idx = chainIndex as int
+                if (idx < chain.size()) {
+                    execution.setVariable("assigneeRule", chain[idx])
+                    execution.setVariable("currentStepLabel", chain[idx])
+                    execution.setVariable("hasMoreSteps", idx < chain.size() - 1)
+                } else {
+                    execution.setVariable("assigneeRule", null)
+                    execution.setVariable("hasMoreSteps", false)
+                }
+            ]]></script>
+        </scriptTask>
+
+        <userTask id="approvalStep" name="审批">
+            <extensionElements>
+                <flowable:taskListener event="create"
+                    delegateExpression="${dynamicAssigneeListener}"/>
+            </extensionElements>
+        </userTask>
+
+        <exclusiveGateway id="gwApproved" name="审批结果"/>
+
+        <userTask id="rejectedNotice" name="已驳回"
+                  flowable:assignee="${initiator}">
+            <extensionElements>
+                <flowable:taskListener event="create"
+                    delegateExpression="${genericApprovalListener}"/>
+            </extensionElements>
+        </userTask>
+        <endEvent id="endRejected" name="驳回结束"/>
+
+        <exclusiveGateway id="gwMoreSteps" name="是否还有下一步"/>
+
+        <scriptTask id="advance" name="进入下一步" scriptFormat="groovy">
+            <script><![CDATA[
+                int idx = chainIndex as int
+                execution.setVariable("chainIndex", idx + 1)
+            ]]></script>
+        </scriptTask>
+
+        <userTask id="approvedNotice" name="已通过"
+                  flowable:assignee="${initiator}">
+            <extensionElements>
+                <flowable:taskListener event="create"
+                    delegateExpression="${genericApprovalListener}"/>
+            </extensionElements>
+        </userTask>
+        <endEvent id="endApproved" name="通过结束"/>
+
+        <sequenceFlow id="f1" sourceRef="start" targetRef="setRule"/>
+        <sequenceFlow id="f3" sourceRef="setRule" targetRef="approvalStep"/>
+        <sequenceFlow id="f4" sourceRef="approvalStep" targetRef="gwApproved"/>
+
+        <sequenceFlow id="fApproved" sourceRef="gwApproved" targetRef="gwMoreSteps" name="通过">
+            <conditionExpression xsi:type="tFormalExpression">${approved == true}</conditionExpression>
+        </sequenceFlow>
+        <sequenceFlow id="fRejected" sourceRef="gwApproved" targetRef="rejectedNotice" name="驳回">
+            <conditionExpression xsi:type="tFormalExpression">${approved != true}</conditionExpression>
+        </sequenceFlow>
+
+        <sequenceFlow id="fMore" sourceRef="gwMoreSteps" targetRef="advance" name="继续审批">
+            <conditionExpression xsi:type="tFormalExpression">${hasMoreSteps == true}</conditionExpression>
+        </sequenceFlow>
+        <sequenceFlow id="fLoopBack" sourceRef="advance" targetRef="setRule"/>
+
+        <sequenceFlow id="fDone" sourceRef="gwMoreSteps" targetRef="approvedNotice" name="审批完成">
+            <conditionExpression xsi:type="tFormalExpression">${hasMoreSteps != true}</conditionExpression>
+        </sequenceFlow>
+
+        <sequenceFlow id="fEndApproved" sourceRef="approvedNotice" targetRef="endApproved"/>
+        <sequenceFlow id="fEndRejected" sourceRef="rejectedNotice" targetRef="endRejected"/>
+
+    </process>
+
+    <bpmndi:BPMNDiagram id="BPMNDiagram_generic">
+        <bpmndi:BPMNPlane id="BPMNPlane_generic" bpmnElement="genericApproval">
+            <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+                <omgdc:Bounds x="100" y="80" width="36" height="36"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_setRule" bpmnElement="setRule">
+                <omgdc:Bounds x="80" y="270" width="80" height="50"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_approval" bpmnElement="approvalStep">
+                <omgdc:Bounds x="80" y="380" width="80" height="60"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_gwApproved" bpmnElement="gwApproved">
+                <omgdc:Bounds x="95" y="500" width="50" height="50"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_rejected" bpmnElement="rejectedNotice">
+                <omgdc:Bounds x="260" y="510" width="80" height="50"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_endRejected" bpmnElement="endRejected">
+                <omgdc:Bounds x="282" y="620" width="36" height="36"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_gwMore" bpmnElement="gwMoreSteps">
+                <omgdc:Bounds x="95" y="620" width="50" height="50"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_advance" bpmnElement="advance">
+                <omgdc:Bounds x="80" y="740" width="80" height="50"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_approved" bpmnElement="approvedNotice">
+                <omgdc:Bounds x="80" y="830" width="80" height="50"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNShape id="s_endApproved" bpmnElement="endApproved">
+                <omgdc:Bounds x="102" y="940" width="36" height="36"/>
+            </bpmndi:BPMNShape>
+            <bpmndi:BPMNEdge id="e_f1" bpmnElement="f1">
+                <omgdi:waypoint x="118" y="116"/><omgdi:waypoint x="120" y="270"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e_f3" bpmnElement="f3">
+                <omgdi:waypoint x="120" y="320"/><omgdi:waypoint x="120" y="380"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e_f4" bpmnElement="f4">
+                <omgdi:waypoint x="120" y="440"/><omgdi:waypoint x="120" y="500"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e_fRejected" bpmnElement="fRejected">
+                <omgdi:waypoint x="145" y="525"/><omgdi:waypoint x="260" y="535"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e_endR" bpmnElement="fEndRejected">
+                <omgdi:waypoint x="300" y="560"/><omgdi:waypoint x="300" y="620"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e_fApproved" bpmnElement="fApproved">
+                <omgdi:waypoint x="120" y="550"/><omgdi:waypoint x="120" y="620"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e_fMore" bpmnElement="fMore">
+                <omgdi:waypoint x="120" y="670"/><omgdi:waypoint x="120" y="740"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e_loop" bpmnElement="fLoopBack">
+                <omgdi:waypoint x="80" y="765"/><omgdi:waypoint x="30" y="765"/><omgdi:waypoint x="30" y="295"/><omgdi:waypoint x="80" y="295"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e_fDone" bpmnElement="fDone">
+                <omgdi:waypoint x="120" y="670"/><omgdi:waypoint x="120" y="830"/>
+            </bpmndi:BPMNEdge>
+            <bpmndi:BPMNEdge id="e_endA" bpmnElement="fEndApproved">
+                <omgdi:waypoint x="120" y="880"/><omgdi:waypoint x="120" y="940"/>
+            </bpmndi:BPMNEdge>
+        </bpmndi:BPMNPlane>
+    </bpmndi:BPMNDiagram>
+</definitions>

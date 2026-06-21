@@ -30,6 +30,8 @@ import { RolesGuard } from './common/guards/roles.guard';
 import { AuthzGuard } from './common/guards/authz.guard';
 import { DepartmentModule } from './modules/department/department.module';
 import { PostModule } from './modules/post/post.module';
+import { ApprovalModule } from './modules/approval/approval.module';
+import { BpmSyncModule } from './modules/bpm-sync/bpm-sync.module';
 
 @Module({
   imports: [
@@ -48,6 +50,8 @@ import { PostModule } from './modules/post/post.module';
     DictionaryDetailModule,
     OperationRecordModule,
     PostModule,
+    ApprovalModule,
+    BpmSyncModule,
     DepartmentModule,    ApiModule,
     AutocodeModule,
     JwtBlacklistModule,

@@ -5,6 +5,7 @@ import {
   IsEmail,
   IsMobilePhone,
   IsIn,
+  IsUUID,
   MinLength,
   MaxLength,
 } from 'class-validator';
@@ -53,4 +54,9 @@ export class CreateUserDto {
   @IsString()
   @IsIn(['super_admin', 'admin', 'editor', 'viewer'])
   role?: string = 'viewer';
+
+  @ApiPropertyOptional({ description: '所属部门 (sys_departments.id), 用于 BPM 审批人解析' })
+  @IsOptional()
+  @IsUUID()
+  deptId?: string;
 }

@@ -12,7 +12,8 @@ async function bootstrap() {
     if (!process.env[key]) throw new Error(`Missing required env var: ${key}`);
   }
 
-  const app = await NestFactory.create(AppModule);
+  // rawBody is required for HMAC signature verification on inbound BPM webhooks.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   app.setGlobalPrefix('api/v1');
 

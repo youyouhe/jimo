@@ -23,6 +23,7 @@ import { sysRoleMenus } from '../../db/schema/role-menus';
 import { sysRoles } from '../../db/schema/roles';
 import { sysAuthorityBtns } from '../../db/schema/authority-btns';
 import { sysApis } from '../../db/schema/apis';
+import { sysApprovalFlows } from '../../db/schema/sys-approval-flows';
 import { CASBIN_SERVICE_TOKEN, ICasbinService } from '../role/role.service';
 import { DictionaryDetailService } from '../dictionary-detail/dictionary-detail.service';
 import { EncodingRuleService } from '../encoding-rule/encoding-rule.service';
@@ -606,7 +607,39 @@ export class AutocodeService {
       this.logger.error(` Auto-create menu FAILED for '${dto.tableName}':`, menuErr);
     }
 
+    // If approval flow enabled, write the per-type chain config (sys_approval_flows)
+    if (dto.approvalFlow?.enabled) {
+      try {
+        await this.upsertApprovalFlowConfig(dto.tableName, dto.approvalFlow.defaultChain ?? []);
+        const chain = dto.approvalFlow.defaultChain?.length ? dto.approvalFlow.defaultChain : ['deptHead'];
+        this.logger.log(` approval flow enabled for '${dto.tableName}' (chain=${chain.join(',')})`);
+      } catch (afErr: unknown) {
+        this.logger.error(` approval flow config write FAILED for '${dto.tableName}':`, afErr);
+      }
+    }
+
     return { createdFiles };
+  }
+
+  /** Upsert the per-business-type approval chain config (sys_approval_flows). */
+  private async upsertApprovalFlowConfig(tableName: string, defaultChain: string[]): Promise<void> {
+    const chain = defaultChain.length ? defaultChain : ['deptHead'];
+    const config = { defaultChain: chain };
+    const existing = await this.db
+      .select()
+      .from(sysApprovalFlows)
+      .where(and(eq(sysApprovalFlows.businessType, tableName), isNull(sysApprovalFlows.deletedAt)))
+      .limit(1);
+    if (existing.length > 0) {
+      await this.db
+        .update(sysApprovalFlows)
+        .set({ name: `${tableName} 审批`, config, enabled: true, updatedAt: new Date() })
+        .where(eq(sysApprovalFlows.id, existing[0]!.id));
+    } else {
+      await this.db
+        .insert(sysApprovalFlows)
+        .values({ businessType: tableName, name: `${tableName} 审批`, config, enabled: true });
+    }
   }
 
   // =========================================================================
@@ -1353,6 +1386,15 @@ export class AutocodeService {
         }
       } catch (menuErr: unknown) {
         this.logger.error(` Auto-create menu FAILED for '${dto.tableName}':`, menuErr);
+      }
+      // If approval flow enabled, write the per-type chain config (sys_approval_flows)
+      if (dto.approvalFlow?.enabled) {
+        try {
+          await this.upsertApprovalFlowConfig(dto.tableName, dto.approvalFlow.defaultChain ?? []);
+          this.logger.log(` approval flow enabled for '${dto.tableName}'`);
+        } catch (afErr: unknown) {
+          this.logger.error(` approval flow config write FAILED for '${dto.tableName}':`, afErr);
+        }
       }
       await updateStep(4, 'completed');
 

@@ -324,7 +324,15 @@ export async function delete${n.pascalSingular}(id: string): Promise<void> {
 export async function batchDelete${n.pascalName}(ids: string[]): Promise<{ count: number }> {
   return request.delete('/lc/${n.kebabName}/batch', { data: { ids } });
 }
-${relationFetchFunctions.join('')}
+${dto.approvalFlow?.enabled ? `
+/**
+ * Submit this ${n.kebabSingular} for approval. The chain is resolved dynamically server-side
+ * from sys_approval_flows (business_type: '${dto.tableName}') + the record.
+ */
+export async function submit${n.pascalSingular}Approval(id: string, record?: Record<string, any>): Promise<any> {
+  return request.post('/approvals/start', { businessType: '${dto.tableName}', businessId: id, record });
+}
+` : ''}${relationFetchFunctions.join('')}
 `;
 }
 
@@ -870,6 +878,7 @@ ${grandchildNormalize ? grandchildNormalize + '\n' : ''}${tsOverrides ? tsOverri
     `update${n.pascalSingular}`,
     `delete${n.pascalSingular}`,
     `batchDelete${n.pascalName}`,
+    ...(dto.approvalFlow?.enabled ? [`submit${n.pascalSingular}Approval`] : []),
   ];
   const typeImports = [
     `${n.pascalSingular}`,
@@ -1098,6 +1107,22 @@ ${columnLines.join('\n')}
               </Button>
             </Popconfirm>
           )}
+          ${dto.approvalFlow?.enabled ? `<Button
+            type="link"
+            size="small"
+            onClick={async () => {
+              try {
+                await submit${n.pascalSingular}Approval(record.id, record);
+                message.success('已提交审批');
+                actionRef.current?.reload();
+              } catch (err: any) {
+                message.error(err.message || '提交审批失败');
+              }
+            }}
+          >
+            提交审批
+          </Button>
+          ` : ''}
         </Space>
       ),
     },

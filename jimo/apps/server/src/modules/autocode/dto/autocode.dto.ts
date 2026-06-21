@@ -252,6 +252,30 @@ export class MockDataDto {
   count: number = 10;
 }
 
+/**
+ * Approval-flow option for a generated table. When enabled, the generator:
+ *  - writes a sys_approval_flows config (business_type = tableName) so
+ *    ApprovalService.startApproval can resolve a dynamic chain at submit;
+ *  - emits a "提交审批" action on the generated page.
+ * The chain is a sequence of BPM resolution-rule names (deptHead / deptFinance /
+ * ceo / ...) resolved dynamically at runtime by BPM's AssigneeResolver.
+ */
+export class ApprovalFlowConfigDto {
+  @ApiProperty({ description: 'Enable approval flow for this table', default: false })
+  @IsNotEmpty()
+  @IsBoolean()
+  enabled: boolean = false;
+
+  @ApiPropertyOptional({
+    description: 'Default approval chain (resolution-rule names). Defaults to [deptHead].',
+    example: ['deptHead', 'deptFinance'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  defaultChain?: string[];
+}
+
 export class AutoCodeDto {
   @ApiProperty({
     description: 'Database table name in snake_case',
@@ -310,4 +334,13 @@ export class AutoCodeDto {
   @ValidateNested()
   @Type(() => MockDataDto)
   mockData?: MockDataDto;
+
+  @ApiPropertyOptional({
+    description: 'Enable approval flow: writes a sys_approval_flows config + emits a 提交审批 button',
+    default: { enabled: false },
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ApprovalFlowConfigDto)
+  approvalFlow?: ApprovalFlowConfigDto;
 }

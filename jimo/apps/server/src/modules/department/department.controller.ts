@@ -25,18 +25,20 @@ import {
   ApiResponse as ApiResp,
   PaginatedResponse,
 } from '@jimo/shared';
-import { Departments } from '../../db/schema/departments';
+import { SysDepartment } from '../../db/schema/sys-departments';
 
-@ApiTags('lc/departments')
+// Backed by the persistent sys_departments table (not an autocode lc_* table).
+// TODO: coordinate a frontend rename from /api/v1/lc/departments -> /api/v1/departments.
+@ApiTags('departments')
 @ApiBearerAuth()
-@Controller('lc/departments')
+@Controller('departments')
 export class DepartmentController {
   constructor(private readonly departmentService: DepartmentService) {}
 
   @Get()
   @ApiOperation({ summary: 'Get paginated list of departments' })
   @ApiResponse({ status: 200, description: 'Returns paginated departments' })
-  async findAll(@Query() query: QueryDepartmentDto): Promise<PaginatedResponse<Departments>> {
+  async findAll(@Query() query: QueryDepartmentDto): Promise<PaginatedResponse<SysDepartment>> {
     const data = await this.departmentService.findAll(query);
     return { code: 0, msg: 'success', data };
   }
@@ -45,7 +47,7 @@ export class DepartmentController {
   @ApiOperation({ summary: 'Get department by id' })
   @ApiResponse({ status: 200, description: 'Returns the department' })
   @ApiResponse({ status: 404, description: 'Department not found' })
-  async findOne(@Param('id') id: string): Promise<ApiResp<Departments>> {
+  async findOne(@Param('id') id: string): Promise<ApiResp<SysDepartment>> {
     const data = await this.departmentService.findOne(id);
     return { code: 0, msg: 'success', data };
   }
@@ -55,7 +57,7 @@ export class DepartmentController {
   @ApiOperation({ summary: 'Create a new department' })
   @ApiResponse({ status: 201, description: 'Department created successfully' })
   @ApiResponse({ status: 409, description: 'Unique constraint conflict' })
-  async create(@Body() dto: CreateDepartmentDto): Promise<ApiResp<Departments>> {
+  async create(@Body() dto: CreateDepartmentDto): Promise<ApiResp<SysDepartment>> {
     const data = await this.departmentService.create(dto);
     return { code: 0, msg: 'success', data };
   }
@@ -68,7 +70,7 @@ export class DepartmentController {
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateDepartmentDto,
-  ): Promise<ApiResp<Departments>> {
+  ): Promise<ApiResp<SysDepartment>> {
     const data = await this.departmentService.update(id, dto);
     return { code: 0, msg: 'success', data };
   }

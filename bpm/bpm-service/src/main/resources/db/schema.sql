@@ -186,3 +186,21 @@ CREATE TABLE IF NOT EXISTS contract_fulfillments (
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ==================== Generic Approval (low-code business tables) ====================
+-- One row per business record under approval. The contract flow keeps its own
+-- `contracts` table; this serves every other business_type routed through
+-- ApprovalController (NestJS passes business_key + approval_chain).
+CREATE TABLE IF NOT EXISTS approval_requests (
+    id                    VARCHAR(64)  PRIMARY KEY,
+    business_type         VARCHAR(50)  NOT NULL,
+    business_key          VARCHAR(64)  NOT NULL,
+    process_key           VARCHAR(64)  NOT NULL,
+    status                VARCHAR(20)  NOT NULL DEFAULT 'PENDING',  -- PENDING/APPROVED/REJECTED
+    initiator_id          VARCHAR(32),
+    process_instance_id   VARCHAR(64),
+    created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_approval_biz (business_type, business_key),
+    KEY idx_approval_proc (process_instance_id)
+);

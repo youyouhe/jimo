@@ -113,4 +113,58 @@ public class OrgRepository {
                 (rs, i) -> rs.getString("name"), deptId);
         return list.isEmpty() ? deptId : list.get(0);
     }
+
+    // ============== Sync write API (NestJS → BPM org mirror) ==============
+
+    /** Next EMP id: MAX(numeric suffix of existing EMP ids) + 1, zero-padded to 3. */
+    public String nextUserId() {
+        Integer max = db.queryForObject(
+                "SELECT MAX(CAST(SUBSTRING(id, 4) AS UNSIGNED)) FROM users WHERE id LIKE 'EMP%'",
+                Integer.class);
+        int next = (max == null ? 0 : max) + 1;
+        return String.format("EMP%03d", next);
+    }
+
+    public boolean deptExists(String deptId) {
+        if (deptId == null) return false;
+        Integer c = db.queryForObject("SELECT COUNT(*) FROM departments WHERE id=?", Integer.class, deptId);
+        return c != null && c > 0;
+    }
+
+    public void createUser(String id, String name, String deptId, String email, String title) {
+        db.update("INSERT INTO users (id, name, dept_id, email, title) VALUES (?,?,?,?,?)",
+                id, name, deptId, email, title);
+    }
+
+    /** Assign a BPM role to a user (INSERT IGNORE → idempotent on re-sync). */
+    public void assignRole(String userId, String roleId) {
+        db.update("INSERT IGNORE INTO user_roles (id, user_id, role_id) VALUES (?,?,?)",
+                "UR_" + userId, userId, roleId);
+    }
+
+    /** Full-field replace; caller (NestJS sync) sends the complete state. */
+    public int updateUser(String id, String name, String deptId, String email, String title) {
+        return db.update("UPDATE users SET name=?, dept_id=?, email=?, title=? WHERE id=?",
+                name, deptId, email, title, id);
+    }
+
+    public int deleteUser(String id) {
+        return db.update("DELETE FROM users WHERE id=?", id);
+    }
+
+    public void createDept(String id, String name, String parentId, String leadId) {
+        // Upsert: NestJS sync always POSTs; a re-sync or retry must not fail on duplicate PK.
+        db.update("INSERT INTO departments (id, name, parent_id, lead_id) VALUES (?,?,?,?) " +
+                        "ON DUPLICATE KEY UPDATE name=VALUES(name), parent_id=VALUES(parent_id), lead_id=VALUES(lead_id)",
+                id, name, parentId, leadId);
+    }
+
+    public int updateDept(String id, String name, String parentId, String leadId) {
+        return db.update("UPDATE departments SET name=?, parent_id=?, lead_id=? WHERE id=?",
+                name, parentId, leadId, id);
+    }
+
+    public int deleteDept(String id) {
+        return db.update("DELETE FROM departments WHERE id=?", id);
+    }
 }

@@ -1,12 +1,16 @@
 import request from './request';
 
+// Backed by the persistent sys_departments table (native system entity).
 export interface Department {
   id: string;
   name: string;
   code: string;
   description: string | null;
-  parent_id: string | null;
+  parentId: string | null;
+  leadId: string | null;
+  // joined display fields from the backend
   parent_id_display: string | null;
+  lead_display: string | null;
   createdAt: string;
   updatedAt: string;
   createdBy: string | null;
@@ -21,8 +25,8 @@ export interface DepartmentOption {
 export interface DepartmentListParams {
   page?: number;
   pageSize?: number;
-    name?: string;
-    code?: string;
+  name?: string;
+  code?: string;
 }
 
 export interface DepartmentListResult {
@@ -33,17 +37,19 @@ export interface DepartmentListResult {
 }
 
 export interface CreateDepartmentDto {
-    name: string;
-    code: string;
-    description?: string;
-    parent_id?: string;
+  name: string;
+  code: string;
+  description?: string;
+  parentId?: string | null;
+  leadId?: string | null;
 }
 
 export interface UpdateDepartmentDto {
-    name?: string;
-    code?: string;
-    description?: string;
-    parent_id?: string;
+  name?: string;
+  code?: string;
+  description?: string;
+  parentId?: string | null;
+  leadId?: string | null;
 }
 
 export interface BatchDeleteDto {
@@ -54,50 +60,48 @@ export interface BatchDeleteDto {
  * Get paginated departments list.
  */
 export async function getDepartmentsList(params?: DepartmentListParams): Promise<DepartmentListResult> {
-  return request.get('/lc/departments', { params });
+  return request.get('/departments', { params });
 }
 
 /**
  * Get a single department by ID.
  */
 export async function getDepartment(id: string): Promise<Department> {
-  return request.get(`/lc/departments/${id}`);
+  return request.get(`/departments/${id}`);
 }
 
 /**
  * Create a new department.
  */
 export async function createDepartment(dto: CreateDepartmentDto): Promise<Department> {
-  return request.post('/lc/departments', dto);
+  return request.post('/departments', dto);
 }
 
 /**
  * Update an existing department.
  */
 export async function updateDepartment(id: string, dto: UpdateDepartmentDto): Promise<Department> {
-  return request.patch(`/lc/departments/${id}`, dto);
+  return request.patch(`/departments/${id}`, dto);
 }
 
 /**
  * Delete a department by ID (soft delete).
  */
 export async function deleteDepartment(id: string): Promise<void> {
-  return request.delete(`/lc/departments/${id}`);
+  return request.delete(`/departments/${id}`);
 }
 
 /**
- * Batch delete departments by IDs (soft delete).
- * Returns { count: number }.
+ * Batch delete departments by IDs (soft delete). Returns { count: number }.
  */
 export async function batchDeleteDepartments(ids: string[]): Promise<{ count: number }> {
-  return request.delete('/lc/departments/batch', { data: { ids } });
+  return request.delete('/departments/batch', { data: { ids } });
 }
 
 /**
- * Get departments options for select dropdown.
+ * Get department options for select dropdowns (parent picker).
  */
 export async function getDepartmentOptions(): Promise<DepartmentOption[]> {
-  const res = await request.get('/lc/departments', { params: { pageSize: 100 } });
+  const res = await request.get('/departments', { params: { pageSize: 200 } });
   return res.list || res.data || [];
 }
-

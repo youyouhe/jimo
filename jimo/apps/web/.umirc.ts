@@ -43,6 +43,7 @@ export default defineConfig({
         { path: '/system/jwt-blacklist', name: 'JWT黑名单', icon: 'StopOutlined', component: './jwt-blacklist/index' },
         { path: '/system/config', name: '系统配置', icon: 'ControlOutlined', component: './system/index' },
         { path: '/system/init', name: '系统初始化', icon: 'ThunderboltOutlined', component: './init/index' },
+        { path: '/system/departments', name: '部门管理', icon: 'ApartmentOutlined', component: './departments/index' },
       ],
     },
     // ── System Tools (directory) ──
@@ -89,12 +90,6 @@ export default defineConfig({
     // Generated business module routes are added by updateUmiRoutes() at
     // code-generation time.  patchClientRoutes filters them at runtime
     // against the DB menu tree for role-based access control.
-    {
-      path: '/lc/departments',
-      name: '部门表',
-      icon: 'TableOutlined',
-      component: './departments/index',
-    },
     {
       path: '/lc/posts',
       name: '博客文章',

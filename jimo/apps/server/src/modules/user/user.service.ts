@@ -19,6 +19,7 @@ import { QueryUserDto } from './dto/query-user.dto';
 import { ApiErrorCode, PaginatedData } from '@jimo/shared';
 import { SQL } from 'drizzle-orm';
 import { CASBIN_SERVICE_TOKEN, ICasbinService } from '../role/role.service';
+import { BpmOrgSyncService } from '../bpm-sync/bpm-org-sync.service';
 
 export type SafeUser = Omit<SysUser, 'passwordHash'>;
 
@@ -27,6 +28,7 @@ export class UserService {
   constructor(
     @Inject(DATABASE_CONNECTION) private readonly db: DrizzleDb,
     @Optional() @Inject(CASBIN_SERVICE_TOKEN) private readonly casbinService: ICasbinService | null,
+    private readonly bpmSync: BpmOrgSyncService,
   ) {}
 
   async findAll(query: QueryUserDto): Promise<PaginatedData<SafeUser>> {
@@ -131,10 +133,12 @@ export class UserService {
         phone: dto.phone,
         role: dto.role ?? 'viewer',
         status: dto.status !== undefined ? (dto.status as 1 | 2) : 1,
+        deptId: dto.deptId,
       })
       .returning();
 
     const newUser = rows[0]!;
+    await this.bpmSync.syncUser(newUser.id);
     const { passwordHash: _omit, ...safeUser } = newUser;
     return safeUser;
   }
@@ -148,6 +152,7 @@ export class UserService {
       phone?: string | null;
       role?: string;
       status?: 1 | 2;
+      deptId?: string | null;
       updatedAt?: Date;
     };
 
@@ -160,6 +165,7 @@ export class UserService {
     if (dto.phone !== undefined) updateData.phone = dto.phone;
     if (dto.role !== undefined) updateData.role = dto.role;
     if (dto.status !== undefined) updateData.status = dto.status as 1 | 2;
+    if (dto.deptId !== undefined) updateData.deptId = dto.deptId ?? null;
 
     const rows = await this.db
       .update(sysUsers)
@@ -184,17 +190,20 @@ export class UserService {
       }
     }
 
+    await this.bpmSync.syncUser(id);
     const { passwordHash: _omit, ...safeUser } = rows[0]!;
     return safeUser;
   }
 
   async remove(id: string): Promise<void> {
-    await this.findOne(id);
+    const existing = await this.findOne(id);
 
     await this.db
       .update(sysUsers)
       .set({ deletedAt: sql`NOW()` })
       .where(and(eq(sysUsers.id, id), isNull(sysUsers.deletedAt)));
+
+    await this.bpmSync.deleteUser(existing.bpmUserId);
   }
 
   async getProfile(userId: string): Promise<SafeUser> {
