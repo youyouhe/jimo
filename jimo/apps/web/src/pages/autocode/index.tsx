@@ -498,6 +498,9 @@ export default function AutocodePage() {
   // Mock-data generation (opt-in, default off; count default 10)
   const [mockEnabled, setMockEnabled] = useState(false);
   const [mockCount, setMockCount] = useState(10);
+  // Approval flow (opt-in; default chain deptHead)
+  const [approvalEnabled, setApprovalEnabled] = useState(false);
+  const [approvalChain, setApprovalChain] = useState('deptHead');
 
   // Update mode state
   const [updateMode, setUpdateMode] = useState(false);
@@ -646,9 +649,13 @@ export default function AutocodePage() {
   const startGenerateJob = async (dto: AutoCodeDto) => {
     // Unified mock-data injection — applies to all three callers:
     // manual handleGenerate, AI handleAiGenerate, and AI batch handleAiGenerateBatch.
-    const finalDto: AutoCodeDto = mockEnabled
-      ? { ...dto, mockData: { enabled: true, count: mockCount } }
-      : dto;
+    const finalDto: AutoCodeDto = {
+      ...dto,
+      ...(mockEnabled ? { mockData: { enabled: true, count: mockCount } } : {}),
+      ...(approvalEnabled
+        ? { approvalFlow: { enabled: true, defaultChain: approvalChain.split(',').map((s) => s.trim()).filter(Boolean) } }
+        : {}),
+    };
     const { jobId } = await executeGenerate(finalDto);
     const kebab = dto.tableName.toLowerCase().replace(/_/g, '-');
     const modulePath = `/lc/${kebab}`;
@@ -1048,6 +1055,27 @@ export default function AutocodePage() {
                       onChange={(v) => setMockCount(Number(v) || 10)}
                       disabled={!mockEnabled}
                       style={{ width: 96 }}
+                    />
+                  </Tooltip>
+                </Space>
+              </Form.Item>
+            </Col>
+            <Col span={6}>
+              <Form.Item label="启用审批流">
+                <Space>
+                  <Switch
+                    checked={approvalEnabled}
+                    onChange={setApprovalEnabled}
+                    checkedChildren="开"
+                    unCheckedChildren="关"
+                  />
+                  <Tooltip title="审批链（BPM 规则名，逗号分隔）。deptHead=部门负责人, ceo=总裁, deptFinance=财务负责人">
+                    <Input
+                      value={approvalChain}
+                      onChange={(e) => setApprovalChain(e.target.value)}
+                      disabled={!approvalEnabled}
+                      style={{ width: 160 }}
+                      placeholder="deptHead"
                     />
                   </Tooltip>
                 </Space>
