@@ -210,6 +210,8 @@ export function buildCreateTableSql(tableName: string, fields: AutoCodeField[], 
   cols.push(`  "deleted_at" timestamptz`);
   cols.push(`  "created_by" uuid`);
   cols.push(`  "updated_by" uuid`);
+  cols.push(`  "owner_id" uuid`);
+  cols.push(`  "shared_with" jsonb DEFAULT '[]'::jsonb`);
   return `CREATE TABLE IF NOT EXISTS "${tableName}" (\n${cols.join(',\n')}\n)`;
 }
 
@@ -380,6 +382,8 @@ const SYSTEM_COLUMNS = new Set([
   'deleted_at',
   'created_by',
   'updated_by',
+  'owner_id',
+  'shared_with',
 ]);
 
 /** True for business (non-system) column names. */

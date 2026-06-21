@@ -32,6 +32,7 @@ import { DepartmentModule } from './modules/department/department.module';
 import { PostModule } from './modules/post/post.module';
 import { ApprovalModule } from './modules/approval/approval.module';
 import { BpmSyncModule } from './modules/bpm-sync/bpm-sync.module';
+import { OwnershipModule } from './common/ownership/ownership.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { BpmSyncModule } from './modules/bpm-sync/bpm-sync.module';
     PostModule,
     ApprovalModule,
     BpmSyncModule,
+    OwnershipModule,
     DepartmentModule,    ApiModule,
     AutocodeModule,
     JwtBlacklistModule,

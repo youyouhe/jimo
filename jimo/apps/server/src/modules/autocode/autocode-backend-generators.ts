@@ -60,6 +60,7 @@ export function generateSchema(dto: AutoCodeDto): string {
   fieldLines.push("    deletedAt: timestamp('deleted_at', { withTimezone: true }),");
   fieldLines.push("    createdBy: uuid('created_by'),");
   fieldLines.push("    updatedBy: uuid('updated_by'),");
+  fieldLines.push("    ownerId: uuid('owner_id'),");
 
   const uniqueFields = dto.fields.filter((f) => f.unique && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
   let extraClause = '';
@@ -773,6 +774,7 @@ ${oneToManyFields.map((field) => `        await this.remove${toPascalCase(field.
 } from '@nestjs/common';
 import { eq, and, isNull, like, sql, count, inArray, gte, lte, desc${hasManyToOne ? ', getTableColumns' : ''} } from 'drizzle-orm';
 ${hasSelfRef ? "import { alias } from 'drizzle-orm/pg-core';\n" : ''}import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
+import { OwnershipHelper } from '../../common/ownership/ownership.helper';
 import { ${n.schemaVar}, ${n.schemaType} } from '../../db/schema/${n.kebabName}';
 ${manyToOneSchemaImports}${childImports}${hasCodeFields ? "import { EncodingRuleService } from '../encoding-rule/encoding-rule.service.js';\n" : ''}import { Create${n.pascalSingular}Dto } from './dto/create-${n.kebabSingular}.dto';
 import { Update${n.pascalSingular}Dto } from './dto/update-${n.kebabSingular}.dto';
@@ -784,9 +786,10 @@ import { SQL } from 'drizzle-orm';
 export class ${n.pascalSingular}Service {
   constructor(
     @Inject(DATABASE_CONNECTION) private readonly db: DrizzleDb,${hasCodeFields ? `\n    private readonly encodingRuleService: EncodingRuleService,` : ''}
+    private readonly ownershipHelper: OwnershipHelper,
   ) {}
 
-  async findAll(query: Query${n.pascalSingular}Dto): Promise<PaginatedData<${n.schemaType}>> {
+  async findAll(query: Query${n.pascalSingular}Dto, userId?: string, isAdmin: boolean = false): Promise<PaginatedData<${n.schemaType}>> {
     const { page, pageSize${(() => {
       const names = searchableFields
         .filter(f => !(f.type === 'relation' && (f.relationType === 'one-to-many')))
@@ -802,6 +805,8 @@ export class ${n.pascalSingular}Service {
     const offset = (page - 1) * pageSize;
 
     const conditions: SQL[] = [isNull(${n.schemaVar}.deletedAt)];
+    const _ownership = this.ownershipHelper.visibleCondition(${n.schemaVar}.ownerId, userId, isAdmin);
+    if (_ownership) conditions.push(_ownership);
 
 ${queryFilters}
     const whereClause = and(...conditions);
@@ -846,12 +851,13 @@ ${oneToManyAttachInFindOne}
     return rows[0]!;
   }
 
-  async create(dto: Create${n.pascalSingular}Dto): Promise<${n.schemaType}> {
+  async create(dto: Create${n.pascalSingular}Dto, userId?: string): Promise<${n.schemaType}> {
 ${uniqueChecks}${hasCodeFields ? codeFields.map(f => `    const ${f.name} = await this.encodingRuleService.generateNext('${f.ruleId ?? ''}');`).join('\n') + '\n' : ''}${oneToManyFields.length > 0 ? `
     return this.db.transaction(async (tx) => {
       const rows = await tx
         .insert(${n.schemaVar})
         .values({
+          ownerId: userId,
 ${creatableFields.map(f => f.type === 'decimal' ? `          ${f.name}: String(dto.${f.name}),` : f.type === 'timestamp' ? `          ${f.name}: dto.${f.name} ? new Date(dto.${f.name}) : ${f.required ? 'new Date()' : 'null'},` : `          ${f.name}: dto.${f.name},`).join('\n')}${hasCodeFields ? '\n' + codeFields.map(f => `          ${f.name},`).join('\n') : ''}
         })
         .returning();
@@ -883,6 +889,7 @@ ${manyToManyFields.map((f) => `      if (dto.${f.name} && dto.${f.name}.length >
     const rows = await this.db
       .insert(${n.schemaVar})
       .values({
+        ownerId: userId,
 ${creatableFields.map(f => f.type === 'decimal' ? `        ${f.name}: String(dto.${f.name}),` : f.type === 'timestamp' ? `        ${f.name}: dto.${f.name} ? new Date(dto.${f.name}) : ${f.required ? 'new Date()' : 'null'},` : `        ${f.name}: dto.${f.name},`).join('\n')}${hasCodeFields ? '\n' + codeFields.map(f => `        ${f.name},`).join('\n') : ''}
       })
       .returning();
@@ -1005,6 +1012,7 @@ import {
   ApiOperation,
   ApiResponse,
 } from '@nestjs/swagger';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ${n.pascalSingular}Service } from './${n.kebabSingular}.service';
 import { Create${n.pascalSingular}Dto } from './dto/create-${n.kebabSingular}.dto';
 import { Update${n.pascalSingular}Dto } from './dto/update-${n.kebabSingular}.dto';
@@ -1025,8 +1033,9 @@ export class ${n.pascalSingular}Controller {
   @Get()
   @ApiOperation({ summary: 'Get paginated list of ${n.kebabName}' })
   @ApiResponse({ status: 200, description: 'Returns paginated ${n.kebabName}' })
-  async findAll(@Query() query: Query${n.pascalSingular}Dto): Promise<PaginatedResponse<${n.schemaType}>> {
-    const data = await this.${n.camelSingular}Service.findAll(query);
+  async findAll(@Query() query: Query${n.pascalSingular}Dto, @CurrentUser() user: { sub: string; role: string }): Promise<PaginatedResponse<${n.schemaType}>> {
+    const isAdmin = user?.role === 'super_admin' || user?.role === 'admin';
+    const data = await this.${n.camelSingular}Service.findAll(query, user?.sub, isAdmin);
     return { code: 0, msg: 'success', data };
   }
 
@@ -1044,8 +1053,8 @@ export class ${n.pascalSingular}Controller {
   @ApiOperation({ summary: 'Create a new ${n.kebabSingular}' })
   @ApiResponse({ status: 201, description: '${n.pascalSingular} created successfully' })
   @ApiResponse({ status: 409, description: 'Unique constraint conflict' })
-  async create(@Body() dto: Create${n.pascalSingular}Dto): Promise<ApiResp<${n.schemaType}>> {
-    const data = await this.${n.camelSingular}Service.create(dto);
+  async create(@Body() dto: Create${n.pascalSingular}Dto, @CurrentUser() user: { sub: string }): Promise<ApiResp<${n.schemaType}>> {
+    const data = await this.${n.camelSingular}Service.create(dto, user?.sub);
     return { code: 0, msg: 'success', data };
   }
 
