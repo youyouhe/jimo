@@ -61,6 +61,7 @@ export function generateSchema(dto: AutoCodeDto): string {
   fieldLines.push("    createdBy: uuid('created_by'),");
   fieldLines.push("    updatedBy: uuid('updated_by'),");
   fieldLines.push("    ownerId: uuid('owner_id'),");
+  fieldLines.push("    sharedWith: jsonb('shared_with'),");
 
   const uniqueFields = dto.fields.filter((f) => f.unique && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
   let extraClause = '';
@@ -92,6 +93,7 @@ export function generateSchema(dto: AutoCodeDto): string {
     }
   }
   usedTypes.add('timestamp');
+  usedTypes.add('jsonb');
   const sortedTypes = Array.from(usedTypes).sort();
   const typeImports = sortedTypes.map((t) => `  ${t},`).join('\n');
 
@@ -805,7 +807,7 @@ export class ${n.pascalSingular}Service {
     const offset = (page - 1) * pageSize;
 
     const conditions: SQL[] = [isNull(${n.schemaVar}.deletedAt)];
-    const _ownership = this.ownershipHelper.visibleCondition(${n.schemaVar}.ownerId, userId, isAdmin);
+    const _ownership = this.ownershipHelper.visibleCondition(${n.schemaVar}.ownerId, ${n.schemaVar}.sharedWith, userId, isAdmin);
     if (_ownership) conditions.push(_ownership);
 
 ${queryFilters}

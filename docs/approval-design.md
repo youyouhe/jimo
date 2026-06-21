@@ -207,8 +207,23 @@ CREATE INDEX "idx_business_approvals_status" ON "lc_business_approvals" USING bt
 ### 端到端闭环
 代码生成器勾选"启用审批" → 写 `sys_approval_flows` + 生成提交按钮 → 用户提交 → NestJS 按记录动态算 chain → BPM 通用流 → `AssigneeResolver` 按组织动态解析审批人 → HMAC 回调 → NestJS 状态同步。
 
-### 仍待办（不阻塞）
-- P2 归属引擎（`OwnableCrudService` + owner/dept/shared + 行级可见性 A/B/C/D；`sys_users.dept_id` 已铺）。
+## 11. P2（归属引擎）实施状态
+
+> 路径决策：A（OwnershipHelper 注入 + universal 列），非"继承基类"——因生成的 service 有 relation/code 复杂逻辑，基类重构代价大。
+
+### P2.owner MVP ✅（已提交 2e74579，2026-06-21）
+- 生成的 `lc_*` 表 universal 加 `owner_id`（+ `shared_with` 在 SQL 层备用）。
+- `OwnershipHelper`（global）：非管理员 → `owner_id = 当前用户`；admin/super_admin → 不过滤（看全部）。
+- 生成器：`findAll(query, userId, isAdmin)` 注入过滤；`create(dto, userId)` 盖戳 `ownerId`；controller 经 `@CurrentUser` 传用户/角色。
+- **E2E**：非管理员 GET→只看自己（1 条）；super_admin GET→全部（3 条）。
+
+### P2 仍待办
+- `shared_with` 过滤（Drizzle schema 加 jsonb 列 + 过滤 `owner_id=me OR shared_with ∋ me`）——完成策略 B。
+- 通用 `share` / `transferOwnership` API（动态表更新，离职交接锚点）。
+- 策略 A（强私有）/ C（部门共享）/ D（公开资产 + 版本）。
+
+## 12. 仍待办（全局）
+- P2 后续（见 §11）：shared_with 过滤 + share/transfer + 策略 A/C/D。
 - P4 策略 D 版本与发布。
 - 小尾巴：NestJS 角色→BPM 角色精细映射、`approval:approve` 专用权限、BPM CJK 存储复核、admin 走 `sys_apis` 注册。
 - 存量坑：drizzle-orm `.d.ts` 畸形（obs 6576，`nest build` 带错仍 emit）；DB 用 `drizzle-kit push` 同步（迁移快照脱节，勿用 migrate）。

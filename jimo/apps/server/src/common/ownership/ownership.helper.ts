@@ -1,13 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { eq, SQL } from 'drizzle-orm';
+import { eq, or, sql, SQL } from 'drizzle-orm';
 
 /**
- * Row-level ownership isolation (Strategy B core).
+ * Row-level ownership isolation (Strategy B: owner + shared).
  *
- * Generated services call `visibleCondition(table.ownerId, userId, isAdmin)`
- * inside their findAll where-clause. Admins/super_admins bypass (see all);
- * everyone else sees only rows they own. `shared_with`-based sharing will hook
- * in here once that column is surfaced in generated Drizzle schemas.
+ * Generated services call `visibleCondition(table.ownerId, table.sharedWith, userId, isAdmin)`
+ * inside their findAll where-clause. Admins/super_admins bypass (see all); everyone else sees
+ * rows they own OR that are shared with them (shared_with jsonb contains their user id).
  */
 @Injectable()
 export class OwnershipHelper {
@@ -15,9 +14,17 @@ export class OwnershipHelper {
    * @returns a Drizzle condition, or undefined when the caller bypasses
    *          ownership (admins) — i.e. no filter applied.
    */
-  visibleCondition(ownerCol: unknown, userId: string | undefined, isAdmin: boolean): SQL | undefined {
+  visibleCondition(
+    ownerCol: unknown,
+    sharedWithCol: unknown,
+    userId: string | undefined,
+    isAdmin: boolean,
+  ): SQL | undefined {
     if (isAdmin) return undefined;
     if (!userId) return eq(ownerCol as never, '__nobody__' as never) as SQL;
-    return eq(ownerCol as never, userId as never) as SQL;
+    return or(
+      eq(ownerCol as never, userId as never),
+      sql`${sharedWithCol} @> ${sql.raw(`'${JSON.stringify([userId])}'::jsonb`)}`,
+    ) as SQL;
   }
 }

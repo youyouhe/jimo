@@ -1,10 +1,16 @@
 import { Global, Module } from '@nestjs/common';
 import { OwnershipHelper } from './ownership.helper';
+import { OwnershipService } from './ownership.service';
+import { OwnershipController } from './ownership.controller';
 
-/** Global — injected into every generated CRUD service. */
+/**
+ * Global — OwnershipHelper is injected into every generated CRUD service.
+ * OwnershipController exposes share/transfer endpoints.
+ */
 @Global()
 @Module({
-  providers: [OwnershipHelper],
+  controllers: [OwnershipController],
+  providers: [OwnershipHelper, OwnershipService],
   exports: [OwnershipHelper],
 })
 export class OwnershipModule {}
