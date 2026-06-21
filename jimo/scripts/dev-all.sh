@@ -69,7 +69,9 @@ cmd_up() {
   c "[4/5] NestJS backend (port $NESTJS_PORT)..."
   if port_up "$NESTJS_PORT"; then warn "backend port $NESTJS_PORT already in use, skipping"; else
     set -a; . "$JIMO/.env"; set +a
-    BPM_CALLBACK_SECRET="$SECRET" nohup bash -c "cd '$JIMO/apps/server' && exec node dist/main" > "$LOG/backend.log" 2>&1 &
+    # force localhost BPM URL (override any docker-network name from .env)
+    BPM_CALLBACK_SECRET="$SECRET" BPM_SERVICE_URL="http://localhost:$BPM_PORT" \
+      nohup bash -c "cd '$JIMO/apps/server' && exec node dist/main" > "$LOG/backend.log" 2>&1 &
     echo $! > "$PID/backend.pid"
     wait_http "http://localhost:$NESTJS_PORT/api/v1/health" "backend" 60 && ok "backend ready" || err "backend not ready — see $LOG/backend.log"
   fi
