@@ -3,11 +3,11 @@
 # dev-all.sh — bring up the FULL approval test stack in one command:
 #   infra (docker: postgres/mysql/redis/minio) + BPM (Java) + NestJS backend + React frontend
 #
-# Usage:
-#   bash scripts/dev-all.sh up        # start everything (builds shared + backend dist first)
-#   bash scripts/dev-all.sh down      # stop everything (leaves docker infra running)
-#   bash scripts/dev-all.sh status    # show ports + health
-#   bash scripts/dev-all.sh logs bpm|backend|frontend|infra
+# Usage (from release/ or release/jimo/):
+#   bash jimo/scripts/dev-all.sh up        # start everything (builds shared + backend dist first)
+#   bash jimo/scripts/dev-all.sh down      # stop everything (leaves docker infra running)
+#   bash jimo/scripts/dev-all.sh status    # show ports + health
+#   bash jimo/scripts/dev-all.sh logs bpm|backend|frontend|infra
 #
 # Env (optional):
 #   APPROVAL_SECRET   HMAC shared secret (default: bpm-dev-shared-secret-2026) — MUST match both sides
@@ -17,7 +17,8 @@
 #
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# lives at release/jimo/scripts/ — ROOT is two levels up (release/)
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 JIMO="$ROOT/jimo"
 BPM="$ROOT/bpm/bpm-service"
 INFRA="$ROOT/infrastructure/docker-compose.dev.yml"

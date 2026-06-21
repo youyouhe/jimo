@@ -7,10 +7,10 @@
 
 ```bash
 cd release
-bash scripts/dev-all.sh up        # 一键：infra(docker) + BPM + 后端 + 前端
-bash scripts/dev-all.sh status    # 查看端口/健康
-bash scripts/dev-all.sh logs backend   # 看某服务日志（bpm|backend|frontend|infra）
-bash scripts/dev-all.sh down      # 停后端/BPM/前端（docker infra 保留）
+bash jimo/scripts/dev-all.sh up        # 一键：infra(docker) + BPM + 后端 + 前端
+bash jimo/scripts/dev-all.sh status    # 查看端口/健康
+bash jimo/scripts/dev-all.sh logs backend   # 看某服务日志（bpm|backend|frontend|infra）
+bash jimo/scripts/dev-all.sh down      # 停后端/BPM/前端（docker infra 保留）
 ```
 
 启动后：
