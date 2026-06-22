@@ -33,8 +33,9 @@ export class ApprovalController {
   @Get('my-tasks')
   @ApiOperation({ summary: 'My pending approval tasks (proxied from BPM)' })
   async myTasks(@CurrentUser() user: { sub: string }) {
-    const data = await this.approvalService.getMyTasks(user.sub);
-    return { code: 0, msg: 'success', data };
+    // Return BPM response directly — it's already {code,message,data} envelope.
+    // The ResponseInterceptor passes envelopes through unchanged.
+    return await this.approvalService.getMyTasks(user.sub);
   }
 
   @Post(':processInstanceId/approve')
@@ -44,8 +45,7 @@ export class ApprovalController {
     @Body() dto: ApproveDto,
     @CurrentUser() user: { sub: string },
   ) {
-    const data = await this.approvalService.approve(processInstanceId, user.sub, dto.approved, dto.comment);
-    return { code: 0, msg: 'success', data };
+    return await this.approvalService.approve(processInstanceId, user.sub, dto.approved, dto.comment);
   }
 }
 
