@@ -42,6 +42,24 @@ export class ApprovalController {
     return { code: 0, msg: 'success', data: await this.approvalService.myInitiated(user.sub) };
   }
 
+  @Get('my-done')
+  @ApiOperation({ summary: 'Approval tasks I have already acted on (已办)' })
+  async myDone(@CurrentUser() user: { sub: string }) {
+    return { code: 0, msg: 'success', data: await this.approvalService.myDoneTasks(user.sub) };
+  }
+
+  @Get('finalized')
+  @ApiOperation({ summary: 'Finalized (approved/rejected) approvals I am involved in (办结)' })
+  async finalized(@CurrentUser() user: { sub: string }) {
+    return { code: 0, msg: 'success', data: await this.approvalService.finalized(user.sub) };
+  }
+
+  @Get('my-drafts')
+  @ApiOperation({ summary: 'My unsubmitted / returned business records (我的起草)' })
+  async myDrafts(@CurrentUser() user: { sub: string }) {
+    return { code: 0, msg: 'success', data: await this.approvalService.myDrafts(user.sub) };
+  }
+
   @Post(':processInstanceId/approve')
   @ApiOperation({ summary: 'Approve / reject my active task (proxied to BPM)' })
   async approve(

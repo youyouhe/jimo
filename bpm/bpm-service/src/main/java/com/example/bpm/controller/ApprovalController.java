@@ -64,6 +64,15 @@ public class ApprovalController {
         return Result.ok(Map.of("list", items, "total", items.size()));
     }
 
+    /** Tasks the caller has already completed (已办), with action + comment parsed. */
+    @GetMapping("/my-done")
+    public Result<?> myDone(HttpServletRequest request) {
+        AuthInterceptor.requirePermission(request, "process:view");
+        String userId = (String) request.getAttribute("currentUserId");
+        List<Map<String, Object>> items = approvalService.myDoneTasks(userId);
+        return Result.ok(Map.of("list", items, "total", items.size()));
+    }
+
     /** Approve or reject the caller's active task in a process. Body: { approved, comment? }. */
     @PostMapping("/{processInstanceId}/approve")
     public Result<?> approve(@PathVariable String processInstanceId,

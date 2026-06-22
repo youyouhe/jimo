@@ -1,58 +1,59 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Card, Tabs, Table, Tag, Button, Modal, Form, Input, Radio, message } from 'antd';
+import { Card, Tabs, Table, Tag, Button, Modal, Form, Input, Radio, message, Empty } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined } from '@ant-design/icons';
+import { history } from '@umijs/max';
 import {
   getMyTasks,
-  getMyInitiated,
+  getMyDone,
+  getFinalized,
+  getMyDrafts,
   approveTask,
   type ApprovalTask,
-  type MyInitiatedItem,
+  type DoneTask,
+  type FinalizedItem,
+  type DraftItem,
 } from '@/services/approval';
 import dayjs from 'dayjs';
 
 /**
- * 待办审批 — the approval center where approvers see their pending tasks
- * and submitters track their initiated approvals.
+ * 流程中心 (Workflow Center) — covers the approval lifecycle states:
+ *   待办 (pending for me) · 已办 (done by me) · 办结 (finalized) · 我的起草 (my
+ *   drafts) · 委托替办 (delegation — coming soon).
+ *
+ * Data sources differ per tab: 待办/已办 come from BPM (proxied), 办结/我的起草
+ * are resolved locally by NestJS.
  */
 export default function ApprovalsPage() {
   const [activeTab, setActiveTab] = useState('pending');
   const [pending, setPending] = useState<ApprovalTask[]>([]);
-  const [initiated, setInitiated] = useState<MyInitiatedItem[]>([]);
+  const [done, setDone] = useState<DoneTask[]>([]);
+  const [finalized, setFinalized] = useState<FinalizedItem[]>([]);
+  const [drafts, setDrafts] = useState<DraftItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [currentPi, setCurrentPi] = useState<string | null>(null);
   const [form] = Form.useForm();
 
-  const loadPending = useCallback(async () => {
+  const load = useCallback(async (tab: string) => {
     setLoading(true);
     try {
-      const res = await getMyTasks();
-      setPending(res?.list ?? []);
-    } catch {
-      message.error('加载待办失败');
-    }
-    setLoading(false);
-  }, []);
-
-  const loadInitiated = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await getMyInitiated();
-      setInitiated(res?.list ?? []);
-    } catch {
-      message.error('加载已发起失败');
+      if (tab === 'pending') setPending((await getMyTasks())?.list ?? []);
+      else if (tab === 'done') setDone((await getMyDone())?.list ?? []);
+      else if (tab === 'finalized') setFinalized((await getFinalized())?.list ?? []);
+      else if (tab === 'drafts') setDrafts((await getMyDrafts())?.list ?? []);
+    } catch (err: any) {
+      message.error(err?.message || '加载失败');
     }
     setLoading(false);
   }, []);
 
   useEffect(() => {
-    loadPending();
-  }, [loadPending]);
+    load('pending');
+  }, [load]);
 
   const onTabChange = (key: string) => {
     setActiveTab(key);
-    if (key === 'pending') loadPending();
-    else loadInitiated();
+    load(key);
   };
 
   const handleApprove = async () => {
@@ -62,39 +63,37 @@ export default function ApprovalsPage() {
       message.success(values.approved ? '审批通过' : '已驳回');
       setModalOpen(false);
       form.resetFields();
-      loadPending();
+      load('pending');
     } catch (err: any) {
       if (err?.errorFields) return; // validation error
       message.error(err?.message || '操作失败');
     }
   };
 
-  const statusTag = (status: string) => {
+  const statusTag = (status: string | null | undefined) => {
     const map: Record<string, { color: string; text: string }> = {
       PENDING: { color: 'processing', text: '审批中' },
       APPROVED: { color: 'success', text: '已通过' },
       REJECTED: { color: 'error', text: '已驳回' },
+      DRAFT: { color: 'default', text: '未提交' },
     };
-    const s = map[status] ?? { color: 'default', text: status };
+    const s = (status && map[status]) || { color: 'default', text: status || '-' };
     return <Tag color={s.color}>{s.text}</Tag>;
   };
 
+  const actionTag = (action: string | null | undefined) => {
+    if (action === 'APPROVED') return <Tag color="success">通过</Tag>;
+    if (action === 'REJECTED') return <Tag color="error">驳回</Tag>;
+    return <Tag color="default">-</Tag>;
+  };
+
   const pendingColumns = [
-    {
-      title: '流程实例',
-      dataIndex: 'processInstanceId',
-      width: 280,
-      ellipsis: true,
-    },
-    {
-      title: '任务',
-      dataIndex: 'taskName',
-      width: 100,
-    },
+    { title: '流程实例', dataIndex: 'processInstanceId', width: 260, ellipsis: true },
+    { title: '任务', dataIndex: 'taskName', width: 110 },
     {
       title: '创建时间',
       dataIndex: 'createTime',
-      width: 170,
+      width: 160,
       sorter: (a: ApprovalTask, b: ApprovalTask) => a.createTime - b.createTime,
       defaultSortOrder: 'descend' as const,
       render: (v: number) => (v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-'),
@@ -102,7 +101,7 @@ export default function ApprovalsPage() {
     {
       title: '操作',
       key: 'action',
-      width: 100,
+      width: 90,
       render: (_: unknown, record: ApprovalTask) => (
         <Button
           type="link"
@@ -118,17 +117,59 @@ export default function ApprovalsPage() {
     },
   ];
 
-  const initiatedColumns = [
-    { title: '业务类型', dataIndex: 'businessType', width: 140 },
-    { title: '业务ID', dataIndex: 'businessId', width: 280, ellipsis: true },
-    { title: '状态', dataIndex: 'status', width: 100, render: statusTag },
-    { title: '审批人', dataIndex: 'approverId', width: 100 },
-    { title: '审批意见', dataIndex: 'comment', ellipsis: true },
+  const doneColumns = [
+    { title: '业务类型', dataIndex: 'businessType', width: 120 },
+    { title: '业务ID', dataIndex: 'businessId', width: 260, ellipsis: true },
+    { title: '任务', dataIndex: 'taskName', width: 110 },
+    { title: '结果', dataIndex: 'action', width: 80, render: actionTag },
+    { title: '意见', dataIndex: 'comment', ellipsis: true },
     {
-      title: '提交时间',
-      dataIndex: 'createdAt',
-      width: 170,
+      title: '完成时间',
+      dataIndex: 'endTime',
+      width: 160,
+      render: (v: number) => (v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-'),
+    },
+  ];
+
+  const finalizedColumns = [
+    { title: '业务类型', dataIndex: 'businessType', width: 120 },
+    { title: '业务ID', dataIndex: 'businessId', width: 260, ellipsis: true },
+    { title: '结果', dataIndex: 'status', width: 90, render: statusTag },
+    { title: '发起人', dataIndex: 'initiatorId', width: 100 },
+    { title: '最终审批人', dataIndex: 'approverId', width: 100 },
+    { title: '意见', dataIndex: 'comment', ellipsis: true },
+    {
+      title: '办结时间',
+      dataIndex: 'updatedAt',
+      width: 160,
       render: (v: string) => (v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-'),
+    },
+  ];
+
+  const draftColumns = [
+    { title: '业务类型', dataIndex: 'businessName', width: 140 },
+    { title: '业务ID', dataIndex: 'businessId', width: 280, ellipsis: true },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (s: string) => statusTag(s === 'REJECTED' ? 'REJECTED' : 'DRAFT'),
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updatedAt',
+      width: 160,
+      render: (v: string) => (v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-'),
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 90,
+      render: (_: unknown, record: DraftItem) => (
+        <Button type="link" size="small" onClick={() => history.push(`/lc/${record.businessType}`)}>
+          去处理
+        </Button>
+      ),
     },
   ];
 
@@ -136,11 +177,7 @@ export default function ApprovalsPage() {
     <>
       <Card
         extra={
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => (activeTab === 'pending' ? loadPending() : loadInitiated())}
-            size="small"
-          >
+          <Button icon={<ReloadOutlined />} onClick={() => load(activeTab)} size="small">
             刷新
           </Button>
         }
@@ -164,16 +201,55 @@ export default function ApprovalsPage() {
               ),
             },
             {
-              key: 'initiated',
-              label: '我发起的',
+              key: 'done',
+              label: `已办 (${done.length})`,
               children: (
                 <Table
-                  columns={initiatedColumns}
-                  dataSource={initiated}
-                  rowKey={(r: MyInitiatedItem) => r.businessType + r.businessId}
+                  columns={doneColumns}
+                  dataSource={done}
+                  rowKey="taskId"
                   loading={loading}
                   pagination={{ pageSize: 10 }}
                   size="middle"
+                />
+              ),
+            },
+            {
+              key: 'finalized',
+              label: `办结 (${finalized.length})`,
+              children: (
+                <Table
+                  columns={finalizedColumns}
+                  dataSource={finalized}
+                  rowKey={(r: FinalizedItem) => r.businessType + r.businessId}
+                  loading={loading}
+                  pagination={{ pageSize: 10 }}
+                  size="middle"
+                />
+              ),
+            },
+            {
+              key: 'drafts',
+              label: `我的起草 (${drafts.length})`,
+              children: (
+                <Table
+                  columns={draftColumns}
+                  dataSource={drafts}
+                  rowKey={(r: DraftItem) => r.businessType + r.businessId}
+                  loading={loading}
+                  pagination={{ pageSize: 10 }}
+                  size="middle"
+                />
+              ),
+            },
+            {
+              key: 'delegation',
+              label: '委托替办（即将推出）',
+              disabled: true,
+              children: (
+                <Empty
+                  description="该功能将在后续版本支持任务委托与收回。"
+                  style={{ padding: '40px 0' }}
                 />
               ),
             },

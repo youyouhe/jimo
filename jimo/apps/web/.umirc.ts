@@ -89,7 +89,7 @@ export default defineConfig({
     },
     {
       path: '/approvals',
-      name: '待办审批',
+      name: '流程中心',
       icon: 'AuditOutlined',
       component: './approvals/index',
     },

@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, eq, isNull, desc } from 'drizzle-orm';
+import { and, eq, isNull, desc, inArray, or, sql } from 'drizzle-orm';
 import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import {
   businessApprovals,
@@ -17,6 +17,13 @@ import {
 
 /** Postgres unique-violation error code (for race handling). */
 const PG_UNIQUE_VIOLATION = '23505';
+
+/**
+ * Valid physical table-name suffix. businessType is stored WITHOUT the `lc_`
+ * prefix (e.g. "reimbursements"); the physical table is `lc_${businessType}`.
+ * Same guard as {@link ../../common/ownership/ownership.service.ts}.
+ */
+const TABLE_RE = /^[a-z][a-z0-9_]{0,62}$/;
 
 export interface ApplyOutcomeResult {
   id: string;
@@ -119,6 +126,115 @@ export class ApprovalService {
       .where(and(eq(businessApprovals.initiatorId, bpmId), isNull(businessApprovals.deletedAt)))
       .orderBy(desc(businessApprovals.createdAt));
     return { list: rows, total: rows.length };
+  }
+
+  /** Tasks I've already acted on (已办) — BPM historic tasks, enriched with the
+   *  business record reference from lc_business_approvals (joined on processInstanceId). */
+  async myDoneTasks(sysUserId: string) {
+    const bpmId = await this.bpmIdFor(sysUserId);
+    const res = await this.callBpm('GET', 'approvals/my-done', undefined, bpmId);
+    const items: Array<Record<string, unknown>> = res?.data?.list ?? [];
+    if (items.length === 0) return { list: [], total: 0 };
+
+    const piIds = items
+      .map((i) => i.processInstanceId as string | undefined)
+      .filter((v): v is string => !!v);
+
+    const byPi = new Map<string, { businessType: string; businessId: string; status: string }>();
+    if (piIds.length) {
+      const rows = await this.db
+        .select({
+          businessType: businessApprovals.businessType,
+          businessId: businessApprovals.businessId,
+          status: businessApprovals.status,
+          processInstanceId: businessApprovals.processInstanceId,
+        })
+        .from(businessApprovals)
+        .where(and(inArray(businessApprovals.processInstanceId, piIds), isNull(businessApprovals.deletedAt)));
+      for (const r of rows) {
+        if (r.processInstanceId) byPi.set(r.processInstanceId, r);
+      }
+    }
+
+    const list = items.map((i) => {
+      const pi = i.processInstanceId as string | undefined;
+      const a = pi ? byPi.get(pi) : undefined;
+      return {
+        ...i,
+        businessType: a?.businessType ?? null,
+        businessId: a?.businessId ?? null,
+        status: a?.status ?? null,
+      };
+    });
+    return { list, total: list.length };
+  }
+
+  /** Finalized processes I'm involved in (办结) — terminal approvals where I am
+   *  the initiator or the final approver. Unified local view (works for both engines). */
+  async finalized(sysUserId: string) {
+    const bpmId = await this.bpmIdFor(sysUserId);
+    const rows = await this.db
+      .select({
+        businessType: businessApprovals.businessType,
+        businessId: businessApprovals.businessId,
+        status: businessApprovals.status,
+        processInstanceId: businessApprovals.processInstanceId,
+        initiatorId: businessApprovals.initiatorId,
+        approverId: businessApprovals.approverId,
+        comment: businessApprovals.comment,
+        updatedAt: businessApprovals.updatedAt,
+      })
+      .from(businessApprovals)
+      .where(
+        and(
+          inArray(businessApprovals.status, ['APPROVED', 'REJECTED']),
+          or(eq(businessApprovals.initiatorId, bpmId), eq(businessApprovals.approverId, bpmId)),
+          isNull(businessApprovals.deletedAt),
+        ),
+      )
+      .orderBy(desc(businessApprovals.updatedAt))
+      .limit(200);
+    return { list: rows, total: rows.length };
+  }
+
+  /** My drafts (我的起草) — my owned records of approval-enabled types that are
+   *  NOT in a PENDING or APPROVED approval, i.e. never submitted or returned.
+   *  Aggregated across all approval-enabled business types via dynamic query. */
+  async myDrafts(sysUserId: string) {
+    const flows = await this.db
+      .select({ businessType: sysApprovalFlows.businessType, name: sysApprovalFlows.name })
+      .from(sysApprovalFlows)
+      .where(and(eq(sysApprovalFlows.enabled, true), isNull(sysApprovalFlows.deletedAt)));
+
+    const out: Array<Record<string, unknown>> = [];
+    for (const f of flows) {
+      if (!TABLE_RE.test(f.businessType)) continue;
+      const res = await this.db.execute(sql`
+        SELECT t.id, t.created_at, t.updated_at, a.status AS approval_status
+        FROM ${sql.raw(`"lc_${f.businessType}"`)} t
+        LEFT JOIN lc_business_approvals a
+          ON a.business_id = t.id::text AND a.business_type = ${f.businessType} AND a.deleted_at IS NULL
+        WHERE t.owner_id = ${sysUserId} AND t.deleted_at IS NULL
+          AND (a.status IS NULL OR a.status = 'REJECTED')
+        ORDER BY t.updated_at DESC LIMIT 200`);
+      const rows = this.unwrapRows(res);
+      for (const r of rows) {
+        out.push({
+          businessType: f.businessType,
+          businessName: f.name || f.businessType,
+          businessId: r.id,
+          status: r.approval_status ?? 'DRAFT',
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        });
+      }
+    }
+    out.sort((a, b) => {
+      const at = a.updatedAt instanceof Date ? (a.updatedAt as Date).getTime() : 0;
+      const bt = b.updatedAt instanceof Date ? (b.updatedAt as Date).getTime() : 0;
+      return bt - at;
+    });
+    return { list: out, total: out.length };
   }
 
   // ===================== Dynamic chain resolution =====================
@@ -291,6 +407,16 @@ export class ApprovalService {
       .where(and(eq(businessApprovals.businessType, businessType), eq(businessApprovals.businessId, businessId), isNull(businessApprovals.deletedAt)))
       .limit(1);
     return rows[0];
+  }
+
+  /** Normalize a raw `db.execute` result into a row array (postgres-js returns an
+   *  array directly, but guard the `{rows: []}` shape too). */
+  private unwrapRows(result: unknown): any[] {
+    if (Array.isArray(result)) return result as any[];
+    if (result && typeof result === 'object' && Array.isArray((result as any).rows)) {
+      return (result as any).rows;
+    }
+    return [];
   }
 
   private async callBpm(method: string, path: string, body: unknown, xUserId: string): Promise<any> {
