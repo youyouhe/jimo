@@ -117,41 +117,38 @@ export class CasbinService implements ICasbinService, OnModuleInit {
     await this.enforcer.addPolicy(RoleCode.SUPER_ADMIN, '*', '*');
 
     // ── All authenticated roles: baseline read access + common endpoints ──
-    // These are the minimum APIs the UI needs to render (pickers, dropdowns, etc.)
+    // keyMatch caveat: `/*` matches sub-paths; bare `*` suffix does NOT.
+    // So we add both base + base/* for every path.
+    const readPaths = [
+      '/api/v1/users', '/api/v1/roles', '/api/v1/menus', '/api/v1/departments',
+      '/api/v1/dictionary', '/api/v1/files', '/api/v1/encoding-rules',
+      '/api/v1/authority-btns',
+    ];
     for (const role of [RoleCode.ADMIN, RoleCode.EDITOR, RoleCode.VIEWER]) {
-      // System data (read-only — for pickers, dropdowns, reference data)
-      await this.enforcer.addPolicy(role, '/api/v1/users*', 'GET');
-      await this.enforcer.addPolicy(role, '/api/v1/roles*', 'GET');
-      await this.enforcer.addPolicy(role, '/api/v1/menus*', 'GET');
-      await this.enforcer.addPolicy(role, '/api/v1/departments*', 'GET');
-      await this.enforcer.addPolicy(role, '/api/v1/dictionary*', 'GET');
-      await this.enforcer.addPolicy(role, '/api/v1/files*', 'GET');
-      await this.enforcer.addPolicy(role, '/api/v1/encoding-rules*', 'GET');
+      for (const p of readPaths) {
+        await this.enforcer.addPolicy(role, p, 'GET');
+        await this.enforcer.addPolicy(role, p + '/*', 'GET');
+      }
       // Profile + password (every authenticated user)
       await this.enforcer.addPolicy(role, '/api/v1/users/profile', 'GET');
       await this.enforcer.addPolicy(role, '/api/v1/users/profile', 'PATCH');
       await this.enforcer.addPolicy(role, '/api/v1/users/change-password', 'POST');
-      // Authority buttons (UI rendering)
-      await this.enforcer.addPolicy(role, '/api/v1/authority-btns*', 'GET');
       // Generated business tables + approval/ownership
-      // (row-level ownership still applies — API access ≠ data access)
       await this.enforcer.addPolicy(role, '/api/v1/lc/*', '*');
       await this.enforcer.addPolicy(role, '/api/v1/approvals/*', '*');
       await this.enforcer.addPolicy(role, '/api/v1/ownership/*', '*');
     }
 
     // ── admin: full CRUD on system modules ──
-    const adminFullPaths = [
-      '/api/v1/users*', '/api/v1/roles*', '/api/v1/menus*',
-      '/api/v1/departments*', '/api/v1/dictionary*', '/api/v1/files*',
-      '/api/v1/authority-btns*', '/api/v1/apis*', '/api/v1/encoding-rules*',
-      '/api/v1/autocode*', '/api/v1/parameters*', '/api/v1/versions*',
-      '/api/v1/system-configs*', '/api/v1/login-logs*', '/api/v1/operation-records*',
-      '/api/v1/jwt-blacklist*', '/api/v1/error*', '/api/v1/api-tokens*',
-      '/api/v1/export-templates*', '/api/v1/cleanup-jobs*',
-    ];
-    for (const p of adminFullPaths) {
+    const adminPaths = readPaths.concat([
+      '/api/v1/apis', '/api/v1/autocode', '/api/v1/parameters', '/api/v1/versions',
+      '/api/v1/system-configs', '/api/v1/login-logs', '/api/v1/operation-records',
+      '/api/v1/jwt-blacklist', '/api/v1/error', '/api/v1/api-tokens',
+      '/api/v1/export-templates', '/api/v1/cleanup-jobs',
+    ]);
+    for (const p of adminPaths) {
       await this.enforcer.addPolicy(RoleCode.ADMIN, p, '*');
+      await this.enforcer.addPolicy(RoleCode.ADMIN, p + '/*', '*');
     }
 
     // Role inheritance: super_admin inherits all admin policies
