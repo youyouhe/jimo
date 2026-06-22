@@ -87,6 +87,12 @@ export default defineConfig({
       icon: 'InfoCircleOutlined',
       component: './about/index',
     },
+    {
+      path: '/approvals',
+      name: '待办审批',
+      icon: 'AuditOutlined',
+      component: './approvals/index',
+    },
     // Generated business module routes are added by updateUmiRoutes() at
     // code-generation time.  patchClientRoutes filters them at runtime
     // against the DB menu tree for role-based access control.
@@ -95,6 +101,12 @@ export default defineConfig({
       name: '博客文章',
       icon: 'TableOutlined',
       component: './posts/index',
+    },
+    {
+      path: '/lc/reimbursements',
+      name: '报销表',
+      icon: 'TableOutlined',
+      component: './reimbursements/index',
     },
     { path: '/*', redirect: '/dashboard' },
   ],

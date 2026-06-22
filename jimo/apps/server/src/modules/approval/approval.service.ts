@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, desc } from 'drizzle-orm';
 import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import {
   businessApprovals,
@@ -97,6 +97,28 @@ export class ApprovalService {
   async approve(processInstanceId: string, sysUserId: string, approved: boolean, comment?: string) {
     const bpmId = await this.bpmIdFor(sysUserId);
     return this.callBpm('POST', `approvals/${processInstanceId}/approve`, { approved, comment }, bpmId);
+  }
+
+  /** Approvals I submitted (from lc_business_approvals by initiator). */
+  async myInitiated(sysUserId: string) {
+    const bpmId = await this.bpmIdFor(sysUserId);
+    const rows = await this.db
+      .select({
+        businessType: businessApprovals.businessType,
+        businessId: businessApprovals.businessId,
+        status: businessApprovals.status,
+        executor: businessApprovals.executor,
+        processInstanceId: businessApprovals.processInstanceId,
+        initiatorId: businessApprovals.initiatorId,
+        approverId: businessApprovals.approverId,
+        comment: businessApprovals.comment,
+        createdAt: businessApprovals.createdAt,
+        updatedAt: businessApprovals.updatedAt,
+      })
+      .from(businessApprovals)
+      .where(and(eq(businessApprovals.initiatorId, bpmId), isNull(businessApprovals.deletedAt)))
+      .orderBy(desc(businessApprovals.createdAt));
+    return { list: rows, total: rows.length };
   }
 
   // ===================== Dynamic chain resolution =====================
