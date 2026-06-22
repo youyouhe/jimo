@@ -42,6 +42,8 @@ export interface DoneTask {
   businessType: string | null;
   businessId: string | null;
   status: string | null;
+  /** The full business record (fetched from lc_<businessType>), for inline detail. */
+  record?: Record<string, unknown> | null;
 }
 
 /** A finalized (approved/rejected) approval I'm involved in (办结). */

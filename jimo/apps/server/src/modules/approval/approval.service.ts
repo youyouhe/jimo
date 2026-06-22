@@ -139,7 +139,8 @@ export class ApprovalService {
     const res = await this.callBpm('GET', 'approvals/my-done', undefined, bpmId);
     const items: Array<Record<string, unknown>> = res?.data?.list ?? [];
     if (items.length === 0) return { list: [], total: 0 };
-    return { list: await this.enrichTasks(items), total: items.length };
+    const enriched = await this.enrichTasks(items);
+    return { list: await this.enrichRecords(enriched), total: items.length };
   }
 
   /** Finalized processes I'm involved in (办结) — terminal approvals where I am
