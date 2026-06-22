@@ -87,10 +87,69 @@ export default function ApprovalsPage() {
     return <Tag color="default">-</Tag>;
   };
 
-  // ── Inline record detail (expanded row) ──
   const SKIP_COLS = new Set([
     'id', 'created_at', 'updated_at', 'deleted_at', 'created_by', 'updated_by', 'owner_id', 'shared_with',
   ]);
+
+  const doneRecordExpandedRow = (row: DoneTask) => {
+    if (!row.record) return null;
+    const fields = Object.entries(row.record).filter(([k]) => !SKIP_COLS.has(k));
+    if (fields.length === 0) return <Typography.Text type="secondary">—</Typography.Text>;
+    return (
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+          gap: '4px 24px',
+          padding: '4px 0',
+        }}
+      >
+        {fields.map(([k, v]) => (
+          <div key={k} style={{ display: 'flex', gap: 8 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12, minWidth: 100 }}>
+              {humanize(k)}
+            </Typography.Text>
+            <Typography.Text style={{ fontSize: 13 }}>{renderValue(v)}</Typography.Text>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const recordExpandedRow = (row: ApprovalTask) => {
+    if (!row.record) return null;
+    const fields = Object.entries(row.record).filter(([k]) => !SKIP_COLS.has(k));
+    if (fields.length === 0) return <Typography.Text type="secondary">—</Typography.Text>;
+    return (
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+          gap: '4px 24px',
+          padding: '4px 0',
+        }}
+      >
+        {fields.map(([k, v]) => (
+          <div key={k} style={{ display: 'flex', gap: 8 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12, minWidth: 100 }}>
+              {humanize(k)}
+            </Typography.Text>
+            <Typography.Text style={{ fontSize: 13 }}>{renderValue(v)}</Typography.Text>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // Group done tasks by businessType for a cleaner per-type display.
+  const doneGroups = (() => {
+    const map: Record<string, DoneTask[]> = {};
+    for (const t of done) {
+      const k = t.businessType || '-';
+      (map[k] ??= []).push(t);
+    }
+    return Object.entries(map);
+  })();
   const humanize = (col: string) =>
     col
       .split('_')
@@ -234,81 +293,31 @@ export default function ApprovalsPage() {
                   loading={loading}
                   pagination={{ pageSize: 10 }}
                   size="middle"
-                  expandable={{
-                    expandedRowRender: (row: ApprovalTask) => {
-                      if (!row.record) return null;
-                      const fields = Object.entries(row.record).filter(
-                        ([k]) => !SKIP_COLS.has(k),
-                      );
-                      if (fields.length === 0) return <Typography.Text type="secondary">—</Typography.Text>;
-                      return (
-                        <div
-                          style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-                            gap: '4px 24px',
-                            padding: '4px 0',
-                          }}
-                        >
-                          {fields.map(([k, v]) => (
-                            <div key={k} style={{ display: 'flex', gap: 8 }}>
-                              <Typography.Text type="secondary" style={{ fontSize: 12, minWidth: 100 }}>
-                                {humanize(k)}
-                              </Typography.Text>
-                              <Typography.Text style={{ fontSize: 13 }}>
-                                {renderValue(v)}
-                              </Typography.Text>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    },
-                  }}
+                  expandable={{ expandedRowRender: recordExpandedRow }}
                 />
               ),
             },
             {
               key: 'done',
               label: `已办 (${done.length})`,
-              children: (
-                <Table
-                  columns={doneColumns}
-                  dataSource={done}
-                  rowKey="taskId"
-                  loading={loading}
-                  pagination={{ pageSize: 10 }}
-                  size="middle"
-                  expandable={{
-                    expandedRowRender: (row: DoneTask) => {
-                      if (!row.record) return null;
-                      const fields = Object.entries(row.record).filter(
-                        ([k]) => !SKIP_COLS.has(k),
-                      );
-                      if (fields.length === 0) return <Typography.Text type="secondary">—</Typography.Text>;
-                      return (
-                        <div
-                          style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-                            gap: '4px 24px',
-                            padding: '4px 0',
-                          }}
-                        >
-                          {fields.map(([k, v]) => (
-                            <div key={k} style={{ display: 'flex', gap: 8 }}>
-                              <Typography.Text type="secondary" style={{ fontSize: 12, minWidth: 100 }}>
-                                {humanize(k)}
-                              </Typography.Text>
-                              <Typography.Text style={{ fontSize: 13 }}>
-                                {renderValue(v)}
-                              </Typography.Text>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    },
-                  }}
-                />
+              children: done.length === 0 ? (
+                <Empty description="暂无已办记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              ) : (
+                doneGroups.map(([bt, tasks]) => (
+                  <div key={bt} style={{ marginBottom: bt === doneGroups[doneGroups.length - 1]![0] ? 0 : 16 }}>
+                    <Typography.Title level={5} style={{ margin: '0 0 8px' }}>
+                      {bt} ({tasks.length})
+                    </Typography.Title>
+                    <Table
+                      columns={doneColumns}
+                      dataSource={tasks}
+                      rowKey="taskId"
+                      pagination={false}
+                      size="small"
+                      expandable={{ expandedRowRender: doneRecordExpandedRow }}
+                    />
+                  </div>
+                ))
               ),
             },
             {
