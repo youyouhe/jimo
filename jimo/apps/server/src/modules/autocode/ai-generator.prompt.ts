@@ -53,6 +53,10 @@ name(snake_case) · type · required · unique · description(中文) · searcha
 - 常见链：["deptHead"]（单级）或 ["deptHead","ceo"]（两级）
 - 效果：生成的表自动写入审批链配置(sys_approval_flows) + 前端页面带「提交审批」按钮
 - **仅在用户明确要求审批时设置**，不要默认启用
+- **禁止在业务表上创建审批状态字段**（核心约束）：
+  - 审批状态（草稿/待审批/通过/驳回，对应 DRAFT/PENDING/APPROVED/REJECTED）由平台用独立的 \`business_approvals\` 表 + BPM 全权托管，按 (业务表, 记录 id) 自动跟踪；前端待办页通过 JOIN 派生显示，不需要业务表自己存。
+  - 因此启用 approvalFlow 时，**绝不**在业务表加 status / approval_status / approve_state 之类字段去存审批状态——否则会变成双真相源，且生成器会把它当普通可编辑字段，用户能在前端手改"待审批→通过"直接绕过审批流。
+  - 如果确有审批**之后**的下游业务状态（如"已打款""已发货"），可单独建一个语义清晰、与审批状态无重叠的字段（如 payment_status、shipped_at），不要和审批状态混进同一个枚举。
 
 ## 工具使用流程
 
@@ -74,6 +78,6 @@ name(snake_case) · type · required · unique · description(中文) · searcha
 
 - tableName：snake_case 复数（orders、order_items）
 - description：格式为 \`短名（业务描述）\`，**括号内描述必填**，用一句话说清楚这张表在业务中存什么或做什么。例：「学生表（存储学生基本信息）」「订单明细（记录订单中每个商品的数量与单价）」「成绩表（记录学生各科目的考试成绩）」。括号前的短名用作菜单名，括号内描述作为页面 tooltip。
-- 不含 id / created_at / updated_at 等系统字段
+- 不含系统托管字段（生成器自动注入，重建会冲突）：id、created_at、updated_at、deleted_at、created_by、updated_by、owner_id、shared_with
 - 多表请求：清单 + 同轮批量 propose_entity
 `;

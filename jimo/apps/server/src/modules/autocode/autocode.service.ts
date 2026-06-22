@@ -1,6 +1,7 @@
 import {
   Injectable,
   Inject,
+  BadRequestException,
   ConflictException,
   NotFoundException,
   Logger,
@@ -506,7 +507,31 @@ export class AutocodeService {
     }
   }
 
+  /**
+   * Guard: approval state is platform-managed (business_approvals table + BPM),
+   * it must NOT be modeled as a user field on the business table. Reject any
+   * approval-status field up front so the invariant holds even when the AI
+   * generator ignores its prompt guidance. Called from every code-gen entry
+   * point (generate / startGenerate / startUpdate).
+   */
+  private assertNoApprovalStatusField(dto: {
+    fields: { name?: string; removed?: boolean }[];
+    approvalFlow?: { enabled?: boolean };
+  }): void {
+    if (!dto.approvalFlow?.enabled) return;
+    const offenders = dto.fields
+      .filter((f) => !f.removed && /^status$|^(approval|approve)/i.test(f.name ?? ''))
+      .map((f) => f.name);
+    if (offenders.length > 0) {
+      throw new BadRequestException(
+        `审批状态由平台用 business_approvals 表 + BPM 托管，业务表上不得包含审批状态字段：${offenders.join(', ')}。` +
+          `请删除该字段；若确为审批之后的下游业务状态，请改用语义明确的名字（如 payment_status、shipped_at）。`,
+      );
+    }
+  }
+
   async generate(dto: AutoCodeDto): Promise<{ createdFiles: string[] }> {
+    this.assertNoApprovalStatusField(dto);
     const files = this.preview(dto);
     const projectRoot = this.resolveProjectRoot();
 
@@ -975,6 +1000,7 @@ export class AutocodeService {
    * Start async generation with progress tracking.
    */
   async startGenerate(dto: AutoCodeDto): Promise<string> {
+    this.assertNoApprovalStatusField(dto);
     const jobId = randomUUID();
     const steps = AutocodeService.GENERATE_STEPS.map((s) => ({
       key: s.key,
@@ -1012,6 +1038,7 @@ export class AutocodeService {
    * Start async module update with progress tracking.
    */
   async startUpdate(dto: UpdateModuleDto): Promise<string> {
+    this.assertNoApprovalStatusField(dto);
     const latest = await this.getLatestVersion(dto.tableName);
     if (!latest) {
       throw new NotFoundException(`No existing version found for table '${dto.tableName}'. Use generate to create it first.`);
