@@ -108,6 +108,13 @@ export default function UsersPage() {
       },
     },
     {
+      title: 'Department',
+      dataIndex: 'deptName',
+      width: 120,
+      search: false,
+      render: (_, record) => record.deptName || '-',
+    },
+    {
       title: 'Status',
       dataIndex: 'status',
       width: 100,

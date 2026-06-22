@@ -12,6 +12,7 @@ import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import { sysUsers, SysUser } from '../../db/schema/users';
 import { sysUserRoles } from '../../db/schema/user-roles';
 import { sysRoles } from '../../db/schema/roles';
+import { sysDepartments } from '../../db/schema/sys-departments';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -25,7 +26,11 @@ import { BpmOrgSyncService } from '../bpm-sync/bpm-org-sync.service';
 export type SafeUser = Omit<SysUser, 'passwordHash'>;
 
 /** A user with its role codes resolved from sys_user_roles (single source of truth). */
-export type UserWithRoles = SafeUser & { roles: string[] };
+export type UserWithRoles = SafeUser & {
+  roles: string[];
+  /** The user's department name (resolved from sys_departments). */
+  deptName?: string | null;
+};
 
 @Injectable()
 export class UserService {
@@ -124,9 +129,22 @@ export class UserService {
     ]);
 
     const total = totalRows[0]?.count ?? 0;
+
+    // Resolve department names for users that have a deptId.
+    const deptIds = [...new Set(rows.map((r) => r.deptId).filter(Boolean))] as string[];
+    const deptMap = new Map<string, string>();
+    if (deptIds.length) {
+      const depts = await this.db
+        .select({ id: sysDepartments.id, name: sysDepartments.name })
+        .from(sysDepartments)
+        .where(and(inArray(sysDepartments.id, deptIds), isNull(sysDepartments.deletedAt)));
+      for (const d of depts) deptMap.set(d.id, d.name);
+    }
+
     const rolesMap = await this.rolesByUser(rows.map((r) => r.id));
     const list: UserWithRoles[] = rows.map(({ passwordHash: _omit, ...user }) => ({
       ...user,
+      deptName: (user.deptId && deptMap.get(user.deptId)) ?? null,
       roles: rolesMap.get(user.id) ?? [],
     }));
 
@@ -148,7 +166,16 @@ export class UserService {
     }
 
     const { passwordHash: _omit, ...user } = rows[0]!;
-    return { ...user, roles: await this.getRoleCodes(user.id) };
+    let deptName: string | null = null;
+    if (user.deptId) {
+      const d = await this.db
+        .select({ name: sysDepartments.name })
+        .from(sysDepartments)
+        .where(and(eq(sysDepartments.id, user.deptId), isNull(sysDepartments.deletedAt)))
+        .limit(1);
+      deptName = d[0]?.name ?? null;
+    }
+    return { ...user, deptName, roles: await this.getRoleCodes(user.id) };
   }
 
   async findById(id: string): Promise<SysUser | null> {
@@ -276,7 +303,16 @@ export class UserService {
     }
 
     const { passwordHash: _omit, ...safeUser } = rows[0]!;
-    return { ...safeUser, roles: await this.getRoleCodes(userId) };
+    let deptName: string | null = null;
+    if (safeUser.deptId) {
+      const d = await this.db
+        .select({ name: sysDepartments.name })
+        .from(sysDepartments)
+        .where(and(eq(sysDepartments.id, safeUser.deptId), isNull(sysDepartments.deletedAt)))
+        .limit(1);
+      deptName = d[0]?.name ?? null;
+    }
+    return { ...safeUser, deptName, roles: await this.getRoleCodes(userId) };
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto): Promise<UserWithRoles> {

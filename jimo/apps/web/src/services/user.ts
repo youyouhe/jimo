@@ -9,6 +9,10 @@ export interface UserInfo {
   avatar: string | null;
   /** Role codes from sys_user_roles (single source of truth). */
   roles: string[];
+  /** Department UUID (FK to sys_departments). */
+  deptId?: string | null;
+  /** Department name (resolved from sys_departments when listing users). */
+  deptName?: string | null;
   status: number;
   lastLoginAt: string | null;
   lastLoginIp: string | null;
