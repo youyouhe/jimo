@@ -88,8 +88,9 @@ export default function ApprovalsPage() {
   };
 
   const pendingColumns = [
-    { title: '流程实例', dataIndex: 'processInstanceId', width: 260, ellipsis: true },
-    { title: '任务', dataIndex: 'taskName', width: 110 },
+    { title: '业务类型', dataIndex: 'businessType', width: 130 },
+    { title: '业务ID', dataIndex: 'businessId', width: 200, ellipsis: true },
+    { title: '任务', dataIndex: 'taskName', width: 80 },
     {
       title: '创建时间',
       dataIndex: 'createTime',

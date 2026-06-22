@@ -31,9 +31,9 @@ export class ApprovalController {
   }
 
   @Get('my-tasks')
-  @ApiOperation({ summary: 'My pending approval tasks (proxied from BPM)' })
+  @ApiOperation({ summary: 'My pending approval tasks (enriched with businessType/businessId)' })
   async myTasks(@CurrentUser() user: { sub: string }) {
-    return await this.approvalService.getMyTasks(user.sub);
+    return { code: 0, msg: 'success', data: await this.approvalService.getMyTasks(user.sub) };
   }
 
   @Get('my-initiated')

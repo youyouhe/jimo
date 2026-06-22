@@ -98,7 +98,10 @@ export class ApprovalService {
 
   async getMyTasks(sysUserId: string) {
     const bpmId = await this.bpmIdFor(sysUserId);
-    return this.callBpm('GET', `approvals/my-tasks`, undefined, bpmId);
+    const res = await this.callBpm('GET', `approvals/my-tasks`, undefined, bpmId);
+    const items: Array<Record<string, unknown>> = res?.data?.list ?? [];
+    if (items.length === 0) return { list: [], total: 0 };
+    return { list: await this.enrichTasks(items), total: items.length };
   }
 
   async approve(processInstanceId: string, sysUserId: string, approved: boolean, comment?: string) {
@@ -128,45 +131,13 @@ export class ApprovalService {
     return { list: rows, total: rows.length };
   }
 
-  /** Tasks I've already acted on (已办) — BPM historic tasks, enriched with the
-   *  business record reference from lc_business_approvals (joined on processInstanceId). */
+  /** Tasks I've already acted on (已办) — BPM historic tasks, enriched. */
   async myDoneTasks(sysUserId: string) {
     const bpmId = await this.bpmIdFor(sysUserId);
     const res = await this.callBpm('GET', 'approvals/my-done', undefined, bpmId);
     const items: Array<Record<string, unknown>> = res?.data?.list ?? [];
     if (items.length === 0) return { list: [], total: 0 };
-
-    const piIds = items
-      .map((i) => i.processInstanceId as string | undefined)
-      .filter((v): v is string => !!v);
-
-    const byPi = new Map<string, { businessType: string; businessId: string; status: string }>();
-    if (piIds.length) {
-      const rows = await this.db
-        .select({
-          businessType: businessApprovals.businessType,
-          businessId: businessApprovals.businessId,
-          status: businessApprovals.status,
-          processInstanceId: businessApprovals.processInstanceId,
-        })
-        .from(businessApprovals)
-        .where(and(inArray(businessApprovals.processInstanceId, piIds), isNull(businessApprovals.deletedAt)));
-      for (const r of rows) {
-        if (r.processInstanceId) byPi.set(r.processInstanceId, r);
-      }
-    }
-
-    const list = items.map((i) => {
-      const pi = i.processInstanceId as string | undefined;
-      const a = pi ? byPi.get(pi) : undefined;
-      return {
-        ...i,
-        businessType: a?.businessType ?? null,
-        businessId: a?.businessId ?? null,
-        status: a?.status ?? null,
-      };
-    });
-    return { list, total: list.length };
+    return { list: await this.enrichTasks(items), total: items.length };
   }
 
   /** Finalized processes I'm involved in (办结) — terminal approvals where I am
@@ -387,6 +358,38 @@ export class ApprovalService {
       processInstanceId,
       initiatorId: initiatorBpmId,
       payload: { startedAt: Date.now() },
+    });
+  }
+
+  /** Batch-enrich BPM task/result rows with businessType/businessId from
+   *  lc_business_approvals (looked up by processInstanceId). */
+  private async enrichTasks(
+    items: Array<Record<string, unknown>>,
+  ): Promise<Array<Record<string, unknown>>> {
+    const piIds = items
+      .map((i) => i.processInstanceId as string | undefined)
+      .filter((v): v is string => !!v);
+
+    const byPi = new Map<string, { businessType: string; businessId: string; status: string }>();
+    if (piIds.length) {
+      const rows = await this.db
+        .select({
+          businessType: businessApprovals.businessType,
+          businessId: businessApprovals.businessId,
+          status: businessApprovals.status,
+          processInstanceId: businessApprovals.processInstanceId,
+        })
+        .from(businessApprovals)
+        .where(and(inArray(businessApprovals.processInstanceId, piIds), isNull(businessApprovals.deletedAt)));
+      for (const r of rows) {
+        if (r.processInstanceId) byPi.set(r.processInstanceId, r);
+      }
+    }
+
+    return items.map((i) => {
+      const pi = i.processInstanceId as string | undefined;
+      const a = pi ? byPi.get(pi) : undefined;
+      return { ...i, businessType: a?.businessType ?? null, businessId: a?.businessId ?? null, status: a?.status ?? null };
     });
   }
 

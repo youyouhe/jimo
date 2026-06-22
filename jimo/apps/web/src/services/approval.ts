@@ -7,6 +7,10 @@ export interface ApprovalTask {
   processInstanceId: string;
   assignee: string;
   createTime: number;
+  /** Enriched from lc_business_approvals (matched by processInstanceId). */
+  businessType?: string | null;
+  businessId?: string | null;
+  status?: string | null;
 }
 
 export interface MyInitiatedItem {
