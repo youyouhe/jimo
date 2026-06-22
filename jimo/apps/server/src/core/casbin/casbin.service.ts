@@ -116,56 +116,42 @@ export class CasbinService implements ICasbinService, OnModuleInit {
     // super_admin: full access to everything via wildcard
     await this.enforcer.addPolicy(RoleCode.SUPER_ADMIN, '*', '*');
 
-    // admin: full access to system modules (full API paths for AuthzGuard)
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/users', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/users/:id', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/roles', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/roles/:id', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/menus', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/menus/:id', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/dictionary', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/dictionary/:id', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/dictionary/detail', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/apis', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/authority-btns', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/files', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/autocode', '*');
-
-    // admin: encoding rules full access
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/encoding-rules', '*');
-    await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/encoding-rules/:id', '*');
-
-    // editor: read users and menus
-    await this.enforcer.addPolicy(RoleCode.EDITOR, '/api/v1/users', 'GET');
-    await this.enforcer.addPolicy(RoleCode.EDITOR, '/api/v1/menus', 'GET');
-    // editor: read encoding rules
-    await this.enforcer.addPolicy(RoleCode.EDITOR, '/api/v1/encoding-rules', 'GET');
-    await this.enforcer.addPolicy(RoleCode.EDITOR, '/api/v1/encoding-rules/:id', 'GET');
-
-    // viewer: read menus only
-    await this.enforcer.addPolicy(RoleCode.VIEWER, '/api/v1/menus', 'GET');
-    // viewer: read encoding rules
-    await this.enforcer.addPolicy(RoleCode.VIEWER, '/api/v1/encoding-rules', 'GET');
-    await this.enforcer.addPolicy(RoleCode.VIEWER, '/api/v1/encoding-rules/:id', 'GET');
-
-    // All authenticated roles: system endpoints needed for UI rendering
+    // ── All authenticated roles: baseline read access + common endpoints ──
+    // These are the minimum APIs the UI needs to render (pickers, dropdowns, etc.)
     for (const role of [RoleCode.ADMIN, RoleCode.EDITOR, RoleCode.VIEWER]) {
-      await this.enforcer.addPolicy(role, '/api/v1/authority-btns/my', 'GET');
-      await this.enforcer.addPolicy(role, '/api/v1/menus/accessible', 'GET');
-      await this.enforcer.addPolicy(role, '/api/v1/menus/:id', 'GET');
-      // Profile & password — every authenticated user needs these
+      // System data (read-only — for pickers, dropdowns, reference data)
+      await this.enforcer.addPolicy(role, '/api/v1/users*', 'GET');
+      await this.enforcer.addPolicy(role, '/api/v1/roles*', 'GET');
+      await this.enforcer.addPolicy(role, '/api/v1/menus*', 'GET');
+      await this.enforcer.addPolicy(role, '/api/v1/departments*', 'GET');
+      await this.enforcer.addPolicy(role, '/api/v1/dictionary*', 'GET');
+      await this.enforcer.addPolicy(role, '/api/v1/files*', 'GET');
+      await this.enforcer.addPolicy(role, '/api/v1/encoding-rules*', 'GET');
+      // Profile + password (every authenticated user)
       await this.enforcer.addPolicy(role, '/api/v1/users/profile', 'GET');
       await this.enforcer.addPolicy(role, '/api/v1/users/profile', 'PATCH');
       await this.enforcer.addPolicy(role, '/api/v1/users/change-password', 'POST');
-    }
-
-    // Generated business tables + approval/ownership APIs: all authenticated roles.
-    // Row-level ownership (OwnershipHelper) still applies — API access ≠ data access.
-    for (const role of [RoleCode.ADMIN, RoleCode.EDITOR, RoleCode.VIEWER]) {
+      // Authority buttons (UI rendering)
+      await this.enforcer.addPolicy(role, '/api/v1/authority-btns*', 'GET');
+      // Generated business tables + approval/ownership
+      // (row-level ownership still applies — API access ≠ data access)
       await this.enforcer.addPolicy(role, '/api/v1/lc/*', '*');
       await this.enforcer.addPolicy(role, '/api/v1/approvals/*', '*');
       await this.enforcer.addPolicy(role, '/api/v1/ownership/*', '*');
-      await this.enforcer.addPolicy(role, '/api/v1/departments/*', '*');
+    }
+
+    // ── admin: full CRUD on system modules ──
+    const adminFullPaths = [
+      '/api/v1/users*', '/api/v1/roles*', '/api/v1/menus*',
+      '/api/v1/departments*', '/api/v1/dictionary*', '/api/v1/files*',
+      '/api/v1/authority-btns*', '/api/v1/apis*', '/api/v1/encoding-rules*',
+      '/api/v1/autocode*', '/api/v1/parameters*', '/api/v1/versions*',
+      '/api/v1/system-configs*', '/api/v1/login-logs*', '/api/v1/operation-records*',
+      '/api/v1/jwt-blacklist*', '/api/v1/error*', '/api/v1/api-tokens*',
+      '/api/v1/export-templates*', '/api/v1/cleanup-jobs*',
+    ];
+    for (const p of adminFullPaths) {
+      await this.enforcer.addPolicy(RoleCode.ADMIN, p, '*');
     }
 
     // Role inheritance: super_admin inherits all admin policies
