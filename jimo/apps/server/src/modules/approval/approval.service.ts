@@ -101,7 +101,9 @@ export class ApprovalService {
     const res = await this.callBpm('GET', `approvals/my-tasks`, undefined, bpmId);
     const items: Array<Record<string, unknown>> = res?.data?.list ?? [];
     if (items.length === 0) return { list: [], total: 0 };
-    return { list: await this.enrichTasks(items), total: items.length };
+    const enriched = await this.enrichTasks(items);
+    // Also fetch the actual business record so the approver sees the detail inline.
+    return { list: await this.enrichRecords(enriched), total: items.length };
   }
 
   async approve(processInstanceId: string, sysUserId: string, approved: boolean, comment?: string) {
@@ -391,6 +393,29 @@ export class ApprovalService {
       const a = pi ? byPi.get(pi) : undefined;
       return { ...i, businessType: a?.businessType ?? null, businessId: a?.businessId ?? null, status: a?.status ?? null };
     });
+  }
+
+  /** Fetch the full business record for each task so the approver can see the
+   *  detail inline (e.g. amount, applicant, reason for a reimbursement). */
+  private async enrichRecords(
+    items: Array<Record<string, unknown>>,
+  ): Promise<Array<Record<string, unknown>>> {
+    const out: Array<Record<string, unknown>> = [];
+    for (const item of items) {
+      const bt = item.businessType as string | undefined;
+      const bid = item.businessId as string | undefined;
+      if (!bt || !bid || !TABLE_RE.test(bt)) {
+        out.push(item);
+        continue;
+      }
+      const res = await this.db.execute(sql`
+        SELECT * FROM ${sql.raw(`"lc_${bt}"`)}
+        WHERE id = ${bid} AND deleted_at IS NULL
+        LIMIT 1`);
+      const rows = this.unwrapRows(res);
+      out.push({ ...item, record: rows[0] ?? null });
+    }
+    return out;
   }
 
   private async bpmIdFor(sysUserId: string): Promise<string> {

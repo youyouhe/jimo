@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Card, Tabs, Table, Tag, Button, Modal, Form, Input, Radio, message, Empty } from 'antd';
+import { Card, Tabs, Table, Tag, Button, Modal, Form, Input, Radio, message, Empty, Typography } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { history } from '@umijs/max';
 import {
@@ -87,9 +87,18 @@ export default function ApprovalsPage() {
     return <Tag color="default">-</Tag>;
   };
 
+  // ── Inline record detail (expanded row) ──
+  const SKIP_COLS = new Set([
+    'id', 'created_at', 'updated_at', 'deleted_at', 'created_by', 'updated_by', 'owner_id', 'shared_with',
+  ]);
+  const humanize = (col: string) =>
+    col
+      .split('_')
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+
   const pendingColumns = [
     { title: '业务类型', dataIndex: 'businessType', width: 130 },
-    { title: '业务ID', dataIndex: 'businessId', width: 200, ellipsis: true },
     { title: '任务', dataIndex: 'taskName', width: 80 },
     {
       title: '创建时间',
@@ -198,6 +207,36 @@ export default function ApprovalsPage() {
                   loading={loading}
                   pagination={{ pageSize: 10 }}
                   size="middle"
+                  expandable={{
+                    expandedRowRender: (row: ApprovalTask) => {
+                      if (!row.record) return null;
+                      const fields = Object.entries(row.record).filter(
+                        ([k]) => !SKIP_COLS.has(k),
+                      );
+                      if (fields.length === 0) return <Typography.Text type="secondary">—</Typography.Text>;
+                      return (
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                            gap: '4px 24px',
+                            padding: '4px 0',
+                          }}
+                        >
+                          {fields.map(([k, v]) => (
+                            <div key={k} style={{ display: 'flex', gap: 8 }}>
+                              <Typography.Text type="secondary" style={{ fontSize: 12, minWidth: 100 }}>
+                                {humanize(k)}
+                              </Typography.Text>
+                              <Typography.Text style={{ fontSize: 13 }}>
+                                {v == null ? '-' : String(v)}
+                              </Typography.Text>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    },
+                  }}
                 />
               ),
             },

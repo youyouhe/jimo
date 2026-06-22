@@ -11,6 +11,8 @@ export interface ApprovalTask {
   businessType?: string | null;
   businessId?: string | null;
   status?: string | null;
+  /** The full business record (fetched from lc_<businessType>), for inline detail. */
+  record?: Record<string, unknown> | null;
 }
 
 export interface MyInitiatedItem {
