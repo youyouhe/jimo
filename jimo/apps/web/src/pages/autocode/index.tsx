@@ -490,8 +490,8 @@ function checkFieldTableNameCollision(tableName: string, fields: any[]): string[
 
 export default function AutocodePage() {
   const [form] = Form.useForm();
-  const userRole = useUserStore((s) => s.userInfo?.role);
-  const isSuperAdmin = userRole === 'super_admin';
+  const userRoles = useUserStore((s) => s.userInfo?.roles) ?? [];
+  const isSuperAdmin = userRoles.includes('super_admin');
 
   // Form state
   const [generateWeb, setGenerateWeb] = useState(true);

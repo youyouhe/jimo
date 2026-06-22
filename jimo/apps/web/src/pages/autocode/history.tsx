@@ -590,8 +590,8 @@ function BatchDeleteModal({ open, items: initialItems, onClose, onComplete }: Ba
 
 export default function AutocodeHistoryPage() {
   const actionRef = useRef<ActionType>(undefined);
-  const userRole = useUserStore((s) => s.userInfo?.role);
-  const isSuperAdmin = userRole === 'super_admin';
+  const userRoles = useUserStore((s) => s.userInfo?.roles) ?? [];
+  const isSuperAdmin = userRoles.includes('super_admin');
 
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);

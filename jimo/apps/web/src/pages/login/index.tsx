@@ -21,7 +21,7 @@ export default function LoginPage() {
         username: values.username,
         nickname: (jwtPayload.username as string) || values.username,
         status: 1,
-        role: (jwtPayload.role as string) || undefined,
+        roles: Array.isArray(jwtPayload.roles) ? (jwtPayload.roles as string[]) : [],
       });
 
       // Fetch accessible menus NOW and persist to localStorage.

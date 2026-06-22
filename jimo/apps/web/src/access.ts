@@ -1,14 +1,15 @@
 import type { InitialState } from './app';
 
 export default function access(initialState: InitialState | undefined) {
-  const role = initialState?.currentUser?.role ?? '';
+  const roles = initialState?.currentUser?.roles ?? [];
+  const has = (code: string) => roles.includes(code);
 
   return {
-    isSuperAdmin: role === 'super_admin',
-    isAdmin: role === 'admin' || role === 'super_admin',
-    isEditor: ['editor', 'admin', 'super_admin'].includes(role),
-    isViewer: ['viewer', 'editor', 'admin', 'super_admin'].includes(role),
-    canManageRoles: ['admin', 'super_admin'].includes(role),
-    canManageMenus: ['admin', 'super_admin'].includes(role),
+    isSuperAdmin: has('super_admin'),
+    isAdmin: has('admin') || has('super_admin'),
+    isEditor: has('editor') || has('admin') || has('super_admin'),
+    isViewer: has('viewer') || has('editor') || has('admin') || has('super_admin'),
+    canManageRoles: has('admin') || has('super_admin'),
+    canManageMenus: has('admin') || has('super_admin'),
   };
 }

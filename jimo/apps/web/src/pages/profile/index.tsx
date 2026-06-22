@@ -141,11 +141,15 @@ export default function ProfilePage() {
               <Descriptions.Item label="Phone">
                 {profile?.phone || '-'}
               </Descriptions.Item>
-              <Descriptions.Item label="Role">
-                {profile?.role ? (
-                  <Tag color={roleColorMap[profile.role] || 'default'}>
-                    {profile.role}
-                  </Tag>
+              <Descriptions.Item label="Roles">
+                {profile?.roles?.length ? (
+                  <Space size={[4, 4]} wrap>
+                    {profile.roles.map((code) => (
+                      <Tag key={code} color={roleColorMap[code] || 'default'}>
+                        {code}
+                      </Tag>
+                    ))}
+                  </Space>
                 ) : (
                   '-'
                 )}

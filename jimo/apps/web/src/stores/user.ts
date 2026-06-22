@@ -7,7 +7,7 @@ interface UserInfo {
   username: string;
   nickname: string;
   status: number;
-  role?: string;
+  roles?: string[];
 }
 
 interface UserState {

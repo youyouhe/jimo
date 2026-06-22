@@ -105,7 +105,7 @@ export interface InitialState {
   name?: string;
   avatar?: string;
   currentUser: {
-    id: string; username: string; nickname: string; status: number; role?: string;
+    id: string; username: string; nickname: string; status: number; roles?: string[];
   } | null;
   menus: MenuItem[];
 }

@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
-import { Button, Drawer, message, Popconfirm, Select, Space, Spin, Tag } from 'antd';
-import { PlusOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { Button, message, Popconfirm, Space, Tag } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
 import { ActionType, ProColumns, ProTable } from '@ant-design/pro-components';
 import {
   ModalForm,
@@ -14,7 +14,6 @@ import {
   updateUser,
   deleteUser,
   getUserRoleIds,
-  assignUserRoles,
   type User,
   type CreateUserDto,
   type UpdateUserDto,
@@ -35,20 +34,13 @@ const ROLE_LABEL_MAP: Record<string, string> = {
   viewer: 'Viewer',
 };
 
+type EditableUser = User & { roleIds?: string[] };
+
 export default function UsersPage() {
   const actionRef = useRef<ActionType>(undefined);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editingUser, setEditingUser] = useState<User | null>(null);
-
-  // Role data from API
+  const [editingUser, setEditingUser] = useState<EditableUser | null>(null);
   const [allRoles, setAllRoles] = useState<Role[]>([]);
-
-  // Multi-role assignment drawer state
-  const [roleDrawerOpen, setRoleDrawerOpen] = useState(false);
-  const [roleTargetUser, setRoleTargetUser] = useState<User | null>(null);
-  const [assignedRoleIds, setAssignedRoleIds] = useState<string[]>([]);
-  const [roleLoading, setRoleLoading] = useState(false);
-  const [roleSaving, setRoleSaving] = useState(false);
 
   useEffect(() => {
     getRoles({ page: 1, pageSize: 50 })
@@ -56,45 +48,17 @@ export default function UsersPage() {
       .catch(() => {});
   }, []);
 
-  const roleOptions = allRoles.map((r) => ({
-    label: `${r.name} (${r.code})`,
-    value: r.code,
-  }));
-
   const roleIdOptions = allRoles.map((r) => ({
     label: `${r.name} (${r.code})`,
     value: r.id,
   }));
 
-  // ── Multi-role drawer handlers ──
-  const openRoleDrawer = async (user: User) => {
-    setRoleTargetUser(user);
-    setRoleDrawerOpen(true);
-    setRoleLoading(true);
-    setAssignedRoleIds([]);
-    try {
-      const ids = await getUserRoleIds(user.id);
-      setAssignedRoleIds(ids);
-    } catch (err: any) {
-      message.error(err.message || 'Load roles failed');
-    } finally {
-      setRoleLoading(false);
-    }
-  };
-
-  const handleRoleSave = async () => {
-    if (!roleTargetUser) return;
-    setRoleSaving(true);
-    try {
-      await assignUserRoles(roleTargetUser.id, assignedRoleIds);
-      message.success('Roles updated');
-      setRoleDrawerOpen(false);
-      actionRef.current?.reload();
-    } catch (err: any) {
-      message.error(err.message || 'Save failed');
-    } finally {
-      setRoleSaving(false);
-    }
+  // Open the edit modal with the user's current role IDs pre-fetched (the list
+  // view only carries role codes, but the form submits role IDs).
+  const openEdit = async (user: User) => {
+    const roleIds = await getUserRoleIds(user.id).catch(() => []);
+    setEditingUser({ ...user, roleIds });
+    setModalOpen(true);
   };
 
   const columns: ProColumns<User>[] = [
@@ -125,15 +89,23 @@ export default function UsersPage() {
       search: false,
     },
     {
-      title: 'Role',
-      dataIndex: 'role',
-      width: 120,
+      title: 'Roles',
+      dataIndex: 'roles',
+      width: 180,
       search: false,
-      render: (_, record) => (
-        <Tag color={ROLE_COLOR_MAP[record.role] || 'default'}>
-          {ROLE_LABEL_MAP[record.role] || record.role}
-        </Tag>
-      ),
+      render: (_, record) => {
+        const roles = record.roles ?? [];
+        if (roles.length === 0) return <Tag>—</Tag>;
+        return (
+          <Space size={[4, 4]} wrap>
+            {roles.map((code) => (
+              <Tag key={code} color={ROLE_COLOR_MAP[code] || 'default'}>
+                {ROLE_LABEL_MAP[code] || code}
+              </Tag>
+            ))}
+          </Space>
+        );
+      },
     },
     {
       title: 'Status',
@@ -157,27 +129,11 @@ export default function UsersPage() {
     {
       title: 'Actions',
       key: 'action',
-      width: 240,
+      width: 160,
       search: false,
       render: (_, record) => (
         <Space>
-          <Button
-            type="link"
-            size="small"
-            icon={<SafetyCertificateOutlined />}
-            style={{ color: '#1677ff' }}
-            onClick={() => openRoleDrawer(record)}
-          >
-            Roles
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            onClick={() => {
-              setEditingUser(record);
-              setModalOpen(true);
-            }}
-          >
+          <Button type="link" size="small" onClick={() => openEdit(record)}>
             Edit
           </Button>
           <Popconfirm
@@ -206,12 +162,13 @@ export default function UsersPage() {
 
   const handleSubmit = async (values: Record<string, any>) => {
     try {
+      const roleIds: string[] = values.roleIds ?? [];
       if (editingUser) {
         const dto: UpdateUserDto = {
           nickname: values.nickname,
           email: values.email || null,
           phone: values.phone || null,
-          role: values.role,
+          roleIds,
           status: values.status ? 1 : 2,
         };
         await updateUser(editingUser.id, dto);
@@ -223,7 +180,7 @@ export default function UsersPage() {
           nickname: values.nickname,
           email: values.email || undefined,
           phone: values.phone || undefined,
-          role: values.role,
+          roleIds,
           status: values.status ? 1 : 2,
         };
         await createUser(dto);
@@ -286,10 +243,10 @@ export default function UsersPage() {
                 nickname: editingUser.nickname,
                 email: editingUser.email,
                 phone: editingUser.phone,
-                role: editingUser.role,
+                roleIds: editingUser.roleIds ?? [],
                 status: editingUser.status === 1,
               }
-            : { status: true, role: 'viewer' }
+            : { status: true, roleIds: [] }
         }
         onFinish={handleSubmit}
         modalProps={{ destroyOnHidden: true }}
@@ -333,62 +290,18 @@ export default function UsersPage() {
           placeholder="e.g. +86 13800138000"
         />
         <ProFormSelect
-          name="role"
-          label="Primary Role"
-          options={roleOptions}
-          rules={[{ required: true, message: 'Role is required' }]}
-          placeholder="Select primary role"
+          name="roleIds"
+          label="Roles"
+          options={roleIdOptions}
+          fieldProps={{
+            mode: 'multiple',
+            optionFilterProp: 'label',
+            placeholder: 'Select one or more roles',
+          }}
+          rules={[{ required: true, message: 'At least one role is required' }]}
         />
         <ProFormSwitch name="status" label="Active" />
       </ModalForm>
-
-      {/* ── Multi-Role Assignment Drawer ── */}
-      <Drawer
-        title={
-          <span>
-            <SafetyCertificateOutlined style={{ marginRight: 8 }} />
-            Assign Roles — {roleTargetUser?.nickname || roleTargetUser?.username || ''}
-            {roleTargetUser && (
-              <Tag color="blue" style={{ marginLeft: 8 }}>
-                {roleTargetUser.username}
-              </Tag>
-            )}
-          </span>
-        }
-        open={roleDrawerOpen}
-        onClose={() => setRoleDrawerOpen(false)}
-        width={420}
-        extra={
-          <Space>
-            <Button onClick={() => setRoleDrawerOpen(false)}>Cancel</Button>
-            <Button type="primary" loading={roleSaving} onClick={handleRoleSave}>
-              Save
-            </Button>
-          </Space>
-        }
-        destroyOnHidden
-      >
-        {roleLoading ? (
-          <div style={{ textAlign: 'center', padding: 40 }}>
-            <Spin size="large" />
-          </div>
-        ) : (
-          <>
-            <div style={{ marginBottom: 12, color: '#666', fontSize: 13 }}>
-              Select one or more roles for this user. Multi-role support via RBAC.
-            </div>
-            <Select
-              mode="multiple"
-              style={{ width: '100%' }}
-              placeholder="Select roles..."
-              value={assignedRoleIds}
-              onChange={(vals) => setAssignedRoleIds(vals)}
-              options={roleIdOptions}
-              optionFilterProp="label"
-            />
-          </>
-        )}
-      </Drawer>
     </>
   );
 }

@@ -7,7 +7,8 @@ export interface UserInfo {
   email: string | null;
   phone: string | null;
   avatar: string | null;
-  role: string;
+  /** Role codes from sys_user_roles (single source of truth). */
+  roles: string[];
   status: number;
   lastLoginAt: string | null;
   lastLoginIp: string | null;
@@ -75,7 +76,7 @@ export interface CreateUserDto {
   nickname: string;
   email?: string;
   phone?: string;
-  role?: string;
+  roleIds?: string[];
   status?: number;
 }
 
@@ -83,7 +84,7 @@ export interface UpdateUserDto {
   nickname?: string;
   email?: string | null;
   phone?: string | null;
-  role?: string;
+  /** Full-replace role assignment (sys_user_roles). */
   roleIds?: string[];
   status?: number;
 }

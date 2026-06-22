@@ -37,11 +37,6 @@ export interface UpdateRoleDto {
   is_default?: number;
 }
 
-export interface AssignRolesDto {
-  userId: string;
-  roleIds: string[];
-}
-
 /**
  * Get paginated role list.
  */
@@ -75,13 +70,6 @@ export async function updateRole(id: string, dto: UpdateRoleDto): Promise<Role> 
  */
 export async function deleteRole(id: string): Promise<void> {
   return request.delete(`/roles/${id}`);
-}
-
-/**
- * Assign roles to a user.
- */
-export async function assignRoles(dto: AssignRolesDto): Promise<void> {
-  return request.post('/roles/assign', dto);
 }
 
 /**

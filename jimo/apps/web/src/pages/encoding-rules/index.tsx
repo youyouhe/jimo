@@ -72,8 +72,8 @@ export default function EncodingRulesPage() {
   const [preview, setPreview] = useState('');
   const [formValues, setFormValues] = useState<Record<string, any>>({});
 
-  const userRole = useUserStore((s) => s.userInfo?.role);
-  const isPrivileged = userRole === 'super_admin' || userRole === 'admin';
+  const userRoles = useUserStore((s) => s.userInfo?.roles) ?? [];
+  const isPrivileged = userRoles.includes('super_admin') || userRoles.includes('admin');
 
   useEffect(() => {
     getMyBtnPerms()
