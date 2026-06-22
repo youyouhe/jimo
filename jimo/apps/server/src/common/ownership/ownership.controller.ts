@@ -2,7 +2,7 @@ import { Body, Controller, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { OwnershipService } from './ownership.service';
 import { CurrentUser } from '../decorators/current-user.decorator';
-import { ShareDto, TransferDto } from './dto';
+import { ReassignDto, ShareDto, TransferDto } from './dto';
 
 @ApiTags('ownership')
 @ApiBearerAuth()
@@ -21,6 +21,13 @@ export class OwnershipController {
   @ApiOperation({ summary: 'Transfer record ownership to another user (owner-only)' })
   async transfer(@Body() dto: TransferDto, @CurrentUser() user: { sub: string }) {
     const data = await this.ownershipService.transfer(dto.businessType, dto.businessId, dto.newOwnerId, user.sub);
+    return { code: 0, msg: 'success', data };
+  }
+
+  @Post('reassign')
+  @ApiOperation({ summary: 'Reassign records (owner or ownerless) to another user. Batch.' })
+  async reassign(@Body() dto: ReassignDto, @CurrentUser() user: { sub: string }) {
+    const data = await this.ownershipService.reassign(dto.businessType, dto.ids, dto.newOwnerId, user.sub);
     return { code: 0, msg: 'success', data };
   }
 }

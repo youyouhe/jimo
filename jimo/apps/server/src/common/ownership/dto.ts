@@ -33,3 +33,19 @@ export class TransferDto {
   @IsUUID('4')
   newOwnerId!: string;
 }
+
+export class ReassignDto {
+  @ApiProperty({ example: 'posts' })
+  @IsString()
+  @IsNotEmpty()
+  businessType!: string;
+
+  @ApiProperty({ type: [String], description: 'Record ids to reassign (batch)' })
+  @IsArray()
+  @IsUUID('4', { each: true })
+  ids!: string[];
+
+  @ApiProperty()
+  @IsUUID('4')
+  newOwnerId!: string;
+}

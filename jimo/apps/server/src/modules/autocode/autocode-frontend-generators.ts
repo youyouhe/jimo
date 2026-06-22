@@ -988,6 +988,7 @@ import {
   ${apiFunctions.join(',\n  ')},
   type ${typeImports.join(',\n  type ')},
 } from '@/services/${n.kebabSingular}';
+import ReassignModal from '@/components/ReassignModal';
 import { getMyBtnPerms } from '@/services/authority-btn';${hasUploadFields ? `\nimport { uploadFile } from '@/services/file';` : ''}${hasDictFields ? `\nimport { getDictDetailsByType } from '@/services/dictionary';` : ''}${hasPointFields ? `\nimport GeoField from '@/components/GeoField';` : ''}
 
 ${grandchildSubComponents.join('')}
@@ -996,6 +997,7 @@ export default function ${n.pascalName}Page() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<${n.pascalSingular} | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
+  const [reassignOpen, setReassignOpen] = useState(false);
   const [form] = Form.useForm();
 ${hasOneToMany ? `${dto.fields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many').map(f => `  const [${toCamelCase(f.name)}EditableKeys, set${toPascalCase(f.name)}EditableKeys] = useState<React.Key[]>([]);`).join('\n')}\n  const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([]);\n  const currentDataRef = useRef<${n.pascalSingular}[]>([]);\n` : ''}${dictFields.length > 0 ? dictFields.map(f => `  const [${toCamelCase(f.name)}Options, set${toPascalCase(f.name)}Options] = useState<Record<string, { text: string }>>({});`).join('\n') + '\n' : ''}${manyToOneDictFields.length > 0 ? manyToOneDictFields.map(({ field: f }) => `  const [${toCamelCase(f.name)}TypeMap, set${toPascalCase(f.name)}TypeMap] = useState<Record<string, string>>({});`).join('\n') + '\n' : ''}${tableSearchableFields.flatMap(f => (f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal') ? [`  const [search${toPascalCase(f.name)}Min, setSearch${toPascalCase(f.name)}Min] = useState('');`, `  const [search${toPascalCase(f.name)}Max, setSearch${toPascalCase(f.name)}Max] = useState('');`] : [`  const [search${toPascalCase(f.name)}, setSearch${toPascalCase(f.name)}] = useState('');`]).join('\n')}${tableSearchableFields.length > 0 ? `
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1314,6 +1316,14 @@ ${oneToManyFields.length > 0 ? `        expandable={{
               </Button>
             </Popconfirm>
           ),
+          selectedRowKeys.length > 0 && (
+            <Button
+              key="reassign"
+              onClick={() => setReassignOpen(true)}
+            >
+              移交 ({selectedRowKeys.length})
+            </Button>
+          ),
         ].filter(Boolean)}
       />
 
@@ -1362,6 +1372,17 @@ ${tabItems}
           />`;
 })()}
       </ModalForm>
+
+      <ReassignModal
+        open={reassignOpen}
+        businessType="${n.tableName}"
+        ids={selectedRowKeys}
+        onClose={() => setReassignOpen(false)}
+        onSuccess={() => {
+          setSelectedRowKeys([]);
+          actionRef.current?.reload();
+        }}
+      />
     </>
   );
 }
