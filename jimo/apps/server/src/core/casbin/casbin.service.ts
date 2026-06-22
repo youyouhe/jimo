@@ -159,6 +159,15 @@ export class CasbinService implements ICasbinService, OnModuleInit {
       await this.enforcer.addPolicy(role, '/api/v1/users/change-password', 'POST');
     }
 
+    // Generated business tables + approval/ownership APIs: all authenticated roles.
+    // Row-level ownership (OwnershipHelper) still applies — API access ≠ data access.
+    for (const role of [RoleCode.ADMIN, RoleCode.EDITOR, RoleCode.VIEWER]) {
+      await this.enforcer.addPolicy(role, '/api/v1/lc/*', '*');
+      await this.enforcer.addPolicy(role, '/api/v1/approvals/*', '*');
+      await this.enforcer.addPolicy(role, '/api/v1/ownership/*', '*');
+      await this.enforcer.addPolicy(role, '/api/v1/departments/*', '*');
+    }
+
     // Role inheritance: super_admin inherits all admin policies
     await this.enforcer.addRoleForUser(RoleCode.SUPER_ADMIN, RoleCode.ADMIN);
   }
