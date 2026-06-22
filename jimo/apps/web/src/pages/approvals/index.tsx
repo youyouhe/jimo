@@ -126,7 +126,7 @@ export default function ApprovalsPage() {
   };
 
   const pendingColumns = [
-    { title: '业务类型', dataIndex: 'businessType', width: 130 },
+    { title: '业务类型', dataIndex: 'businessType', width: 130, render: (v: any) => v || '-' },
     { title: '任务', dataIndex: 'taskName', width: 80 },
     {
       title: '创建时间',
@@ -156,8 +156,8 @@ export default function ApprovalsPage() {
   ];
 
   const doneColumns = [
-    { title: '业务类型', dataIndex: 'businessType', width: 120 },
-    { title: '业务ID', dataIndex: 'businessId', width: 260, ellipsis: true },
+    { title: '业务类型', dataIndex: 'businessType', width: 120, render: (v: any) => v || '-' },
+    { title: '业务ID', dataIndex: 'businessId', width: 260, ellipsis: true, render: (v: any) => v || '-' },
     { title: '任务', dataIndex: 'taskName', width: 110 },
     { title: '结果', dataIndex: 'action', width: 80, render: actionTag },
     { title: '意见', dataIndex: 'comment', ellipsis: true },
@@ -170,8 +170,8 @@ export default function ApprovalsPage() {
   ];
 
   const finalizedColumns = [
-    { title: '业务类型', dataIndex: 'businessType', width: 120 },
-    { title: '业务ID', dataIndex: 'businessId', width: 260, ellipsis: true },
+    { title: '业务类型', dataIndex: 'businessType', width: 120, render: (v: any) => v || '-' },
+    { title: '业务ID', dataIndex: 'businessId', width: 260, ellipsis: true, render: (v: any) => v || '-' },
     { title: '结果', dataIndex: 'status', width: 90, render: statusTag },
     { title: '发起人', dataIndex: 'initiatorId', width: 100 },
     { title: '最终审批人', dataIndex: 'approverId', width: 100 },
