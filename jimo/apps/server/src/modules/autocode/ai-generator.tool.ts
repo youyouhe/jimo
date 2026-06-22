@@ -117,6 +117,18 @@ export const PROPOSE_ENTITY_TOOL = {
           description: '字段定义数组。不要含 id / created_at / updated_at 等系统字段。one-to-many 字段的子表字段放 detailFields。',
           items: FIELD_SCHEMA,
         },
+        approvalFlow: {
+          type: 'object',
+          description: '审批流配置（可选）。enabled=true 时生成的表自动写入审批链配置(sys_approval_flows)+前端带「提交审批」按钮。用户提交审批后按 defaultChain 逐级流转，审批人由 BPM 按组织动态解析。仅当用户明确要求审批流时设置。',
+          properties: {
+            enabled: { type: 'boolean', description: '是否启用，默认 false' },
+            defaultChain: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '审批链规则名数组。可选值：deptHead(发起人部门负责人)、divHead(分管领导)、ceo(总裁/首席执行官)、deptFinance(财务负责人D003)、legalReview(法务负责人D002)。如 ["deptHead"] 或 ["deptHead","ceo"]',
+            },
+          },
+        },
       },
       required: ['tableName', 'description', 'fields'],
     },

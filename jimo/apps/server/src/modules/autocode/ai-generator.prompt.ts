@@ -40,6 +40,20 @@ name(snake_case) · type · required · unique · description(中文) · searcha
   存储为 GeoJSON 字符串，如 {"type":"Point","coordinates":[116.39,39.91]}
   适用场景：地理位置标记、门店位置、事件发生地等
 
+## 审批流（可选）
+
+当用户要求表的数据需要审批后生效时，在 propose_entity 里设置 approvalFlow：
+- approvalFlow.enabled = true
+- approvalFlow.defaultChain：审批链规则名数组，每个规则在运行时由 BPM 按组织动态解析审批人：
+  - deptHead：发起人所在部门的负责人
+  - divHead：分管领导（上级部门负责人）
+  - ceo：总裁（按 title 首席执行官）
+  - deptFinance：财务负责人
+  - legalReview：法务负责人
+- 常见链：["deptHead"]（单级）或 ["deptHead","ceo"]（两级）
+- 效果：生成的表自动写入审批链配置(sys_approval_flows) + 前端页面带「提交审批」按钮
+- **仅在用户明确要求审批时设置**，不要默认启用
+
 ## 工具使用流程
 
 | 场景 | 操作 |
