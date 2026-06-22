@@ -100,10 +100,10 @@ public class ApprovalService {
         // Explicit task-level link — completes the one auto-created at process level.
         taskService.addUserIdentityLink(t.getId(), userId, "participant");
         try {
-            if (comment != null && !comment.isBlank()) {
-                String rec = (approved ? "[Approved]" : "[Rejected]") + " " + comment;
-                taskService.addComment(t.getId(), processInstanceId, rec);
-            }
+            // Always record the action with a comment so myDoneTasks can parse it.
+            String rec = (approved ? "[Approved]" : "[Rejected]");
+            if (comment != null && !comment.isBlank()) rec += " " + comment;
+            taskService.addComment(t.getId(), processInstanceId, rec);
             runtimeService.setVariable(processInstanceId, "lastApprover", userId);
             runtimeService.setVariable(processInstanceId, "lastApprovalComment", comment == null ? "" : comment);
 
