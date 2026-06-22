@@ -32,9 +32,9 @@ export class AuthorityBtnService {
    * super_admin gets all buttons for all menus.
    * Others get only the btns in sys_authority_btns for their roles.
    */
-  async getMyBtnPerms(userId: string, userRole: string): Promise<Record<string, string[]>> {
+  async getMyBtnPerms(userId: string, userRoles: string[]): Promise<Record<string, string[]>> {
     // super_admin bypasses sys_role_menus and always gets all button menus.
-    if (userRole === RoleCode.SUPER_ADMIN) {
+    if (userRoles.includes(RoleCode.SUPER_ADMIN)) {
       const rows = await this.db
         .select({ btnName: sysMenus.name, parentId: sysMenus.parentId })
         .from(sysMenus)

@@ -57,7 +57,7 @@ export class MenuService {
     return this.buildTree(allMenus, null);
   }
 
-  async findAccessible(userId: string, userRole: string): Promise<MenuTreeNode[]> {
+  async findAccessible(userId: string, userRoles: string[]): Promise<MenuTreeNode[]> {
     // Include visible menus (isVisible=1) OR button-type menus (menuType=3)
     // Button menus have isVisible=0 to stay out of the sidebar, but they must
     // appear in the menu tree so frontend pages can check btn-level permissions.
@@ -67,7 +67,7 @@ export class MenuService {
     ];
 
     // SUPER_ADMIN sees all visible menus
-    if (userRole === RoleCode.SUPER_ADMIN) {
+    if (userRoles.includes(RoleCode.SUPER_ADMIN)) {
       const rows = await this.db
         .select()
         .from(sysMenus)

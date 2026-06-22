@@ -14,7 +14,8 @@ export type { SafeUser };
 export interface JwtPayload {
   sub: string;
   username: string;
-  role: string;
+  /** All role codes the user holds (from sys_user_roles). */
+  roles: string[];
   jti: string;
 }
 
@@ -58,17 +59,21 @@ export class AuthService {
     const jti = randomUUID();
     const refreshJti = randomUUID();
 
+    // Roles come from sys_user_roles (single source of truth). Fetched here so
+    // both login and refresh (which re-reads the user) always carry fresh roles.
+    const roles = await this.userService.getRoleCodes(user.id);
+
     const payload: JwtPayload = {
       sub: user.id,
       username: user.username,
-      role: user.role,
+      roles,
       jti,
     };
 
     const refreshPayload: JwtPayload = {
       sub: user.id,
       username: user.username,
-      role: user.role,
+      roles,
       jti: refreshJti,
     };
 

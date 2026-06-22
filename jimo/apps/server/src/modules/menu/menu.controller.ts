@@ -58,7 +58,7 @@ export class MenuController {
   async findAccessible(
     @CurrentUser() user: JwtPayload,
   ): Promise<ApiResp<MenuTreeNode[]>> {
-    const data = await this.menuService.findAccessible(user.sub, user.role);
+    const data = await this.menuService.findAccessible(user.sub, user.roles ?? []);
     return { code: 0, msg: 'success', data };
   }
 

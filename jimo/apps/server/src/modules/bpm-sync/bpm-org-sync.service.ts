@@ -1,9 +1,11 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { eq } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import { sysUsers } from '../../db/schema/users';
 import { sysDepartments } from '../../db/schema/sys-departments';
+import { sysUserRoles } from '../../db/schema/user-roles';
+import { sysRoles } from '../../db/schema/roles';
 
 /**
  * Pushes user/department changes from NestJS (source of truth) into BPM, so
@@ -51,11 +53,18 @@ export class BpmOrgSyncService {
         return;
       }
       const dept = d[0]!;
+      // BPM "title" is cosmetic — derive it from the user's role names.
+      const roleRows = await this.db
+        .select({ name: sysRoles.name })
+        .from(sysUserRoles)
+        .innerJoin(sysRoles, eq(sysRoles.id, sysUserRoles.roleId))
+        .where(and(eq(sysUserRoles.userId, userId), isNull(sysRoles.deletedAt)));
+      const title = roleRows.map((r) => r.name).join('/');
       const payload = {
         name: user.nickname || user.username,
         deptId: dept.code,
         email: user.email ?? '',
-        title: user.role ?? '',
+        title,
       };
 
       if (user.bpmUserId) {

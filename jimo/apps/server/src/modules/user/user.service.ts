@@ -24,6 +24,9 @@ import { BpmOrgSyncService } from '../bpm-sync/bpm-org-sync.service';
 
 export type SafeUser = Omit<SysUser, 'passwordHash'>;
 
+/** A user with its role codes resolved from sys_user_roles (single source of truth). */
+export type UserWithRoles = SafeUser & { roles: string[] };
+
 @Injectable()
 export class UserService {
   constructor(
@@ -32,38 +35,34 @@ export class UserService {
     private readonly bpmSync: BpmOrgSyncService,
   ) {}
 
-  /**
-   * Two stores hold a user's role and MUST stay in sync:
-   *   - sys_users.role      — single denormalized code (display column + RolesGuard)
-   *   - sys_user_roles      — join table to sys_roles (Casbin policy source)
-   * The "primary" role mirrored into sys_users.role is the highest-privilege one.
-   */
-  private static readonly ROLE_RANK: Record<string, number> = {
-    super_admin: 4,
-    admin: 3,
-    editor: 2,
-    viewer: 1,
-  };
-
-  private pickPrimaryRoleCode(codes: string[]): string {
-    return (
-      codes
-        .filter((c) => UserService.ROLE_RANK[c] !== undefined)
-        .sort((a, b) => UserService.ROLE_RANK[b]! - UserService.ROLE_RANK[a]!)[0] ?? 'viewer'
-    );
-  }
-
-  /** Resolve roleIds → the highest-privilege role code among them. */
-  private async primaryRoleFromIds(roleIds: string[]): Promise<string> {
-    if (roleIds.length === 0) return 'viewer';
-    const roles = await this.db
+  /** Role codes a user holds (from sys_user_roles → sys_roles.code). */
+  async getRoleCodes(userId: string): Promise<string[]> {
+    const rows = await this.db
       .select({ code: sysRoles.code })
-      .from(sysRoles)
-      .where(and(inArray(sysRoles.id, roleIds), isNull(sysRoles.deletedAt)));
-    return this.pickPrimaryRoleCode(roles.map((r) => r.code));
+      .from(sysUserRoles)
+      .innerJoin(sysRoles, eq(sysRoles.id, sysUserRoles.roleId))
+      .where(and(eq(sysUserRoles.userId, userId), isNull(sysRoles.deletedAt)));
+    return rows.map((r) => r.code);
   }
 
-  /** Resolve a single role code → its sys_roles.id (for seeding sys_user_roles). */
+  /** Batched role lookup for a page of users (one query, grouped in memory). */
+  private async rolesByUser(userIds: string[]): Promise<Map<string, string[]>> {
+    const map = new Map<string, string[]>();
+    if (userIds.length === 0) return map;
+    const rows = await this.db
+      .select({ userId: sysUserRoles.userId, code: sysRoles.code })
+      .from(sysUserRoles)
+      .innerJoin(sysRoles, eq(sysRoles.id, sysUserRoles.roleId))
+      .where(and(inArray(sysUserRoles.userId, userIds), isNull(sysRoles.deletedAt)));
+    for (const r of rows) {
+      const arr = map.get(r.userId) ?? [];
+      arr.push(r.code);
+      map.set(r.userId, arr);
+    }
+    return map;
+  }
+
+  /** Resolve a role code → its sys_roles.id (for defaulting new users to viewer). */
   private async roleIdFromCode(code: string): Promise<string | null> {
     const rows = await this.db
       .select({ id: sysRoles.id })
@@ -73,7 +72,21 @@ export class UserService {
     return rows[0]?.id ?? null;
   }
 
-  async findAll(query: QueryUserDto): Promise<PaginatedData<SafeUser>> {
+  /** Full-replace a user's sys_user_roles rows. */
+  private async setRoleIds(userId: string, roleIds: string[]): Promise<void> {
+    const uniqueIds = [...new Set(roleIds)];
+    await this.db.transaction(async (tx) => {
+      await tx.delete(sysUserRoles).where(eq(sysUserRoles.userId, userId));
+      if (uniqueIds.length > 0) {
+        await tx
+          .insert(sysUserRoles)
+          .values(uniqueIds.map((roleId) => ({ userId, roleId })));
+      }
+    });
+    await this.casbinService?.reloadPoliciesForUser(userId);
+  }
+
+  async findAll(query: QueryUserDto): Promise<PaginatedData<UserWithRoles>> {
     const { page, pageSize, username, nickname, phone, email, status } = query;
     const offset = (page - 1) * pageSize;
 
@@ -111,12 +124,16 @@ export class UserService {
     ]);
 
     const total = totalRows[0]?.count ?? 0;
-    const list = rows.map(({ passwordHash: _omit, ...user }) => user);
+    const rolesMap = await this.rolesByUser(rows.map((r) => r.id));
+    const list: UserWithRoles[] = rows.map(({ passwordHash: _omit, ...user }) => ({
+      ...user,
+      roles: rolesMap.get(user.id) ?? [],
+    }));
 
     return { list, total, page, pageSize };
   }
 
-  async findOne(id: string): Promise<SafeUser> {
+  async findOne(id: string): Promise<UserWithRoles> {
     const rows = await this.db
       .select()
       .from(sysUsers)
@@ -131,7 +148,7 @@ export class UserService {
     }
 
     const { passwordHash: _omit, ...user } = rows[0]!;
-    return user;
+    return { ...user, roles: await this.getRoleCodes(user.id) };
   }
 
   async findById(id: string): Promise<SysUser | null> {
@@ -154,7 +171,7 @@ export class UserService {
     return rows[0] ?? null;
   }
 
-  async create(dto: CreateUserDto): Promise<SafeUser> {
+  async create(dto: CreateUserDto): Promise<UserWithRoles> {
     const existing = await this.findByUsername(dto.username);
     if (existing) {
       throw new ConflictException({
@@ -173,7 +190,6 @@ export class UserService {
         nickname: dto.nickname ?? '',
         email: dto.email,
         phone: dto.phone,
-        role: dto.role ?? 'viewer',
         status: dto.status !== undefined ? (dto.status as 1 | 2) : 1,
         deptId: dto.deptId,
       })
@@ -181,27 +197,28 @@ export class UserService {
 
     const newUser = rows[0]!;
 
-    // Seed sys_user_roles from the single role so Casbin matches sys_users.role.
-    const roleCode = dto.role ?? 'viewer';
-    const roleId = await this.roleIdFromCode(roleCode);
-    if (roleId) {
-      await this.db.insert(sysUserRoles).values({ userId: newUser.id, roleId });
-      await this.casbinService?.reloadPoliciesForUser(newUser.id);
+    // Assign roles. Default to viewer when none provided so the user can log in.
+    let roleIds = dto.roleIds ?? [];
+    if (roleIds.length === 0) {
+      const viewerId = await this.roleIdFromCode('viewer');
+      if (viewerId) roleIds = [viewerId];
+    }
+    if (roleIds.length > 0) {
+      await this.setRoleIds(newUser.id, roleIds);
     }
 
     await this.bpmSync.syncUser(newUser.id);
     const { passwordHash: _omit, ...safeUser } = newUser;
-    return safeUser;
+    return { ...safeUser, roles: await this.getRoleCodes(newUser.id) };
   }
 
-  async update(id: string, dto: UpdateUserDto): Promise<SafeUser> {
+  async update(id: string, dto: UpdateUserDto): Promise<UserWithRoles> {
     await this.findOne(id);
 
     type UserUpdateFields = {
       nickname?: string;
       email?: string | null;
       phone?: string | null;
-      role?: string;
       status?: 1 | 2;
       deptId?: string | null;
       updatedAt?: Date;
@@ -214,7 +231,6 @@ export class UserService {
     if (dto.nickname !== undefined) updateData.nickname = dto.nickname;
     if (dto.email !== undefined) updateData.email = dto.email;
     if (dto.phone !== undefined) updateData.phone = dto.phone;
-    if (dto.role !== undefined) updateData.role = dto.role;
     if (dto.status !== undefined) updateData.status = dto.status as 1 | 2;
     if (dto.deptId !== undefined) updateData.deptId = dto.deptId ?? null;
 
@@ -224,42 +240,14 @@ export class UserService {
       .where(and(eq(sysUsers.id, id), isNull(sysUsers.deletedAt)))
       .returning();
 
-    // Keep sys_user_roles (Casbin) and sys_users.role (display + RolesGuard) in sync.
+    // Full-replace role assignment (sys_user_roles is the single source of truth).
     if (dto.roleIds !== undefined) {
-      const uniqueIds = [...new Set(dto.roleIds!)];
-      await this.db.transaction(async (tx) => {
-        await tx.delete(sysUserRoles).where(eq(sysUserRoles.userId, id));
-        if (uniqueIds.length > 0) {
-          await tx
-            .insert(sysUserRoles)
-            .values(uniqueIds.map((roleId) => ({ userId: id, roleId })));
-        }
-      });
-      // Mirror the highest-privilege role into sys_users.role.
-      const primaryCode = await this.primaryRoleFromIds(uniqueIds);
-      const reroll = await this.db
-        .update(sysUsers)
-        .set({ role: primaryCode, updatedAt: new Date() })
-        .where(and(eq(sysUsers.id, id), isNull(sysUsers.deletedAt)))
-        .returning();
-      if (reroll[0]) rows[0] = reroll[0];
-      await this.casbinService?.reloadPoliciesForUser(id);
-    } else if (dto.role !== undefined) {
-      // role (single) changed via the main form → mirror into sys_user_roles so
-      // Casbin matches sys_users.role (which updateData already set above).
-      const roleId = await this.roleIdFromCode(dto.role);
-      if (roleId) {
-        await this.db.transaction(async (tx) => {
-          await tx.delete(sysUserRoles).where(eq(sysUserRoles.userId, id));
-          await tx.insert(sysUserRoles).values({ userId: id, roleId });
-        });
-        await this.casbinService?.reloadPoliciesForUser(id);
-      }
+      await this.setRoleIds(id, dto.roleIds);
     }
 
     await this.bpmSync.syncUser(id);
     const { passwordHash: _omit, ...safeUser } = rows[0]!;
-    return safeUser;
+    return { ...safeUser, roles: await this.getRoleCodes(id) };
   }
 
   async remove(id: string): Promise<void> {
@@ -273,7 +261,7 @@ export class UserService {
     await this.bpmSync.deleteUser(existing.bpmUserId);
   }
 
-  async getProfile(userId: string): Promise<SafeUser> {
+  async getProfile(userId: string): Promise<UserWithRoles> {
     const rows = await this.db
       .select()
       .from(sysUsers)
@@ -288,10 +276,10 @@ export class UserService {
     }
 
     const { passwordHash: _omit, ...safeUser } = rows[0]!;
-    return safeUser;
+    return { ...safeUser, roles: await this.getRoleCodes(userId) };
   }
 
-  async updateProfile(userId: string, dto: UpdateProfileDto): Promise<SafeUser> {
+  async updateProfile(userId: string, dto: UpdateProfileDto): Promise<UserWithRoles> {
     await this.getProfile(userId);
 
     type ProfileUpdateFields = {
@@ -318,7 +306,7 @@ export class UserService {
       .returning();
 
     const { passwordHash: _omit, ...safeUser } = rows[0]!;
-    return safeUser;
+    return { ...safeUser, roles: await this.getRoleCodes(userId) };
   }
 
   async changePassword(userId: string, dto: ChangePasswordDto): Promise<void> {

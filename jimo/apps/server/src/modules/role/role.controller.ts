@@ -126,7 +126,7 @@ export class RoleController {
     @Body() dto: AssignRolesDto,
     @CurrentUser() caller: JwtPayload,
   ): Promise<ApiResp<null>> {
-    await this.roleService.assignRoles(dto, caller.role);
+    await this.roleService.assignRoles(dto, caller.roles ?? []);
     return { code: 0, msg: 'success', data: null };
   }
 

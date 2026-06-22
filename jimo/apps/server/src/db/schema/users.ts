@@ -28,7 +28,8 @@ export const sysUsers = pgTable(
     email: varchar('email', { length: 128 }),
     phone: varchar('phone', { length: 20 }),
     avatar: varchar('avatar', { length: 512 }).default(''),
-    role: varchar('role', { length: 32 }).notNull().default(UserRole.VIEWER),
+    // NOTE: a user's roles live in sys_user_roles (→ sys_roles), the single
+    // source of truth. There is no denormalized role column here.
     status: smallint('status').notNull().default(1),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
     lastLoginIp: varchar('last_login_ip', { length: 45 }),

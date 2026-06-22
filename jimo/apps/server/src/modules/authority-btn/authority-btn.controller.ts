@@ -40,7 +40,7 @@ export class AuthorityBtnController {
   async getMyBtnPerms(
     @CurrentUser() user: JwtPayload,
   ): Promise<ApiResp<Record<string, string[]>>> {
-    const data = await this.authorityBtnService.getMyBtnPerms(user.sub, user.role);
+    const data = await this.authorityBtnService.getMyBtnPerms(user.sub, user.roles ?? []);
     return { code: 0, msg: 'success', data };
   }
 

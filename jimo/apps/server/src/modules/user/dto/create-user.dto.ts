@@ -6,6 +6,7 @@ import {
   IsMobilePhone,
   IsIn,
   IsUUID,
+  IsArray,
   MinLength,
   MaxLength,
 } from 'class-validator';
@@ -46,14 +47,13 @@ export class CreateUserDto {
   status?: number = 1;
 
   @ApiPropertyOptional({
-    example: 'viewer',
-    enum: ['super_admin', 'admin', 'editor', 'viewer'],
-    default: 'viewer',
+    description: 'Role UUIDs to assign (sys_user_roles). Defaults to viewer if empty.',
+    type: [String],
   })
   @IsOptional()
-  @IsString()
-  @IsIn(['super_admin', 'admin', 'editor', 'viewer'])
-  role?: string = 'viewer';
+  @IsArray()
+  @IsUUID('4', { each: true })
+  roleIds?: string[];
 
   @ApiPropertyOptional({ description: '所属部门 (sys_departments.id), 用于 BPM 审批人解析' })
   @IsOptional()

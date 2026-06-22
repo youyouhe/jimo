@@ -169,7 +169,7 @@ export class RoleService {
       .where(and(eq(sysRoles.id, id), isNull(sysRoles.deletedAt)));
   }
 
-  async assignRoles(dto: AssignRolesDto, callerRole: string): Promise<void> {
+  async assignRoles(dto: AssignRolesDto, callerRoles: string[]): Promise<void> {
     const { userId, roleIds } = dto;
 
     // Validate all roleIds exist and are not soft-deleted
@@ -187,7 +187,7 @@ export class RoleService {
       }
 
       // Privilege check: only super_admin may assign the super_admin role
-      if (callerRole !== RoleCode.SUPER_ADMIN) {
+      if (!callerRoles.includes(RoleCode.SUPER_ADMIN)) {
         const attemptsSuperAdmin = resolvedRoles.some(
           (r) => r.code === RoleCode.SUPER_ADMIN,
         );

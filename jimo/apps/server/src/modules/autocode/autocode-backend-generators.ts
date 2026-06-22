@@ -1035,8 +1035,9 @@ export class ${n.pascalSingular}Controller {
   @Get()
   @ApiOperation({ summary: 'Get paginated list of ${n.kebabName}' })
   @ApiResponse({ status: 200, description: 'Returns paginated ${n.kebabName}' })
-  async findAll(@Query() query: Query${n.pascalSingular}Dto, @CurrentUser() user: { sub: string; role: string }): Promise<PaginatedResponse<${n.schemaType}>> {
-    const isAdmin = user?.role === 'super_admin' || user?.role === 'admin';
+  async findAll(@Query() query: Query${n.pascalSingular}Dto, @CurrentUser() user: { sub: string; roles: string[] }): Promise<PaginatedResponse<${n.schemaType}>> {
+    const roles = user?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('admin');
     const data = await this.${n.camelSingular}Service.findAll(query, user?.sub, isAdmin);
     return { code: 0, msg: 'success', data };
   }
