@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Card, Tabs, Table, Tag, Button, Modal, Form, Input, Radio, message, Empty, Typography } from 'antd';
+import { Card, Tabs, Table, Tag, Button, Modal, Form, Input, Radio, message, Empty, Typography, Collapse } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { history } from '@umijs/max';
 import {
@@ -303,21 +303,24 @@ export default function ApprovalsPage() {
               children: done.length === 0 ? (
                 <Empty description="暂无已办记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
               ) : (
-                doneGroups.map(([bt, tasks]) => (
-                  <div key={bt} style={{ marginBottom: bt === doneGroups[doneGroups.length - 1]![0] ? 0 : 16 }}>
-                    <Typography.Title level={5} style={{ margin: '0 0 8px' }}>
-                      {bt} ({tasks.length})
-                    </Typography.Title>
-                    <Table
-                      columns={doneColumns}
-                      dataSource={tasks}
-                      rowKey="taskId"
-                      pagination={false}
-                      size="small"
-                      expandable={{ expandedRowRender: doneRecordExpandedRow }}
-                    />
-                  </div>
-                ))
+                <Collapse
+                  size="small"
+                  defaultActiveKey={doneGroups.map(([bt]) => bt)}
+                  items={doneGroups.map(([bt, tasks]) => ({
+                    key: bt,
+                    label: `${bt} (${tasks.length})`,
+                    children: (
+                      <Table
+                        columns={doneColumns}
+                        dataSource={tasks}
+                        rowKey="taskId"
+                        pagination={false}
+                        size="small"
+                        expandable={{ expandedRowRender: doneRecordExpandedRow }}
+                      />
+                    ),
+                  }))}
+                />
               ),
             },
             {
