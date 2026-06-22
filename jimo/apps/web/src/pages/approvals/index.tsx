@@ -97,6 +97,34 @@ export default function ApprovalsPage() {
       .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
       .join(' ');
 
+  const renderValue = (v: unknown): React.ReactNode => {
+    if (v == null) return <Typography.Text type="secondary">-</Typography.Text>;
+    const s = String(v);
+    // Data-URI embedded images → thumbnail so the approver can actually see it
+    if (s.startsWith('data:image/')) {
+      return (
+        <img src={s} alt="" style={{ maxWidth: 80, maxHeight: 60, borderRadius: 4, border: '1px solid #eee', objectFit: 'cover' }} />
+      );
+    }
+    // HTTP/storage URLs → clickable link
+    if (/^https?:\/\//.test(s) || s.startsWith('/storage/') || s.startsWith('/api/')) {
+      return (
+        <a href={s} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>
+          Open
+        </a>
+      );
+    }
+    // Long text → truncate with native tooltip
+    if (s.length > 200) {
+      return (
+        <Typography.Text ellipsis style={{ maxWidth: 300 }} title={s}>
+          {s}
+        </Typography.Text>
+      );
+    }
+    return <Typography.Text style={{ fontSize: 13 }}>{s}</Typography.Text>;
+  };
+
   const pendingColumns = [
     { title: '业务类型', dataIndex: 'businessType', width: 130 },
     { title: '任务', dataIndex: 'taskName', width: 80 },
@@ -229,7 +257,7 @@ export default function ApprovalsPage() {
                                 {humanize(k)}
                               </Typography.Text>
                               <Typography.Text style={{ fontSize: 13 }}>
-                                {v == null ? '-' : String(v)}
+                                {renderValue(v)}
                               </Typography.Text>
                             </div>
                           ))}
