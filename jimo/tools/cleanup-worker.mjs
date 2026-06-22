@@ -35,25 +35,32 @@ const postgres = _require('postgres');
 // ── paths ────────────────────────────────────────────────────────────────────
 const __dirname = __dirname_tmp;
 
-// Resolve project root (directory that contains release/lowcode/...)
+// PROJECT_ROOT must match NestJS's AutocodeService.resolveProjectRoot() EXACTLY:
+// both walk up from cwd to the dir containing release/jimo/apps/server/src, then
+// prefix code paths with release/jimo/... and job-status paths with .tmp/...
+// The worker and NestJS communicate via JSON files under <PROJECT_ROOT>/.tmp/generate-jobs
+// — if the two roots disagree the worker writes "completed" where NestJS never reads
+// it and the UI stays stuck at 0% (this is exactly the bug that recurred here:
+// JIMO_ROOT=release/jimo made code paths right but put .tmp under release/jimo,
+// while NestJS puts .tmp under the git root).
 function resolveProjectRoot() {
   let dir = process.cwd();
   const root = path.parse(dir).root;
   while (dir !== root) {
-    if (fs.existsSync(path.join(dir, 'release', 'lowcode', 'apps', 'server', 'src'))) {
+    if (fs.existsSync(path.join(dir, 'release', 'jimo', 'apps', 'server', 'src'))) {
       return dir;
     }
     dir = path.resolve(dir, '..');
   }
-  // fallback: worker lives in release/lowcode/tools/
+  // fallback: worker lives at release/jimo/tools/ → git root is three levels up
   return path.resolve(__dirname, '..', '..', '..');
 }
 
 const PROJECT_ROOT = resolveProjectRoot();
-const SERVER_SRC  = path.join(PROJECT_ROOT, 'release/lowcode/apps/server/src');
+const SERVER_SRC   = path.join(PROJECT_ROOT, 'release/jimo/apps/server/src');
 const SCHEMA_INDEX = path.join(SERVER_SRC, 'db/schema/index.ts');
 const APP_MODULE   = path.join(SERVER_SRC, 'app.module.ts');
-const UMIRC        = path.join(PROJECT_ROOT, 'release/lowcode/apps/web/.umirc.ts');
+const UMIRC        = path.join(PROJECT_ROOT, 'release/jimo/apps/web/.umirc.ts');
 
 // ── name derivation (mirrors autocode-field-utils.ts) ────────────────────────
 function toPascalCase(name) {
@@ -116,7 +123,7 @@ async function walkAndEdit(dir, replacer) {
 // ── cleanup steps ─────────────────────────────────────────────────────────────
 async function deleteGeneratedFiles(n) {
   const serverSrc = SERVER_SRC;
-  const webSrc    = path.join(PROJECT_ROOT, 'release/lowcode/apps/web/src');
+  const webSrc    = path.join(PROJECT_ROOT, 'release/jimo/apps/web/src');
 
   const files = [
     path.join(serverSrc, `db/schema/${n.kebabName}.ts`),
@@ -329,7 +336,7 @@ async function writeJobFile(jobsDir, jobId, status, currentLabel, extraSteps, er
 // ── poll loop ─────────────────────────────────────────────────────────────────
 async function main() {
   // Load .env
-  const envPath = path.join(PROJECT_ROOT, 'release/lowcode/.env');
+  const envPath = path.join(PROJECT_ROOT, 'release/jimo/.env');
   if (fs.existsSync(envPath)) {
     const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
     for (const line of lines) {
@@ -347,7 +354,7 @@ async function main() {
   console.log(`[cleanup-worker] Polling sys_cleanup_jobs every 2s...`);
 
   const POLL_INTERVAL = 2000;
-  const jobsDir = path.join(PROJECT_ROOT, 'release/lowcode/.tmp/generate-jobs');
+  const jobsDir = path.join(PROJECT_ROOT, '.tmp/generate-jobs');
 
   const poll = async () => {
     let job;
