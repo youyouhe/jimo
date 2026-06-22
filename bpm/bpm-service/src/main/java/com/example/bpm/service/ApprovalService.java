@@ -4,6 +4,7 @@ import com.example.bpm.entity.ApprovalRequest;
 import com.example.bpm.repository.ApprovalRequestRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.flowable.engine.HistoryService;
+import org.flowable.engine.IdentityService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.runtime.ProcessInstance;
@@ -34,14 +35,17 @@ public class ApprovalService {
     private final RuntimeService runtimeService;
     private final TaskService taskService;
     private final HistoryService historyService;
+    private final IdentityService identityService;
     private final ObjectMapper json = new ObjectMapper();
 
     public ApprovalService(ApprovalRequestRepository repo, RuntimeService runtimeService,
-                           TaskService taskService, HistoryService historyService) {
+                           TaskService taskService, HistoryService historyService,
+                           IdentityService identityService) {
         this.repo = repo;
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.historyService = historyService;
+        this.identityService = identityService;
     }
 
     public Map<String, Object> start(String businessType, String businessKey, String processKey,
@@ -90,18 +94,27 @@ public class ApprovalService {
         }
         Task t = tasks.get(0);
 
-        if (comment != null && !comment.isBlank()) {
-            String rec = (approved ? "[Approved]" : "[Rejected]") + " " + comment;
-            taskService.addComment(t.getId(), processInstanceId, rec);
-        }
-        runtimeService.setVariable(processInstanceId, "lastApprover", userId);
-        runtimeService.setVariable(processInstanceId, "lastApprovalComment", comment == null ? "" : comment);
+        // Tell Flowable WHO is acting, so it records an identity link (participant)
+        // in ACT_HI_IDENTITYLINK. Without this the historic task's assignee is lost.
+        identityService.setAuthenticatedUserId(userId);
+        // Explicit task-level link — completes the one auto-created at process level.
+        taskService.addUserIdentityLink(t.getId(), userId, "participant");
+        try {
+            if (comment != null && !comment.isBlank()) {
+                String rec = (approved ? "[Approved]" : "[Rejected]") + " " + comment;
+                taskService.addComment(t.getId(), processInstanceId, rec);
+            }
+            runtimeService.setVariable(processInstanceId, "lastApprover", userId);
+            runtimeService.setVariable(processInstanceId, "lastApprovalComment", comment == null ? "" : comment);
 
-        Map<String, Object> vars = new HashMap<>();
-        if ("approvalStep".equals(t.getTaskDefinitionKey())) {
-            vars.put("approved", approved);
+            Map<String, Object> vars = new HashMap<>();
+            if ("approvalStep".equals(t.getTaskDefinitionKey())) {
+                vars.put("approved", approved);
+            }
+            taskService.complete(t.getId(), vars);
+        } finally {
+            identityService.setAuthenticatedUserId(null);
         }
-        taskService.complete(t.getId(), vars);
 
         return Map.of("completed", true, "approved", approved, "taskId", t.getId());
     }
@@ -121,8 +134,10 @@ public class ApprovalService {
      * lc_business_approvals on processInstanceId (avoids a per-task variable N+1).
      */
     public List<Map<String, Object>> myDoneTasks(String userId) {
+        // Use taskInvolvedUser (identity links) instead of taskAssignee because
+        // Flowable clears the assignee field on historic tasks upon completion.
         List<HistoricTaskInstance> tasks = historyService.createHistoricTaskInstanceQuery()
-                .taskAssignee(userId)
+                .taskInvolvedUser(userId)
                 .finished()
                 .orderByHistoricTaskInstanceEndTime().desc()
                 .listPage(0, 100);
