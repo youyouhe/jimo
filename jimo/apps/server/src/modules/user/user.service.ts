@@ -6,11 +6,12 @@ import {
   ConflictException,
   BadRequestException,
 } from '@nestjs/common';
-import { eq, and, isNull, like, sql, count } from 'drizzle-orm';
+import { eq, and, isNull, like, sql, count, inArray } from 'drizzle-orm';
 import * as bcrypt from 'bcryptjs';
 import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import { sysUsers, SysUser } from '../../db/schema/users';
 import { sysUserRoles } from '../../db/schema/user-roles';
+import { sysRoles } from '../../db/schema/roles';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -30,6 +31,47 @@ export class UserService {
     @Optional() @Inject(CASBIN_SERVICE_TOKEN) private readonly casbinService: ICasbinService | null,
     private readonly bpmSync: BpmOrgSyncService,
   ) {}
+
+  /**
+   * Two stores hold a user's role and MUST stay in sync:
+   *   - sys_users.role      — single denormalized code (display column + RolesGuard)
+   *   - sys_user_roles      — join table to sys_roles (Casbin policy source)
+   * The "primary" role mirrored into sys_users.role is the highest-privilege one.
+   */
+  private static readonly ROLE_RANK: Record<string, number> = {
+    super_admin: 4,
+    admin: 3,
+    editor: 2,
+    viewer: 1,
+  };
+
+  private pickPrimaryRoleCode(codes: string[]): string {
+    return (
+      codes
+        .filter((c) => UserService.ROLE_RANK[c] !== undefined)
+        .sort((a, b) => UserService.ROLE_RANK[b]! - UserService.ROLE_RANK[a]!)[0] ?? 'viewer'
+    );
+  }
+
+  /** Resolve roleIds → the highest-privilege role code among them. */
+  private async primaryRoleFromIds(roleIds: string[]): Promise<string> {
+    if (roleIds.length === 0) return 'viewer';
+    const roles = await this.db
+      .select({ code: sysRoles.code })
+      .from(sysRoles)
+      .where(and(inArray(sysRoles.id, roleIds), isNull(sysRoles.deletedAt)));
+    return this.pickPrimaryRoleCode(roles.map((r) => r.code));
+  }
+
+  /** Resolve a single role code → its sys_roles.id (for seeding sys_user_roles). */
+  private async roleIdFromCode(code: string): Promise<string | null> {
+    const rows = await this.db
+      .select({ id: sysRoles.id })
+      .from(sysRoles)
+      .where(and(eq(sysRoles.code, code), isNull(sysRoles.deletedAt)))
+      .limit(1);
+    return rows[0]?.id ?? null;
+  }
 
   async findAll(query: QueryUserDto): Promise<PaginatedData<SafeUser>> {
     const { page, pageSize, username, nickname, phone, email, status } = query;
@@ -138,6 +180,15 @@ export class UserService {
       .returning();
 
     const newUser = rows[0]!;
+
+    // Seed sys_user_roles from the single role so Casbin matches sys_users.role.
+    const roleCode = dto.role ?? 'viewer';
+    const roleId = await this.roleIdFromCode(roleCode);
+    if (roleId) {
+      await this.db.insert(sysUserRoles).values({ userId: newUser.id, roleId });
+      await this.casbinService?.reloadPoliciesForUser(newUser.id);
+    }
+
     await this.bpmSync.syncUser(newUser.id);
     const { passwordHash: _omit, ...safeUser } = newUser;
     return safeUser;
@@ -173,20 +224,36 @@ export class UserService {
       .where(and(eq(sysUsers.id, id), isNull(sysUsers.deletedAt)))
       .returning();
 
-    // Handle multi-role assignment via sys_user_roles
+    // Keep sys_user_roles (Casbin) and sys_users.role (display + RolesGuard) in sync.
     if (dto.roleIds !== undefined) {
+      const uniqueIds = [...new Set(dto.roleIds!)];
       await this.db.transaction(async (tx) => {
         await tx.delete(sysUserRoles).where(eq(sysUserRoles.userId, id));
-        if (dto.roleIds!.length > 0) {
-          const uniqueIds = [...new Set(dto.roleIds!)];
+        if (uniqueIds.length > 0) {
           await tx
             .insert(sysUserRoles)
             .values(uniqueIds.map((roleId) => ({ userId: id, roleId })));
         }
       });
-      // Reload Casbin policies for this user
-      if (this.casbinService) {
-        await this.casbinService.reloadPoliciesForUser(id);
+      // Mirror the highest-privilege role into sys_users.role.
+      const primaryCode = await this.primaryRoleFromIds(uniqueIds);
+      const reroll = await this.db
+        .update(sysUsers)
+        .set({ role: primaryCode, updatedAt: new Date() })
+        .where(and(eq(sysUsers.id, id), isNull(sysUsers.deletedAt)))
+        .returning();
+      if (reroll[0]) rows[0] = reroll[0];
+      await this.casbinService?.reloadPoliciesForUser(id);
+    } else if (dto.role !== undefined) {
+      // role (single) changed via the main form → mirror into sys_user_roles so
+      // Casbin matches sys_users.role (which updateData already set above).
+      const roleId = await this.roleIdFromCode(dto.role);
+      if (roleId) {
+        await this.db.transaction(async (tx) => {
+          await tx.delete(sysUserRoles).where(eq(sysUserRoles.userId, id));
+          await tx.insert(sysUserRoles).values({ userId: id, roleId });
+        });
+        await this.casbinService?.reloadPoliciesForUser(id);
       }
     }
 
