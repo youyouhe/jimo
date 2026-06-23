@@ -230,6 +230,12 @@ export interface DerivedNames {
   routePath: string;
   schemaVar: string;
   schemaType: string;
+  /** 前端隔离路径 —— 业务表前端产物落在 lc/ 子目录,与系统页面物理隔离,杜绝同名占用 */
+  pageDir: string; // lc/<kebabName> — fs 路径段,拼成 pages/${pageDir}/index.tsx
+  pageComponentPath: string; // ./lc/<kebabName>/index — .umirc.ts component + sysMenus.component
+  pageMapComponentPath: string; // ./lc/<kebabName>/map
+  serviceRelDir: string; // lc/<kebabSingular> — fs 路径段,拼成 services/${serviceRelDir}.ts
+  serviceImportAlias: string; // @/services/lc/<kebabSingular> — 前端 generator 内 import
 }
 
 export function deriveNames(tableName: string): DerivedNames {
@@ -252,6 +258,11 @@ export function deriveNames(tableName: string): DerivedNames {
     routePath,
     schemaVar: camelName,
     schemaType: pascalName,
+    pageDir: `lc/${kebabName}`,
+    pageComponentPath: `./lc/${kebabName}/index`,
+    pageMapComponentPath: `./lc/${kebabName}/map`,
+    serviceRelDir: `lc/${kebabSingular}`,
+    serviceImportAlias: `@/services/lc/${kebabSingular}`,
   };
 }
 

@@ -4,12 +4,14 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
+  InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { promises as fs, existsSync } from 'node:fs';
 import * as path from 'node:path';
 import { eq, and, isNull, desc, sql, count, inArray, ilike } from 'drizzle-orm';
+import { isReservedTableName } from './reserved-names';
 import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import {
   sysAutoCodeHistories,
@@ -138,10 +140,10 @@ export class AutocodeService {
 
     // Frontend files (only if generateWeb is true)
     if (dto.generateWeb) {
-      files[`release/jimo/apps/web/src/services/${n.kebabSingular}.ts`] = generateFrontendService(activeDto);
-      files[`release/jimo/apps/web/src/pages/${n.kebabName}/index.tsx`] = generateFrontendPage(activeDto);
+      files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto);
+      files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto);
       if (activeDto.fields.some((f) => !f.removed && f.type === 'point')) {
-        files[`release/jimo/apps/web/src/pages/${n.kebabName}/map.tsx`] = generateFrontendMapPage(activeDto);
+        files[`release/jimo/apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
       }
     }
 
@@ -541,8 +543,8 @@ export class AutocodeService {
       const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
       const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
       if ([...relationDictTypes.values()].some((v) => v !== null)) {
-        files[`release/jimo/apps/web/src/services/${n.kebabSingular}.ts`] = generateFrontendService(activeDto, relationDictTypes);
-        files[`release/jimo/apps/web/src/pages/${n.kebabName}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
+        files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto, relationDictTypes);
+        files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
       }
     }
     const createdFiles: string[] = [];
@@ -621,6 +623,9 @@ export class AutocodeService {
     } catch (pushErr: unknown) {
       this.logger.error(` drizzle-kit push FAILED for '${dto.tableName}':`, pushErr);
     }
+
+    // 防线2: push 后校验物理表列是否与 schema 期望对齐(防止 push 静默跳过破坏性变更导致 schema↔DB 脱节)
+    await this.verifyPhysicalSchema(dto.tableName, dto.fields);
 
     // Auto-create menu record in sys_menus + assign to admin roles
     try {
@@ -783,6 +788,7 @@ export class AutocodeService {
     try {
       const history = await this.findOneHistory(historyId);
       const tableName = history.tableName;
+      this.ensureNotReservedTable(tableName);
       const n = deriveNames(tableName);
       const projectRoot = this.resolveProjectRoot();
       const dbTableName = `lc_${tableName}`;
@@ -807,8 +813,8 @@ export class AutocodeService {
         `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
         `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
         `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-        `release/jimo/apps/web/src/services/${n.kebabSingular}.ts`,
-        `release/jimo/apps/web/src/pages/${n.kebabName}/index.tsx`,
+        `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
+        `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
       ];
       for (const p of expectedPaths) {
         const fullPath = path.join(projectRoot, p);
@@ -823,7 +829,7 @@ export class AutocodeService {
         try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
         try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
       }
-      const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.kebabName}`);
+      const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.pageDir}`);
       if (existsSync(pageDir)) {
         try { await fs.rmdir(pageDir); } catch { /* not empty */ }
       }
@@ -847,7 +853,7 @@ export class AutocodeService {
 
       // Step 5: Remove menu entries (including button children)
       await updateStep(4, 'running');
-      const componentPath = `./${n.kebabName}/index`;
+      const componentPath = `${n.pageComponentPath}`;
       const menuRows = await this.db
         .select({ id: sysMenus.id, name: sysMenus.name, path: sysMenus.path })
         .from(sysMenus)
@@ -1145,8 +1151,8 @@ export class AutocodeService {
         const activeDto2: AutoCodeDto = { ...autoCodeDto, fields: activeFields(autoCodeDto.fields) };
         const relationDictTypes2 = await this.lookupRelationDisplayDictTypes(activeDto2.fields);
         if ([...relationDictTypes2.values()].some((v) => v !== null)) {
-          files[`release/jimo/apps/web/src/services/${n2.kebabSingular}.ts`] = generateFrontendService(activeDto2, relationDictTypes2);
-          files[`release/jimo/apps/web/src/pages/${n2.kebabName}/index.tsx`] = generateFrontendPage(activeDto2, relationDictTypes2);
+          files[`release/jimo/apps/web/src/services/${n2.serviceRelDir}.ts`] = generateFrontendService(activeDto2, relationDictTypes2);
+          files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendPage(activeDto2, relationDictTypes2);
         }
       }
 
@@ -1183,6 +1189,8 @@ export class AutocodeService {
       } catch (pushErr: unknown) {
         this.logger.error(` drizzle-kit push FAILED for update '${dto.tableName}':`, pushErr);
       }
+      // 防线2: push 后校验物理表列是否与 schema 期望对齐
+      await this.verifyPhysicalSchema(dto.tableName, dto.fields);
       await updateStep(2, 'completed');
 
       // Step 4: Save version history
@@ -1290,6 +1298,7 @@ export class AutocodeService {
     try {
       // Step 0 (force mode): Clean up existing module files before regenerating
       if (dto.force) {
+        this.ensureNotReservedTable(dto.tableName);
         const n = deriveNames(dto.tableName);
         const root = this.resolveProjectRoot();
         const expectedPaths = [
@@ -1300,8 +1309,8 @@ export class AutocodeService {
           `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
           `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
           `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-          `release/jimo/apps/web/src/services/${n.kebabSingular}.ts`,
-          `release/jimo/apps/web/src/pages/${n.kebabName}/index.tsx`,
+          `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
+          `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
         ];
         for (const p of expectedPaths) {
           const fullPath = path.join(root, p);
@@ -1314,7 +1323,7 @@ export class AutocodeService {
           try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
           try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
         }
-        const pageDir = path.join(root, `release/jimo/apps/web/src/pages/${n.kebabName}`);
+        const pageDir = path.join(root, `release/jimo/apps/web/src/pages/${n.pageDir}`);
         if (existsSync(pageDir)) {
           try { await fs.rmdir(pageDir); } catch { /* not empty */ }
         }
@@ -1335,11 +1344,11 @@ export class AutocodeService {
         const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
         const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
         if ([...relationDictTypes.values()].some((v) => v !== null)) {
-          files[`release/jimo/apps/web/src/services/${n.kebabSingular}.ts`] = generateFrontendService(activeDto, relationDictTypes);
-          files[`release/jimo/apps/web/src/pages/${n.kebabName}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
+          files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto, relationDictTypes);
+          files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
         }
         if (activeDto.fields.some((f) => !f.removed && f.type === 'point')) {
-          files[`release/jimo/apps/web/src/pages/${n.kebabName}/map.tsx`] = generateFrontendMapPage(activeDto);
+          files[`release/jimo/apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
         }
       }
 
@@ -1572,8 +1581,8 @@ export class AutocodeService {
         { key: 'service', label: 'Service', path: 'modules/{kebab-singular}/{kebab-singular}.service.ts' },
         { key: 'controller', label: 'Controller', path: 'modules/{kebab-singular}/{kebab-singular}.controller.ts' },
         { key: 'module', label: 'Module', path: 'modules/{kebab-singular}/{kebab-singular}.module.ts' },
-        { key: 'frontendService', label: 'Frontend Service', path: 'web/src/services/{kebab-singular}.ts' },
-        { key: 'frontendPage', label: 'Frontend Page', path: 'web/src/pages/{kebab-name}/index.tsx' },
+        { key: 'frontendService', label: 'Frontend Service', path: 'web/src/services/lc/{kebab-singular}.ts' },
+        { key: 'frontendPage', label: 'Frontend Page', path: 'web/src/pages/lc/{kebab-name}/index.tsx' },
       ],
     };
   }
@@ -1667,6 +1676,7 @@ export class AutocodeService {
   async deleteHistory(id: string): Promise<{ deletedFiles: string[]; droppedTable: boolean; removedMenus: number }> {
     const history = await this.findOneHistory(id);
     const tableName = history.tableName;
+    this.ensureNotReservedTable(tableName);
     const n = deriveNames(tableName);
     const projectRoot = this.resolveProjectRoot();
 
@@ -1682,8 +1692,8 @@ export class AutocodeService {
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/web/src/services/${n.kebabSingular}.ts`,
-      `release/jimo/apps/web/src/pages/${n.kebabName}/index.tsx`,
+      `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
+      `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
     ];
     for (const p of expectedPaths) {
       const fullPath = path.join(projectRoot, p);
@@ -1697,7 +1707,7 @@ export class AutocodeService {
       try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
       try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
     }
-    const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.kebabName}`);
+    const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.pageDir}`);
     if (existsSync(pageDir)) {
       try { await fs.rmdir(pageDir); } catch { /* not empty */ }
     }
@@ -1708,7 +1718,7 @@ export class AutocodeService {
     await this.removeModuleRegistration(n);
 
     const dbTableName = `lc_${tableName}`;
-    const componentPath = `./${n.kebabName}/index`;
+    const componentPath = `${n.pageComponentPath}`;
     const menuRows = await this.db
       .select({ id: sysMenus.id, name: sysMenus.name, path: sysMenus.path })
       .from(sysMenus)
@@ -1758,6 +1768,7 @@ export class AutocodeService {
     tableName: string,
     projectRoot: string,
   ): Promise<{ deletedFiles: string[]; removedMenus: number }> {
+    this.ensureNotReservedTable(tableName);
     const n = deriveNames(tableName);
     const deletedFiles: string[] = [];
     let removedMenus = 0;
@@ -1770,8 +1781,8 @@ export class AutocodeService {
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/web/src/services/${n.kebabSingular}.ts`,
-      `release/jimo/apps/web/src/pages/${n.kebabName}/index.tsx`,
+      `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
+      `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
     ];
     for (const p of expectedPaths) {
       const fullPath = path.join(projectRoot, p);
@@ -1785,7 +1796,7 @@ export class AutocodeService {
       try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
       try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
     }
-    const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.kebabName}`);
+    const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.pageDir}`);
     if (existsSync(pageDir)) {
       try { await fs.rmdir(pageDir); } catch { /* not empty */ }
     }
@@ -1795,7 +1806,7 @@ export class AutocodeService {
     await this.removeDanglingSchemaImports(n);
     await this.removeModuleRegistration(n);
 
-    const componentPath = `./${n.kebabName}/index`;
+    const componentPath = `${n.pageComponentPath}`;
     const menuRows = await this.db
       .select({ id: sysMenus.id, name: sysMenus.name })
       .from(sysMenus)
@@ -1950,7 +1961,7 @@ export class AutocodeService {
       }));
     } catch { /* No foreign keys or query failed */ }
 
-    const componentPath = `./${n.kebabName}/index`;
+    const componentPath = `${n.pageComponentPath}`;
     const menuRows = await this.db
       .select({ id: sysMenus.id, name: sysMenus.name, path: sysMenus.path })
       .from(sysMenus)
@@ -1977,8 +1988,8 @@ export class AutocodeService {
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/web/src/services/${n.kebabSingular}.ts`,
-      `release/jimo/apps/web/src/pages/${n.kebabName}/index.tsx`,
+      `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
+      `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
     ];
     for (const p of expectedPaths) {
       if (existsSync(path.join(projectRoot, p))) {
@@ -2077,7 +2088,7 @@ export class AutocodeService {
 
     if (record) {
       const n = deriveNames(tableName);
-      const componentPath = `./${n.kebabName}/index`;
+      const componentPath = `${n.pageComponentPath}`;
       const menuRows = await this.db
         .select({ name: sysMenus.name })
         .from(sysMenus)
@@ -2417,7 +2428,7 @@ export class AutocodeService {
     }
 
     const n = deriveNames(tableName);
-    const componentPath = `./${n.kebabName}/index`;
+    const componentPath = `${n.pageComponentPath}`;
 
     // Update menu parentId
     let movedMenu = false;
@@ -2503,7 +2514,7 @@ export class AutocodeService {
 
   private async autoCreateMenu(dto: AutoCodeDto, parentMenuId?: string | null): Promise<string> {
     const n = deriveNames(dto.tableName);
-    const componentName = `./${n.kebabName}/index`;
+    const componentName = `${n.pageComponentPath}`;
 
     // Entity menu path is always the canonical /lc/<kebab> route registered in .umirc.ts.
     // parentMenuId only sets the sidebar hierarchy (parentId), never the URL path.
@@ -2544,10 +2555,14 @@ export class AutocodeService {
 
     const menuId = menuRows[0]!.id;
 
+    // Roles that get the page menu + CRUD button sub-menus + per-API Casbin
+    // policies for this generated table. editor is included so editors can CRUD
+    // generated tables by default (consistent with Casbin's /api/v1/lc/* grant);
+    // viewer stays read-only (no menu, no buttons).
     const adminRoles = await this.db
       .select({ id: sysRoles.id, code: sysRoles.code })
       .from(sysRoles)
-      .where(inArray(sysRoles.code, ['super_admin', 'admin']));
+      .where(inArray(sysRoles.code, ['super_admin', 'admin', 'editor']));
 
     if (adminRoles.length > 0) {
       await this.db
@@ -2764,6 +2779,82 @@ export class AutocodeService {
     return rows[0]!;
   }
 
+  /**
+   * 防线: 拒绝对系统保留表名执行删文件操作。
+   * deleteEntity 等删文件函数用 deriveNames(tableName) 推导路径,
+   * 若 tableName 撞系统保留名(如 departments),会误删系统页面/服务/模块
+   * (见 2026-06-23 departments 事故)。此处兜底拦截,防 history 脏数据或绕过工具直接调 service。
+   */
+  private ensureNotReservedTable(tableName: string): void {
+    if (isReservedTableName(tableName)) {
+      throw new Error(
+        `拒绝删除:表 '${tableName}' 是系统保留名,不会处理其系统文件(保护平台自带资产)。`,
+      );
+    }
+  }
+
+  /**
+   * 防线2: 校验 drizzle-kit push 后物理表列是否与代码 schema 期望对齐。
+   * push 在 silent 模式下遇到破坏性变更(删/改列)会静默跳过,导致 schema↔DB 脱节——
+   * 运行时 drizzle 按代码 schema 发查询却撞上结构不符的物理表 → 500。
+   * 本方法在生成/更新后主动比对期望列与实际列,缺列即抛错,把故障挡在生成阶段。
+   */
+  private async verifyPhysicalSchema(
+    tableName: string,
+    fields: { name: string; type: string; relationType?: string; removed?: boolean }[],
+  ): Promise<void> {
+    const lcTable = `lc_${tableName}`;
+    // 系统字段(生成器 generateSchema 无条件注入) + dto 字段映射的物理列
+    const SYSTEM_COLS = [
+      'id', 'created_at', 'updated_at', 'deleted_at',
+      'created_by', 'updated_by', 'owner_id', 'shared_with',
+    ];
+    const expected = new Set<string>(SYSTEM_COLS);
+    for (const f of fields) {
+      if (f.type === 'relation' && f.relationType === 'one-to-many') continue; // 子表,不在主表产列
+      if (f.removed) continue; // 注释掉的非实际列
+      if (f.name === 'id') continue;
+      expected.add(f.name);
+    }
+
+    let actual: string[] = [];
+    try {
+      const res = await this.db.execute(
+        sql`SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ${lcTable} ORDER BY ordinal_position`,
+      );
+      actual = (res.rows ?? []).map((r: any) => String(r.column_name));
+    } catch (e: any) {
+      // 读取失败不阻塞生成(避免环境问题误伤),仅告警
+      this.logger.warn(`[AutocodeService] verifyPhysicalSchema: 读取 ${lcTable} 列失败,跳过校验: ${e?.message}`);
+      return;
+    }
+
+    if (actual.length === 0) {
+      throw new InternalServerErrorException(
+        `drizzle-kit push 后物理表 ${lcTable} 不存在,生成未能同步到数据库。请检查 push 输出,或在 server 目录手动执行 npx drizzle-kit push --force 后重试。`,
+      );
+    }
+
+    const actualSet = new Set(actual);
+    const missing = [...expected].filter((c) => !actualSet.has(c));
+    const extra = actual.filter((c) => !expected.has(c));
+
+    if (missing.length > 0) {
+      throw new InternalServerErrorException(
+        `drizzle-kit push 未将对齐物理表 ${lcTable}: 缺少期望列 [${missing.join(', ')}]` +
+          (extra.length > 0 ? `;同时存在残留列 [${extra.join(', ')}]` : '') +
+          `。通常是物理表为历史遗留结构、push 静默跳过了破坏性变更所致。` +
+          `建议确认数据可丢弃后手动执行 DROP TABLE ${lcTable},再重新触发生成(将按当前 schema 重建)。`,
+      );
+    }
+    if (extra.length > 0) {
+      // 多余列:可能为历史残留或合理的手动列,仅告警不阻塞
+      this.logger.warn(
+        `[AutocodeService] 物理表 ${lcTable} 存在 schema 未声明的列 [${extra.join(', ')}](可能为历史残留,已忽略)。`,
+      );
+    }
+  }
+
   private async getPackageName(packageId: string): Promise<string> {
     const rows = await this.db
       .select({ name: sysAutoCodePackages.name })
@@ -2904,7 +2995,7 @@ export class AutocodeService {
       path: '${mapRoutePath}',
       name: '${extractMenuName(dto.description, n.pascalName)}地图',
       icon: 'EnvironmentOutlined',
-      component: './${n.kebabName}/map',
+      component: '${n.pageMapComponentPath}',
     },`;
     content = content.replace(
       /    \{ path: '\/\*', redirect: '\/dashboard' \},?/,
@@ -2934,7 +3025,7 @@ export class AutocodeService {
       .values({
         name: `${extractMenuName(dto.description, n.pascalName)}地图`,
         path: mapRoutePath,
-        component: `./${n.kebabName}/map`,
+        component: `${n.pageMapComponentPath}`,
         icon: 'EnvironmentOutlined',
         parentId: tableMenuId,
         sort: nextSort,
@@ -2975,7 +3066,7 @@ export class AutocodeService {
       path: '${routePath}',
       name: '${extractMenuName(dto.description, n.pascalName)}',
       icon: 'TableOutlined',
-      component: './${n.kebabName}/index',
+      component: '${n.pageComponentPath}',
     },`;
 
     content = content.replace(
@@ -2997,7 +3088,7 @@ export class AutocodeService {
 
     let content = await fs.readFile(umircPath, 'utf-8');
     const routePath = n.routePath;
-    const componentPath = `./${n.kebabName}/index`;
+    const componentPath = `${n.pageComponentPath}`;
 
     const flatBlockRegex = new RegExp(
       `\\s*\\{[^{}]*path:\\s*'${routePath.replace(/\//g, '\\/')}'[^{}]*component:\\s*'${componentPath.replace(/\//g, '\\/')}'[^{}]*\\},?`,

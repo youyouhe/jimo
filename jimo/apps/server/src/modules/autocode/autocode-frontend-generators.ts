@@ -246,7 +246,7 @@ export async function ${fetchFunctionName}(): Promise<${optionInterfaceName}[]> 
     (o2m.detailFields || []).some(df => df.type === 'dict' && df.dictType),
   );
   const needsDictImportInService = hasDictRelation || hasChildDictFieldsInService;
-  return `import request from './request';${needsDictImportInService ? `\nimport { getDictDetailsByType } from './dictionary';` : ''}
+  return `import request from '../request';${needsDictImportInService ? `\nimport { getDictDetailsByType } from '../dictionary';` : ''}
 ${childInterfaces.join('')}
 export interface ${n.pascalSingular} {
   id: string;
@@ -987,7 +987,7 @@ import {
 import {
   ${apiFunctions.join(',\n  ')},
   type ${typeImports.join(',\n  type ')},
-} from '@/services/${n.kebabSingular}';
+} from '${n.serviceImportAlias}';
 import ReassignModal from '@/components/ReassignModal';
 import { getMyBtnPerms } from '@/services/authority-btn';${hasUploadFields ? `\nimport { uploadFile } from '@/services/file';` : ''}${hasDictFields ? `\nimport { getDictDetailsByType } from '@/services/dictionary';` : ''}${hasPointFields ? `\nimport GeoField from '@/components/GeoField';` : ''}
 
@@ -1026,7 +1026,7 @@ ${manyToOneDictFields.map(({ field: f, dictType }) => `    getDictDetailsByType(
   const [btnPerms, setBtnPerms] = useState<Set<string>>(new Set());
   useEffect(() => {
     getMyBtnPerms().then((perms) => {
-      setBtnPerms(new Set(perms['./${n.kebabName}/index'] ?? []));
+      setBtnPerms(new Set(perms['${n.pageComponentPath}'] ?? []));
     }).catch(() => setBtnPerms(new Set()));
   }, []);
 
@@ -1457,8 +1457,8 @@ import { ${antdImports.join(', ')} } from 'antd';
 import { EnvironmentOutlined, SearchOutlined } from '@ant-design/icons';
 import GeoMapView, { parsePoint } from '@/components/GeoMapView';
 import type { GeoMapPoint } from '@/components/GeoMapView';
-import { get${n.pascalName}List } from '@/services/${n.kebabSingular}';
-import type { ${n.pascalSingular} } from '@/services/${n.kebabSingular}';
+import { get${n.pascalName}List } from '${n.serviceImportAlias}';
+import type { ${n.pascalSingular} } from '${n.serviceImportAlias}';
 
 export default function ${n.pascalName}MapPage() {
   const [loading, setLoading] = useState(true);

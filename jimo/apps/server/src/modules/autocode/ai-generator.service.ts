@@ -4,6 +4,7 @@ import { streamText, tool, jsonSchema, type CoreMessage } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { eq, isNull, sql } from 'drizzle-orm';
 import { AI_GENERATOR_SYSTEM_PROMPT } from './ai-generator.prompt';
+import { isReservedTableName } from './reserved-names';
 import {
   PROPOSE_ENTITY_TOOL,
   CREATE_DICT_TOOL,
@@ -116,12 +117,12 @@ ${tableList}
 ### 现有字典（✅ 优先匹配这些 dictType；确认不存在再调 create_dict）
 ${dictList}
 
-### 现有 Package（✅ 优先匹配这些 id；确认不存在且用户指定了 package 再调 create_package）
+### 现有 Package（✅ 优先匹配这些 id。用户没明确要求建 package 时一律不要 create_package，表可留空 packageId 落入未分类）
 ${pkgList}`,
       };
       const stateAck: CoreMessage = {
         role: 'assistant',
-        content: '已收到系统状态，我会在本次对话中：① 不重复提议已存在的表；② 优先复用现有字典和 Package；③ 需要时用 list_tables/list_dicts/list_packages 实时查询最新状态。',
+        content: '已收到系统状态，我会在本次对话中：① 不重复提议已存在的表；② 优先复用现有字典和 Package；③ 需要时用 list_tables/list_dicts/list_packages 实时查询最新状态；④ 用户没明确要求时不创建 Package，绝不为单张表硬建同名 Package，表可留空 packageId。',
       };
 
       const userMessages = dto.messages.map((m) => ({
@@ -147,15 +148,31 @@ ${pkgList}`,
             parameters: jsonSchema(PROPOSE_ENTITY_TOOL.function.parameters as any),
             execute: async (args: any) => {
               this.logger.log(`[AiGenerator] ✓ propose_entity: ${args.tableName}`);
-              // Guard: check if table already exists before proposing
-              const existing = await this.db
-                .selectDistinct({ tableName: sysAutoCodeHistories.tableName })
-                .from(sysAutoCodeHistories)
-                .where(eq(sysAutoCodeHistories.tableName, args.tableName))
-                .limit(1)
-                .catch(() => []);
+              // Guard: 系统保留名前置拦截(防止生成覆盖系统页面/服务)
+              if (isReservedTableName(args.tableName)) {
+                return { ok: false, error: `表名 '${args.tableName}' 是系统保留名,会覆盖平台自带的系统页面/服务。请改用其他名称。` };
+              }
+              // Guard: 同时查生成历史与物理表,拦截同名遗留表
+              const lcTable = `lc_${args.tableName}`;
+              const [existing, physCheck] = await Promise.all([
+                this.db
+                  .selectDistinct({ tableName: sysAutoCodeHistories.tableName })
+                  .from(sysAutoCodeHistories)
+                  .where(eq(sysAutoCodeHistories.tableName, args.tableName))
+                  .limit(1)
+                  .catch(() => []),
+                this.db
+                  .execute(sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ${lcTable} LIMIT 1`)
+                  .catch(() => ({ rows: [] as any[] })),
+              ]);
               if (existing.length > 0) {
-                return { ok: false, error: `表 '${args.tableName}' 已存在。若要修改请用 update 流程；若要重建请先 delete_entity 删除后再 propose。` };
+                return { ok: false, error: `表 '${args.tableName}' 已存在(生成历史中有记录)。若要修改请用 update 流程；若要重建请先 delete_entity 删除后再 propose。` };
+              }
+              if (physCheck.rows?.length) {
+                return {
+                  ok: false,
+                  error: `物理表 '${lcTable}' 已存在于数据库,但不在生成历史中(历史遗留/孤儿表)。直接 propose 会导致 drizzle-kit push 与现有结构冲突并静默失败。请先处理: ① 若要复用现有数据/结构,改用 update 流程; ② 若确认无用,请提示用户手动执行 DROP TABLE ${lcTable} 后再 propose。`,
+                };
               }
               const entityDto = { ...args };
               if (entityDto.packageId) {
@@ -192,10 +209,23 @@ ${pkgList}`,
             parameters: jsonSchema(LIST_TABLES_TOOL.function.parameters as any),
             execute: async () => {
               try {
-                const rows = await this.db
-                  .selectDistinct({ tableName: sysAutoCodeHistories.tableName })
-                  .from(sysAutoCodeHistories);
-                return { tables: rows.map((r) => r.tableName) };
+                // 同时查生成历史与物理表,暴露"物理存在但历史无记录"的孤儿表(遗留/被清过历史)
+                const [histRows, physRows] = await Promise.all([
+                  this.db
+                    .selectDistinct({ tableName: sysAutoCodeHistories.tableName })
+                    .from(sysAutoCodeHistories)
+                    .catch(() => [] as { tableName: string }[]),
+                  this.db
+                    .execute(sql`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name ~ '^lc_' ORDER BY table_name`)
+                    .catch(() => ({ rows: [] as any[] })),
+                ]);
+                const histSet = new Set(histRows.map((r) => r.tableName));
+                const physNames = (physRows.rows ?? []).map((r: any) =>
+                  String(r.table_name).replace(/^lc_/, ''),
+                );
+                const orphans = physNames.filter((n) => !histSet.has(n)); // 物理存在但历史无记录
+                const all = Array.from(new Set([...histSet, ...physNames])).sort();
+                return { tables: all, orphans };
               } catch (e: any) {
                 return { tables: [], error: e?.message };
               }
@@ -373,6 +403,9 @@ ${pkgList}`,
                   return { ok: false, id, error: `未找到 id='${id}' 的历史记录。请先用 list_history 查询正确的 id。` };
                 }
                 const tableName = historyRows[0].tableName;
+                if (isReservedTableName(tableName)) {
+                  return { ok: false, id, error: `系统保留名 '${tableName}',拒绝删除(保护系统资产)。` };
+                }
                 write({ kind: 'progress', content: `确认删除目标：表 '${tableName}'（id: ${id}）` });
               } catch (e: any) {
                 return { ok: false, id, error: `查询历史记录失败: ${e?.message}` };

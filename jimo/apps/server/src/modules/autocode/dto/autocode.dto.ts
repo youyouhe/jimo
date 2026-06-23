@@ -343,4 +343,14 @@ export class AutoCodeDto {
   @ValidateNested()
   @Type(() => ApprovalFlowConfigDto)
   approvalFlow?: ApprovalFlowConfigDto;
+
+  @ApiPropertyOptional({
+    description:
+      '行级数据可见性策略：private(仅 owner) / department(owner 所在部门含子部门) / shared(owner + 显式 shared_with，仅此模式查 shared_with) / public(所有登录用户)。admin 永远旁路。默认 private。',
+    enum: ['private', 'department', 'shared', 'public'],
+    default: 'private',
+  })
+  @IsOptional()
+  @IsIn(['private', 'department', 'shared', 'public'])
+  visibilityStrategy?: 'private' | 'department' | 'shared' | 'public';
 }

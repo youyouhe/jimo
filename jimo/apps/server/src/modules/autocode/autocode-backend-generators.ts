@@ -355,6 +355,7 @@ export class Update${n.pascalSingular}Dto extends PartialType(Create${n.pascalSi
  */
 export function generateService(dto: AutoCodeDto): string {
   const n = deriveNames(dto.tableName);
+  const visibilityStrategy = dto.visibilityStrategy ?? 'private';
   const searchableFields = dto.fields.filter((f) => f.searchable);
   // code fields are auto-generated server-side — never in DTO, so skip unique checks for them
   const uniqueFields = dto.fields.filter((f) => f.unique && f.type !== 'code' && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
@@ -807,7 +808,8 @@ export class ${n.pascalSingular}Service {
     const offset = (page - 1) * pageSize;
 
     const conditions: SQL[] = [isNull(${n.schemaVar}.deletedAt)];
-    const _ownership = this.ownershipHelper.visibleCondition(${n.schemaVar}.ownerId, ${n.schemaVar}.sharedWith, userId, isAdmin);
+${visibilityStrategy === 'department' ? `    const _deptScope = userId ? await this.ownershipHelper.viewerDeptScope(userId) : undefined;
+    const _ownership = this.ownershipHelper.visibleCondition(${n.schemaVar}.ownerId, ${n.schemaVar}.sharedWith, userId, isAdmin, 'department', _deptScope);` : `    const _ownership = this.ownershipHelper.visibleCondition(${n.schemaVar}.ownerId, ${n.schemaVar}.sharedWith, userId, isAdmin, '${visibilityStrategy}');`}
     if (_ownership) conditions.push(_ownership);
 
 ${queryFilters}

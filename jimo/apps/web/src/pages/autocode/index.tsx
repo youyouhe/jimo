@@ -501,6 +501,8 @@ export default function AutocodePage() {
   // Approval flow (opt-in; default chain deptHead)
   const [approvalEnabled, setApprovalEnabled] = useState(false);
   const [approvalChain, setApprovalChain] = useState('deptHead');
+  // Visibility strategy (default private)
+  const [visibilityStrategy, setVisibilityStrategy] = useState<'private' | 'department' | 'shared' | 'public'>('private');
 
   // Update mode state
   const [updateMode, setUpdateMode] = useState(false);
@@ -655,6 +657,7 @@ export default function AutocodePage() {
       ...(approvalEnabled
         ? { approvalFlow: { enabled: true, defaultChain: approvalChain.split(',').map((s) => s.trim()).filter(Boolean) } }
         : {}),
+      visibilityStrategy,
     };
     const { jobId } = await executeGenerate(finalDto);
     const kebab = dto.tableName.toLowerCase().replace(/_/g, '-');
@@ -1079,6 +1082,21 @@ export default function AutocodePage() {
                     />
                   </Tooltip>
                 </Space>
+              </Form.Item>
+            </Col>
+            <Col span={6}>
+              <Form.Item label="数据可见性">
+                <Select
+                  value={visibilityStrategy}
+                  onChange={(v) => setVisibilityStrategy(v)}
+                  options={[
+                    { label: '私有（仅 owner）', value: 'private' },
+                    { label: '同部门（含子部门）', value: 'department' },
+                    { label: '共享（显式 shared_with）', value: 'shared' },
+                    { label: '公开（所有登录用户）', value: 'public' },
+                  ]}
+                  style={{ width: '100%' }}
+                />
               </Form.Item>
             </Col>
           </Row>

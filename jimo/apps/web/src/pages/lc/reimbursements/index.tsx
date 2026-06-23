@@ -1,6 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import dayjs from 'dayjs';
-import { Button, message, Popconfirm, Space, Form, Table, Input, Upload, Tooltip, Image } from 'antd';
+import { Button, message, Popconfirm, Space, Form, Table, Input, Upload, Tooltip } from 'antd';
 import { PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
 import { ActionType, ProColumns, ProTable } from '@ant-design/pro-components';
 import {
@@ -9,36 +8,49 @@ import {
   ProFormTextArea,
   ProFormDigit,
   ProFormSwitch,
-  ProFormDateTimePicker,
+  ProFormSelect,
 } from '@ant-design/pro-components';
 import {
-  getPostsList,
-  createPost,
-  updatePost,
-  deletePost,
-  batchDeletePosts,
-  type Post,
-  type CreatePostDto,
-  type UpdatePostDto,
-} from '@/services/lc/post';
+  getReimbursementsList,
+  createReimbursement,
+  updateReimbursement,
+  deleteReimbursement,
+  batchDeleteReimbursements,
+  submitReimbursementApproval,
+  type Reimbursement,
+  type CreateReimbursementDto,
+  type UpdateReimbursementDto,
+} from '@/services/lc/reimbursement';
+import ReassignModal from '@/components/ReassignModal';
 import { getMyBtnPerms } from '@/services/authority-btn';
 import { uploadFile } from '@/services/file';
+import { getDictDetailsByType } from '@/services/dictionary';
 
 
-export default function PostsPage() {
+export default function ReimbursementsPage() {
   const actionRef = useRef<ActionType>(undefined);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<Post | null>(null);
+  const [editingRecord, setEditingRecord] = useState<Reimbursement | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
+  const [reassignOpen, setReassignOpen] = useState(false);
   const [form] = Form.useForm();
+  const [reimbursementCategoryOptions, setReimbursementCategoryOptions] = useState<Record<string, { text: string }>>({});
   const [searchTitle, setSearchTitle] = useState('');
-  const [searchPublishedAt, setSearchPublishedAt] = useState('');
-  const [searchStatus, setSearchStatus] = useState('');
+  const [searchReimbursementCategory, setSearchReimbursementCategory] = useState('');
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const makeDebounce = useCallback((setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => { setter(val); }, 400);
+  }, []);
+
+  useEffect(() => {
+    getDictDetailsByType('reimbursement_category').then((list: any[]) => {
+      const map: Record<string, { text: string }> = {};
+      list.forEach((item: any) => { map[item.value] = { text: item.label }; });
+      setReimbursementCategoryOptions(map);
+    }).catch(() => {});
+
   }, []);
 
   // ── Button-level permission check ──
@@ -47,48 +59,39 @@ export default function PostsPage() {
   const [btnPerms, setBtnPerms] = useState<Set<string>>(new Set());
   useEffect(() => {
     getMyBtnPerms().then((perms) => {
-      setBtnPerms(new Set(perms['./lc/posts/index'] ?? []));
+      setBtnPerms(new Set(perms['./lc/reimbursements/index'] ?? []));
     }).catch(() => setBtnPerms(new Set()));
   }, []);
 
-  const columns: ProColumns<Post>[] = [
+  const columns: ProColumns<Reimbursement>[] = [
     {
-      title: '文章标题',
+      title: '报销标题',
       dataIndex: 'title',
       valueType: 'text',
       width: 180,
       sorter: (a, b) => String(a.title ?? '').localeCompare(String(b.title ?? '')),
     },
     {
-      title: '文章摘要',
-      dataIndex: 'summary',
-      valueType: 'text',
-      width: 180,
-      sorter: (a, b) => String(a.summary ?? '').localeCompare(String(b.summary ?? '')),
-    },
-    {
-      title: '封面图片',
-      dataIndex: 'cover_image',
-      valueType: 'image',
+      title: '报销类别',
+      dataIndex: 'reimbursement_category',
+      valueType: 'select',
       width: 120,
       search: false,
-      render: (_, record) => record.cover_image
-        ? <Image src={record.cover_image} width={60} height={60} style={{ objectFit: 'cover', borderRadius: 4 }} preview={{ mask: '预览' }} fallback={'data:image/svg+xml,' + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'><rect width='60' height='60' fill='#f0f0f0'/><text x='30' y='35' font-size='11' fill='#bbb' text-anchor='middle'>IMG</text></svg>")} />
-        : '-',
+      valueEnum: reimbursementCategoryOptions,
     },
     {
-      title: '发布时间',
-      dataIndex: 'published_at',
-      valueType: 'dateTime',
-      width: 180,
-      sorter: (a, b) => new Date(a.published_at as string).getTime() - new Date(b.published_at as string).getTime(),
-    },
-    {
-      title: '状态（草稿/已发布）',
-      dataIndex: 'status',
+      title: '报销金额（元）',
+      dataIndex: 'amount',
       valueType: 'text',
       width: 180,
-      sorter: (a, b) => String(a.status ?? '').localeCompare(String(b.status ?? '')),
+      sorter: (a, b) => (Number(a.amount ?? 0) - Number(b.amount ?? 0)),
+    },
+    {
+      title: '报销事由说明',
+      dataIndex: 'description',
+      valueType: 'text',
+      width: 180,
+      sorter: (a, b) => String(a.description ?? '').localeCompare(String(b.description ?? '')),
     },
     {
       title: '创建时间',
@@ -121,11 +124,10 @@ export default function PostsPage() {
                 form.resetFields();
                 form.setFieldsValue({
                   title: record.title,
-                  content: record.content,
-                  summary: record.summary,
-                  cover_image: record.cover_image ? [{ uid: '-1', name: 'file', url: record.cover_image, status: 'done' }] : [],
-                  published_at: record.published_at ? dayjs(record.published_at) : null,
-                  status: record.status,
+                  reimbursement_category: record.reimbursement_category,
+                  amount: record.amount,
+                  description: record.description,
+                  attachments: record.attachments ? [{ uid: '-1', name: 'file', url: record.attachments, status: 'done' }] : [],
                 });
                 setEditingRecord(record);
                 
@@ -141,7 +143,7 @@ export default function PostsPage() {
               description="删除后无法恢复。"
               onConfirm={async () => {
                 try {
-                  await deletePost(record.id);
+                  await deleteReimbursement(record.id);
                   message.success('删除成功');
                   actionRef.current?.reload();
                 } catch (err: any) {
@@ -156,6 +158,22 @@ export default function PostsPage() {
               </Button>
             </Popconfirm>
           )}
+          <Button
+            type="link"
+            size="small"
+            onClick={async () => {
+              try {
+                await submitReimbursementApproval(record.id, record);
+                message.success('已提交审批');
+                actionRef.current?.reload();
+              } catch (err: any) {
+                message.error(err.message || '提交审批失败');
+              }
+            }}
+          >
+            提交审批
+          </Button>
+          
         </Space>
       ),
     },
@@ -164,12 +182,13 @@ export default function PostsPage() {
   const handleSubmit = async (values: Record<string, any>) => {
     try {
       if (editingRecord) {
-        const dto: UpdatePostDto = {
+        const dto: UpdateReimbursementDto = {
           title: values.title || '',
-          content: values.content || '',
-          summary: values.summary || '',
-          cover_image: (() => {
-            const v = values.cover_image;
+          reimbursement_category: values.reimbursement_category || '',
+          amount: String(values.amount ?? '0'),
+          description: values.description || '',
+          attachments: (() => {
+            const v = values.attachments;
             if (typeof v === 'string') return v;
             if (Array.isArray(v) && v.length > 0) {
               const item = v[0];
@@ -177,18 +196,17 @@ export default function PostsPage() {
             }
             return '';
           })(),
-          published_at: values.published_at && typeof values.published_at === 'object' ? values.published_at.toISOString() : values.published_at || undefined,
-          status: values.status || '',
         };
-        await updatePost(editingRecord.id, dto);
+        await updateReimbursement(editingRecord.id, dto);
         message.success('更新成功');
       } else {
-        const dto: CreatePostDto = {
+        const dto: CreateReimbursementDto = {
           title: values.title || '',
-          content: values.content || '',
-          summary: values.summary || '',
-          cover_image: (() => {
-            const v = values.cover_image;
+          reimbursement_category: values.reimbursement_category || '',
+          amount: String(values.amount ?? '0'),
+          description: values.description || '',
+          attachments: (() => {
+            const v = values.attachments;
             if (typeof v === 'string') return v;
             if (Array.isArray(v) && v.length > 0) {
               const item = v[0];
@@ -196,10 +214,8 @@ export default function PostsPage() {
             }
             return '';
           })(),
-          published_at: values.published_at && typeof values.published_at === 'object' ? values.published_at.toISOString() : values.published_at || undefined,
-          status: values.status || '',
         };
-        await createPost(dto);
+        await createReimbursement(dto);
         message.success('创建成功');
       }
       setModalOpen(false);
@@ -214,7 +230,7 @@ export default function PostsPage() {
 
   const handleBatchDelete = async () => {
     try {
-      const result = await batchDeletePosts(selectedRowKeys);
+      const result = await batchDeleteReimbursements(selectedRowKeys);
       message.success(`成功删除 ${result.count} 条记录`);
       setSelectedRowKeys([]);
       actionRef.current?.reload();
@@ -225,21 +241,21 @@ export default function PostsPage() {
 
   return (
     <>
-      <ProTable<Post>
-        headerTitle={<Tooltip title="存储博客发布的文章内容"><span>博客文章</span></Tooltip>}
+      <ProTable<Reimbursement>
+        headerTitle={<Tooltip title="记录员工报销申请及审批流程"><span>报销单</span></Tooltip>}
         actionRef={actionRef}
         rowKey="id"
         columns={columns}
 
         search={false}
-        params={{ searchTitle, searchPublishedAt, searchStatus }}
+        params={{ searchTitle, searchReimbursementCategory }}
         rowSelection={{
           selectedRowKeys,
           onChange: (keys) => setSelectedRowKeys(keys as string[]),
         }}
         request={async (params) => {
           const { current: page, pageSize } = params;
-          const result = await getPostsList({ page, pageSize, title: searchTitle || undefined, published_at: searchPublishedAt || undefined, status: searchStatus || undefined });
+          const result = await getReimbursementsList({ page, pageSize, title: searchTitle || undefined, reimbursement_category: searchReimbursementCategory || undefined });
           
           return {
             data: result.list,
@@ -252,7 +268,7 @@ export default function PostsPage() {
           <Space key="filters" wrap size={8}>
           <Input
             key="search-title"
-            placeholder="搜索文章标题"
+            placeholder="搜索报销标题"
             prefix={<SearchOutlined />}
             allowClear
             style={{ width: 180 }}
@@ -260,22 +276,13 @@ export default function PostsPage() {
             onClear={() => setSearchTitle('')}
           />,
           <Input
-            key="search-published_at"
-            placeholder="搜索发布时间"
+            key="search-reimbursement_category"
+            placeholder="搜索报销类别"
             prefix={<SearchOutlined />}
             allowClear
             style={{ width: 180 }}
-            onChange={makeDebounce(setSearchPublishedAt)}
-            onClear={() => setSearchPublishedAt('')}
-          />,
-          <Input
-            key="search-status"
-            placeholder="搜索状态（草稿/已发布）"
-            prefix={<SearchOutlined />}
-            allowClear
-            style={{ width: 180 }}
-            onChange={makeDebounce(setSearchStatus)}
-            onClear={() => setSearchStatus('')}
+            onChange={makeDebounce(setSearchReimbursementCategory)}
+            onClear={() => setSearchReimbursementCategory('')}
           />,
           </Space>,
           btnPerms.has('add') && (
@@ -307,6 +314,14 @@ export default function PostsPage() {
               </Button>
             </Popconfirm>
           ),
+          selectedRowKeys.length > 0 && (
+            <Button
+              key="reassign"
+              onClick={() => setReassignOpen(true)}
+            >
+              移交 ({selectedRowKeys.length})
+            </Button>
+          ),
         ].filter(Boolean)}
       />
 
@@ -325,31 +340,41 @@ export default function PostsPage() {
       >
           <ProFormText
             name="title"
-            label="文章标题"
-            placeholder="文章标题"
-            rules={[{ required: true, message: '请输入文章标题' }]}
-            disabled={!!editingRecord}
-          />
-
-          <ProFormTextArea
-            name="content"
-            label="文章正文"
-            placeholder="文章正文"
-            rules={[{ required: true, message: '请输入文章正文' }]}
-            fieldProps={{ rows: 3 }}
-          />
-
-          <ProFormTextArea
-            name="summary"
-            label="文章摘要"
-            placeholder="文章摘要"
+            label="报销标题"
+            placeholder="报销标题"
+            rules={[{ required: true, message: '请输入报销标题' }]}
             
+          />
+
+          <ProFormSelect
+            name="reimbursement_category"
+            label="报销类别"
+            rules={[{ required: true, message: '请选择报销类别' }]}
+            request={async () => {
+              const list = await getDictDetailsByType('reimbursement_category');
+              return list.map((item: any) => ({ label: item.label, value: item.value }));
+            }}
+          />
+
+          <ProFormDigit
+            name="amount"
+            label="报销金额（元）"
+            placeholder="报销金额（元）"
+            rules={[{ required: true, message: '请输入报销金额（元）' }]}
+            
+          />
+
+          <ProFormTextArea
+            name="description"
+            label="报销事由说明"
+            placeholder="报销事由说明"
+            rules={[{ required: true, message: '请输入报销事由说明' }]}
             fieldProps={{ rows: 3 }}
           />
 
           <Form.Item
-            name="cover_image"
-            label="封面图片"
+            name="attachments"
+            label="票据附件（发票、收据等）"
             
             getValueFromEvent={(e) => {
               if (Array.isArray(e)) return e;
@@ -357,8 +382,7 @@ export default function PostsPage() {
             }}
           >
             <Upload
-              listType="picture-card"
-              accept="image/*"
+              listType="text"
               maxCount={1}
               customRequest={async ({ file, onSuccess, onError }) => {
                 try {
@@ -369,26 +393,21 @@ export default function PostsPage() {
                 }
               }}
             >
-              <div><PlusOutlined /> Upload</div>
+              <Button icon={<UploadOutlined />}>Select File</Button>
             </Upload>
           </Form.Item>
-
-          <ProFormDateTimePicker
-            name="published_at"
-            label="发布时间"
-            placeholder="发布时间"
-            
-            
-          />
-
-          <ProFormText
-            name="status"
-            label="状态（草稿/已发布）"
-            placeholder="状态（草稿/已发布）"
-            rules={[{ required: true, message: '请输入状态（草稿/已发布）' }]}
-            
-          />
       </ModalForm>
+
+      <ReassignModal
+        open={reassignOpen}
+        businessType="reimbursements"
+        ids={selectedRowKeys}
+        onClose={() => setReassignOpen(false)}
+        onSuccess={() => {
+          setSelectedRowKeys([]);
+          actionRef.current?.reload();
+        }}
+      />
     </>
   );
 }

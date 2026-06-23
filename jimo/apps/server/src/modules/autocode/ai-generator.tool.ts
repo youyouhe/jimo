@@ -129,6 +129,12 @@ export const PROPOSE_ENTITY_TOOL = {
             },
           },
         },
+        visibilityStrategy: {
+          type: 'string',
+          enum: ['private', 'department', 'shared', 'public'],
+          description:
+            "数据可见性策略（可选，默认 private）。private=仅 owner；department=owner 所在部门含子部门；shared=owner+显式 shared_with（仅此模式查 shared_with）；public=所有登录用户。admin 永远旁路。用户未指定则不设。",
+        },
       },
       required: ['tableName', 'description', 'fields'],
     },
@@ -175,7 +181,7 @@ export const CREATE_PACKAGE_TOOL = {
   function: {
     name: 'create_package',
     description:
-      '创建新的模板包（Package）。调用前请先用 list_packages 确认同名 package 不存在。创建成功后返回 packageId，可在 propose_entity 中引用。',
+      '创建新的模板包（Package）。⚠️ 默认不要调用：Package 是对一类业务表的归集容器（菜单父节点），强调兼容性/包容性，应能容纳多张相关表。用户没明确要求建 Package 时，propose_entity 的 packageId 留空即可（表落入「未分类」）。绝不为单张表创建同名 Package（建 students 表不要建「学生」Package）。只有用户明确要求归类、且现有 Package 都不匹配时才调用，命名要体现业务线包容性。调用前先用 list_packages 确认同名不存在。创建成功后返回 packageId。',
     parameters: {
       type: 'object',
       properties: {
@@ -220,7 +226,7 @@ export const LIST_PACKAGES_TOOL = {
   function: {
     name: 'list_packages',
     description:
-      '查询系统中现有的 Package 列表（id + name）。在关联 package 前调用，按名称匹配；只有在确认不存在时才调 create_package。',
+      '查询系统中现有的 Package 列表（id + name）。在关联 package 前调用，按名称匹配。注意：默认不创建 Package，只有用户明确要求归类且现有都不匹配时才考虑 create_package。',
     parameters: {
       type: 'object',
       properties: {},

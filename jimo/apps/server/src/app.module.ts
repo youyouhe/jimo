@@ -28,11 +28,13 @@ import { OperationInterceptor } from './common/interceptors/operation.intercepto
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { AuthzGuard } from './common/guards/authz.guard';
-import { DepartmentModule } from './modules/department/department.module';
 import { PostModule } from './modules/post/post.module';
+import { DepartmentModule } from './modules/department/department.module';
 import { ApprovalModule } from './modules/approval/approval.module';
 import { BpmSyncModule } from './modules/bpm-sync/bpm-sync.module';
 import { OwnershipModule } from './common/ownership/ownership.module';
+import { ReimbursementModule } from './modules/reimbursement/reimbursement.module';
+import { StudentModule } from './modules/student/student.module';
 
 @Module({
   imports: [
@@ -49,12 +51,13 @@ import { OwnershipModule } from './common/ownership/ownership.module';
     MinioModule,
     DictionaryModule,
     DictionaryDetailModule,
-    OperationRecordModule,
-    PostModule,
+    OperationRecordModule,    StudentModule,
+    ReimbursementModule,    PostModule,
     ApprovalModule,
     BpmSyncModule,
     OwnershipModule,
-    DepartmentModule,    ApiModule,
+    DepartmentModule,
+    ApiModule,
     AutocodeModule,
     JwtBlacklistModule,
     SystemModule,
