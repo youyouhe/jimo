@@ -64,6 +64,8 @@ import {
   generateService,
   generateController,
   generateModule,
+  generateAgentService,
+  generateAgentModule,
 } from './autocode-backend-generators';
 
 // Frontend code generators
@@ -138,6 +140,12 @@ export class AutocodeService {
     // Module
     files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`] = generateModule(activeDto);
 
+    // Agent service + module (only if agentConfig.enabled)
+    if (dto.agentConfig?.enabled) {
+      files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`] = generateAgentService(activeDto);
+      files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`] = generateAgentModule(activeDto);
+    }
+
     // Frontend files (only if generateWeb is true)
     if (dto.generateWeb) {
       files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto);
@@ -183,7 +191,7 @@ export class AutocodeService {
    * THIS table's mock when a required relation field has an empty parent
    * table; callers must catch (the generate pipeline treats it as non-fatal).
    */
-  private async insertMockData(dto: AutoCodeDto): Promise<void> {
+  private async insertMockData(dto: AutoCodeDto, userId?: string): Promise<void> {
     const count = dto.mockData?.count ?? 0;
     if (count <= 0 || !dto.mockData?.enabled) return;
 
@@ -354,7 +362,10 @@ export class AutocodeService {
     for (let i = 0; i < count; i += 1) rows.push(buildRow());
 
     // 3) Build escaped multi-VALUES INSERT, chunked at 100.
-    const cols = fields.map((f) => `"${f.name}"`).join(', ');
+    const cols = (userId
+      ? [...fields.map((f) => `"${f.name}"`), '"owner_id"', '"created_by"']
+      : fields.map((f) => `"${f.name}"`)
+    ).join(', ');
     const CHUNK_SIZE = 100;
     let inserted = 0;
 
@@ -368,7 +379,13 @@ export class AutocodeService {
     for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
       const chunk = rows.slice(i, i + CHUNK_SIZE);
       const valuesSql = chunk
-        .map((row) => `(${fields.map((f) => escapeValue(row[f.name] ?? null)).join(', ')})`)
+        .map((row) => {
+          const vals = fields.map((f) => escapeValue(row[f.name] ?? null));
+          if (userId) {
+            vals.push(`'${userId}'::uuid`, `'${userId}'::uuid`);
+          }
+          return `(${vals.join(', ')})`;
+        })
         .join(', ');
       const insertSql = `INSERT INTO "${tableName}" (${cols}) VALUES ${valuesSql} ON CONFLICT DO NOTHING`;
       try {
@@ -434,12 +451,21 @@ export class AutocodeService {
         }
 
         const childColNames = [fkColumn, ...childFields.map((cf) => cf.name)];
-        const childCols = childColNames.map((c) => `"${c}"`).join(', ');
+        const childCols = (userId
+          ? [...childColNames.map((c) => `"${c}"`), '"owner_id"', '"created_by"']
+          : childColNames.map((c) => `"${c}"`)
+        ).join(', ');
         let childInserted = 0;
         for (let i = 0; i < childRows.length; i += CHUNK_SIZE) {
           const chunk = childRows.slice(i, i + CHUNK_SIZE);
           const valuesSql = chunk
-            .map((row) => `(${childColNames.map((c) => escapeValue(row[c] ?? null)).join(', ')})`)
+            .map((row) => {
+              const vals = childColNames.map((c) => escapeValue(row[c] ?? null));
+              if (userId) {
+                vals.push(`'${userId}'::uuid`, `'${userId}'::uuid`);
+              }
+              return `(${vals.join(', ')})`;
+            })
             .join(', ');
           const insertSql = `INSERT INTO "${childTable}" (${childCols}) VALUES ${valuesSql} ON CONFLICT DO NOTHING`;
           try {
@@ -487,12 +513,21 @@ export class AutocodeService {
             }
 
             const grandColNames = [grandFkColumn, ...grandFields.map((gdf) => gdf.name)];
-            const grandCols = grandColNames.map((c) => `"${c}"`).join(', ');
+            const grandCols = (userId
+              ? [...grandColNames.map((c) => `"${c}"`), '"owner_id"', '"created_by"']
+              : grandColNames.map((c) => `"${c}"`)
+            ).join(', ');
             let grandInserted = 0;
             for (let i = 0; i < grandRows.length; i += CHUNK_SIZE) {
               const chunk = grandRows.slice(i, i + CHUNK_SIZE);
               const valuesSql = chunk
-                .map((row) => `(${grandColNames.map((c) => escapeValue(row[c] ?? null)).join(', ')})`)
+                .map((row) => {
+                  const vals = grandColNames.map((c) => escapeValue(row[c] ?? null));
+                  if (userId) {
+                    vals.push(`'${userId}'::uuid`, `'${userId}'::uuid`);
+                  }
+                  return `(${vals.join(', ')})`;
+                })
                 .join(', ');
               const insertSql = `INSERT INTO "${grandTable}" (${grandCols}) VALUES ${valuesSql} ON CONFLICT DO NOTHING`;
               try {
@@ -597,11 +632,16 @@ export class AutocodeService {
 
     // Auto-save history record
     try {
+      // Build templates with agent config metadata when enabled
+      const templates: Record<string, any> = { ...files };
+      if (dto.agentConfig?.enabled) {
+        templates.__agent = this.buildAgentConfigMetadata(dto);
+      }
       await this.db.insert(sysAutoCodeHistories).values({
         packageName,
         tableName: dto.tableName,
         businessDB: (dto as any).businessDB || '',
-        templates: files,
+        templates,
       });
     } catch (historyErr: unknown) {
       // History save failure should not block the generate result
@@ -631,7 +671,7 @@ export class AutocodeService {
     try {
       const tableMenuId = await this.autoCreateMenu(dto, menuParentId);
       if (hasPointFields) {
-        await this.autoCreateMapMenu(dto, tableMenuId);
+        await this.autoCreateMapMenu(dto, menuParentId);
       }
     } catch (menuErr: unknown) {
       this.logger.error(` Auto-create menu FAILED for '${dto.tableName}':`, menuErr);
@@ -649,6 +689,27 @@ export class AutocodeService {
     }
 
     return { createdFiles };
+  }
+
+  /**
+   * Build agent config metadata for storage in history templates.
+   * Used by ai-generator.service.ts streamChatToRes to dynamically construct entity tools.
+   */
+  private buildAgentConfigMetadata(dto: AutoCodeDto): Record<string, any> {
+    const activeFieldsArray = activeFields(dto.fields);
+    return {
+      tableName: dto.tableName,
+      visibilityStrategy: dto.visibilityStrategy ?? 'private',
+      enabledTools: dto.agentConfig?.tools ?? ['query', 'create', 'update', 'delete', 'search', 'mock'],
+      systemPrompt: dto.agentConfig?.systemPrompt ?? '',
+      creatableFields: activeFieldsArray.filter(
+        (f) => f.creatable && !(f.type === 'relation' && f.relationType === 'one-to-many') && f.type !== 'code',
+      ),
+      editableFields: activeFieldsArray.filter(
+        (f) => f.editable && !(f.type === 'relation' && f.relationType === 'one-to-many'),
+      ),
+      searchableFields: activeFieldsArray.filter((f) => f.searchable),
+    };
   }
 
   /** Upsert the per-business-type approval chain config (sys_approval_flows). */
@@ -813,6 +874,8 @@ export class AutocodeService {
         `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
         `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
         `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
+        `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
+        `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
         `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
         `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
       ];
@@ -854,10 +917,18 @@ export class AutocodeService {
       // Step 5: Remove menu entries (including button children)
       await updateStep(4, 'running');
       const componentPath = `${n.pageComponentPath}`;
+      // Also match legacy format (pre-lc/ migration: ./\${kebab}/index) for backward compat
+      const legacyComponentPath = `./${n.kebabName}/index`;
       const menuRows = await this.db
         .select({ id: sysMenus.id, name: sysMenus.name, path: sysMenus.path })
         .from(sysMenus)
-        .where(and(eq(sysMenus.component, componentPath), isNull(sysMenus.deletedAt)));
+        .where(and(
+          or(
+            eq(sysMenus.component, componentPath),
+            eq(sysMenus.component, legacyComponentPath),
+          ),
+          isNull(sysMenus.deletedAt),
+        ));
       if (menuRows.length > 0) {
         const pageMenuIds = menuRows.map((m) => m.id);
         const btnChildren = await this.db
@@ -1199,11 +1270,15 @@ export class AutocodeService {
         ? await this.getPackageName((dto as any).packageId).catch(() => '')
         : '';
       try {
+        const updateTemplates: Record<string, any> = { ...files };
+        if (dto.agentConfig?.enabled) {
+          updateTemplates.__agent = this.buildAgentConfigMetadata(dto);
+        }
         await this.db.insert(sysAutoCodeHistories).values({
           packageName: updatePackageName,
           tableName: dto.tableName,
           businessDB: '',
-          templates: files,
+          templates: updateTemplates,
           version: oldVersion + 1,
           fields: dto.fields,
           changeLog,
@@ -1309,6 +1384,8 @@ export class AutocodeService {
           `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
           `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
           `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
           `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
           `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
         ];
@@ -1418,7 +1495,7 @@ export class AutocodeService {
       try {
         const asyncTableMenuId = await this.autoCreateMenu(dto, asyncMenuParentId);
         if (asyncHasPointFields) {
-          await this.autoCreateMapMenu(dto, asyncTableMenuId);
+          await this.autoCreateMapMenu(dto, asyncMenuParentId);
         }
       } catch (menuErr: unknown) {
         this.logger.error(` Auto-create menu FAILED for '${dto.tableName}':`, menuErr);
@@ -1440,11 +1517,16 @@ export class AutocodeService {
         const existing = await this.getLatestVersion(dto.tableName);
         const nextVersion = existing ? (existing.version ?? 1) + 1 : 1;
 
+        const asyncTemplates: Record<string, any> = { ...files };
+        if (dto.agentConfig?.enabled) {
+          asyncTemplates.__agent = this.buildAgentConfigMetadata(dto);
+        }
+
         await this.db.insert(sysAutoCodeHistories).values({
           packageName: asyncPackageName,
           tableName: dto.tableName,
           businessDB: (dto as any).businessDB || '',
-          templates: files,
+          templates: asyncTemplates,
           version: nextVersion,
           fields: dto.fields,
           changeLog: dto.force ? '强制重新生成' : '初始创建',
@@ -1692,6 +1774,8 @@ export class AutocodeService {
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
+      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
       `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
       `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
     ];
@@ -1781,6 +1865,8 @@ export class AutocodeService {
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
+      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
       `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
       `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
     ];
@@ -1988,6 +2074,8 @@ export class AutocodeService {
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
       `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
+      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
       `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
       `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
     ];
@@ -2676,6 +2764,80 @@ export class AutocodeService {
       }
     }
 
+    // Agent button permission for entity-agent-enabled tables
+    if (dto.agentConfig?.enabled) {
+      const AGENT_PERMISSION = 'autocode:ai-chat';
+      const existingAgentBtn = await this.db
+        .select({ id: sysMenus.id })
+        .from(sysMenus)
+        .where(
+          and(
+            eq(sysMenus.parentId, menuId),
+            eq(sysMenus.name, 'agent'),
+            eq(sysMenus.menuType, 3),
+            isNull(sysMenus.deletedAt),
+          ),
+        )
+        .limit(1);
+
+      if (existingAgentBtn.length === 0) {
+        const agentBtnRows = await this.db
+          .insert(sysMenus)
+          .values({
+            name: 'agent',
+            path: null,
+            component: null,
+            icon: null,
+            parentId: menuId,
+            sort: AutocodeService.CRUD_DEFS.length,
+            isVisible: 1,
+            permission: AGENT_PERMISSION,
+            menuType: 3,
+          })
+          .returning();
+        const agentBtnId = agentBtnRows[0]!.id;
+
+        if (adminRoles.length > 0) {
+          await this.db
+            .insert(sysRoleMenus)
+            .values(adminRoles.map((role) => ({ roleId: role.id, menuId: agentBtnId })))
+            .onConflictDoNothing();
+        }
+      }
+
+      // Ensure sys_apis entry for ai-chat (shared by all entity agents)
+      const apiExists = await this.db
+        .select({ id: sysApis.id })
+        .from(sysApis)
+        .where(and(eq(sysApis.path, '/api/v1/autocode/ai-chat'), eq(sysApis.method, 'POST'), isNull(sysApis.deletedAt)))
+        .limit(1);
+      if (apiExists.length === 0) {
+        await this.db.insert(sysApis).values({
+          method: 'POST',
+          path: '/api/v1/autocode/ai-chat',
+          permission: AGENT_PERMISSION,
+          description: '实体伴随Agent对话(SSE)',
+          apiGroup: 'autocode',
+        });
+      }
+
+      // Also ensure ai-test entry
+      const testApiExists = await this.db
+        .select({ id: sysApis.id })
+        .from(sysApis)
+        .where(and(eq(sysApis.path, '/api/v1/autocode/ai-test'), eq(sysApis.method, 'POST'), isNull(sysApis.deletedAt)))
+        .limit(1);
+      if (testApiExists.length === 0) {
+        await this.db.insert(sysApis).values({
+          method: 'POST',
+          path: '/api/v1/autocode/ai-test',
+          permission: AGENT_PERMISSION,
+          description: 'AI配置连通性测试',
+          apiGroup: 'autocode',
+        });
+      }
+    }
+
     this.logger.log(
       `[AutocodeService] Auto-created menu '${extractMenuName(dto.description, n.pascalName)}' (${menuPath}), ` +
       `parent=${parentMenuId ?? 'root'}, assigned to ${adminRoles.length} roles, ` +
@@ -2907,7 +3069,7 @@ export class AutocodeService {
   // Mock data (public, for AI tool)
   // =========================================================================
 
-  async generateMockForTable(tableName: string, count: number): Promise<{ inserted: number }> {
+  async generateMockForTable(tableName: string, count: number, userId?: string): Promise<{ inserted: number }> {
     const latest = await this.getLatestVersion(tableName);
     if (!latest) throw new Error(`表 '${tableName}' 不存在（无生成历史）`);
     const fields = (latest.fields as any[]) ?? [];
@@ -2920,7 +3082,7 @@ export class AutocodeService {
       generateWeb: false,
       mockData: { enabled: true, count },
     };
-    await this.insertMockData(dto as any);
+    await this.insertMockData(dto as any, userId);
     return { inserted: count };
   }
 
@@ -2961,18 +3123,37 @@ export class AutocodeService {
     const importLine = `import { ${n.pascalSingular}Module } from './modules/${n.kebabSingular}/${n.kebabSingular}.module';`;
     const moduleLine = `    ${n.pascalSingular}Module,`;
 
-    if (content.includes(importLine)) return;
+    if (!content.includes(importLine)) {
+      const lastImportMatch = content.match(/^import .+;$/gm);
+      if (lastImportMatch && lastImportMatch.length > 0) {
+        const lastImport = lastImportMatch[lastImportMatch.length - 1]!;
+        content = content.replace(lastImport, `${lastImport}\n${importLine}`);
+      }
 
-    const lastImportMatch = content.match(/^import .+;$/gm);
-    if (lastImportMatch && lastImportMatch.length > 0) {
-      const lastImport = lastImportMatch[lastImportMatch.length - 1]!;
-      content = content.replace(lastImport, `${lastImport}\n${importLine}`);
+      content = content.replace(
+        /(\s+)(OperationRecordModule,)/,
+        `$1$2\n${moduleLine}`,
+      );
     }
 
-    content = content.replace(
-      /(\s+)(OperationRecordModule,)/,
-      `$1$2\n${moduleLine}`,
-    );
+    // Register agent module when enabled
+    if (dto.agentConfig?.enabled) {
+      const agentImportLine = `import { ${n.pascalSingular}AgentModule } from './modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module';`;
+      const agentModuleLine = `    ${n.pascalSingular}AgentModule,`;
+
+      if (!content.includes(agentImportLine)) {
+        const lastImportMatch2 = content.match(/^import .+;$/gm);
+        if (lastImportMatch2 && lastImportMatch2.length > 0) {
+          const lastImport2 = lastImportMatch2[lastImportMatch2.length - 1]!;
+          content = content.replace(lastImport2, `${lastImport2}\n${agentImportLine}`);
+        }
+
+        content = content.replace(
+          /(\s+)(${n.pascalSingular}Module,)/,
+          `$1$2\n${agentModuleLine}`,
+        );
+      }
+    }
 
     await fs.writeFile(modulePath, content, 'utf-8');
   }
@@ -3004,7 +3185,7 @@ export class AutocodeService {
     await fs.writeFile(umircPath, content, 'utf-8');
   }
 
-  private async autoCreateMapMenu(dto: AutoCodeDto, tableMenuId: string): Promise<void> {
+  private async autoCreateMapMenu(dto: AutoCodeDto, parentMenuId: string | null): Promise<void> {
     const n = deriveNames(dto.tableName);
     const mapRoutePath = `${n.routePath}-map`;
     const existing = await this.db
@@ -3014,10 +3195,13 @@ export class AutocodeService {
       .limit(1);
     if (existing.length > 0) return;
 
+    const sortWhere = parentMenuId
+      ? eq(sysMenus.parentId, parentMenuId)
+      : isNull(sysMenus.parentId);
     const maxSortRows = await this.db
       .select({ maxSort: sql<number>`COALESCE(MAX(${sysMenus.sort}), -1)` })
       .from(sysMenus)
-      .where(eq(sysMenus.parentId, tableMenuId));
+      .where(sortWhere);
     const nextSort = (maxSortRows[0]?.maxSort ?? -1) + 1;
 
     const menuRows = await this.db
@@ -3027,7 +3211,7 @@ export class AutocodeService {
         path: mapRoutePath,
         component: `${n.pageMapComponentPath}`,
         icon: 'EnvironmentOutlined',
-        parentId: tableMenuId,
+        parentId: parentMenuId ?? null,
         sort: nextSort,
         isVisible: 1,
         menuType: 2,
@@ -3183,6 +3367,17 @@ export class AutocodeService {
       `\\s*${n.pascalSingular}Module,\\n?`,
     );
     content = content.replace(moduleArrayPattern, '');
+
+    // Also remove agent module registration if present
+    const agentImportPattern = new RegExp(
+      `import \\{ ${n.pascalSingular}AgentModule \\} from '\\./modules/${n.kebabSingular}/agent/${n.kebabSingular}\\.agent\\.module';\\n?`,
+    );
+    content = content.replace(agentImportPattern, '');
+
+    const agentModulePattern = new RegExp(
+      `\\s*${n.pascalSingular}AgentModule,\\n?`,
+    );
+    content = content.replace(agentModulePattern, '');
 
     await fs.writeFile(modulePath, content, 'utf-8');
   }
