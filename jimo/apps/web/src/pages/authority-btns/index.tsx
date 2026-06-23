@@ -1,212 +1,140 @@
-import { useRef, useState, useEffect } from 'react';
-import { Button, message, Popconfirm, Space, Tag, Select, Row, Col } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
-import { ActionType, ProColumns, ProTable } from '@ant-design/pro-components';
-import { ModalForm, ProFormSelect } from '@ant-design/pro-components';
-import {
-  getAuthorityBtns,
-  setAuthorityBtns,
-  deleteAuthorityBtn,
-  type AuthorityBtn,
-  type SetAuthorityBtnsDto,
-} from '@/services/authority-btn';
+import { useEffect, useState, useCallback } from 'react';
+import { Card, Table, Checkbox, Input, Tag, Space, Empty, Spin, message } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import { getBtnMatrix, toggleBtn, type BtnMatrixGroup, type BtnMatrixButton } from '@/services/authority-btn';
 import { getRoles, type Role } from '@/services/role';
-import { getMenus, type MenuItem } from '@/services/menu';
 
+/**
+ * Button-permission management — grouped by menu (分类分级), matrix of
+ * button × role with checkboxes. Backed by the REAL runtime system
+ * (button sub-menus + sys_role_menus), which is what getMyBtnPerms reads.
+ */
 export default function AuthorityBtnsPage() {
-  const actionRef = useRef<ActionType>(undefined);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<AuthorityBtn | null>(null);
+  const [groups, setGroups] = useState<BtnMatrixGroup[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
-  const [menus, setMenus] = useState<MenuItem[]>([]);
-  const [filterAuthorityId, setFilterAuthorityId] = useState<string | undefined>(undefined);
-  const [filterMenuId, setFilterMenuId] = useState<string | undefined>(undefined);
+  const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState('');
 
-  useEffect(() => {
-    getRoles({ page: 1, pageSize: 500 }).then((res) => setRoles(res.list || []));
-    getMenus({}).then((res) => setMenus(res || []));
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [g, r] = await Promise.all([
+        getBtnMatrix(),
+        getRoles({ page: 1, pageSize: 100 }),
+      ]);
+      setGroups(g ?? []);
+      setRoles(r.list ?? []);
+    } catch (err: any) {
+      message.error(err?.message || '加载失败');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const roleOptions = roles.map((r) => ({ label: `${r.name} (${r.code})`, value: r.id }));
-  const menuOptions = menus.map((m) => ({ label: m.name || m.path || m.id, value: m.id }));
+  useEffect(() => {
+    reload();
+  }, [reload]);
 
-  const columns: ProColumns<AuthorityBtn>[] = [
-    {
-      title: 'Role',
-      dataIndex: 'authorityId',
-      width: 200,
-      render: (_, record) => {
-        const role = roles.find((r) => r.id === record.authorityId);
-        return <Tag color="blue">{role?.name || record.authorityId}</Tag>;
-      },
-    },
-    {
-      title: 'Menu',
-      dataIndex: 'menuId',
-      width: 200,
-      render: (_, record) => {
-        const menu = menus.find((m) => m.id === record.menuId);
-        return menu?.name || menu?.path || record.menuId;
-      },
-    },
-    {
-      title: 'Button Name',
-      dataIndex: 'btnName',
-      width: 180,
-    },
-    {
-      title: 'Created',
-      dataIndex: 'createdAt',
-      valueType: 'dateTime',
-      width: 180,
-      search: false,
-    },
-    {
-      title: 'Actions',
-      key: 'action',
-      width: 100,
-      search: false,
-      render: (_, record) => (
-        <Popconfirm
-          title="Confirm deletion?"
-          onConfirm={async () => {
-            try {
-              await deleteAuthorityBtn(record.id);
-              message.success('Deleted');
-              actionRef.current?.reload();
-            } catch (err: any) {
-              message.error(err.message || 'Delete failed');
-            }
-          }}
-          okText="Confirm"
-          cancelText="Cancel"
-        >
-          <Button type="link" size="small" danger>
-            Delete
-          </Button>
-        </Popconfirm>
-      ),
-    },
-  ];
+  // super_admin bypasses sys_role_menus (always all buttons) — hide its column
+  // to avoid misleading checkboxes; manage only real roles here.
+  const matrixRoles = roles.filter((r) => r.code !== 'super_admin');
 
-  const handleSetSubmit = async (values: Record<string, any>) => {
+  const handleToggle = async (roleId: string, button: BtnMatrixButton, checked: boolean) => {
+    // optimistic update
+    setGroups((prev) =>
+      prev.map((group) => ({
+        ...group,
+        buttons: group.buttons.map((b) =>
+          b.id === button.id
+            ? {
+                ...b,
+                assignedRoleIds: checked
+                  ? [...new Set([...b.assignedRoleIds, roleId])]
+                  : b.assignedRoleIds.filter((id) => id !== roleId),
+              }
+            : b,
+        ),
+      })),
+    );
     try {
-      const btnNames = typeof values.btnNames === 'string'
-        ? values.btnNames.split(',').map((s: string) => s.trim()).filter(Boolean)
-        : values.btnNames;
-      const dto: SetAuthorityBtnsDto = {
-        authorityId: values.authorityId,
-        menuId: values.menuId,
-        btnNames,
-      };
-      await setAuthorityBtns(dto);
-      message.success('Buttons configured');
-      setModalOpen(false);
-      actionRef.current?.reload();
-      return true;
+      await toggleBtn(roleId, button.id, checked);
     } catch (err: any) {
-      message.error(err.message || 'Operation failed');
-      return false;
+      message.error(err?.message || '操作失败，已回滚');
+      reload();
     }
   };
 
+  const buildColumns = (): ColumnsType<BtnMatrixButton> => [
+    {
+      title: '按钮',
+      dataIndex: 'name',
+      width: 120,
+      render: (name: string) => <Tag color="blue">{name}</Tag>,
+    },
+    ...matrixRoles.map((role) => ({
+      title: role.name,
+      key: role.id,
+      width: 90,
+      align: 'center' as const,
+      render: (_: unknown, record: BtnMatrixButton) => (
+        <Checkbox
+          checked={record.assignedRoleIds.includes(role.id)}
+          onChange={(e) => handleToggle(role.id, record, e.target.checked)}
+        />
+      ),
+    })),
+  ];
+
+  const filtered = search.trim()
+    ? groups.filter(
+        (g) => g.menu.name.includes(search.trim()) || g.menu.path.includes(search.trim()),
+      )
+    : groups;
+
   return (
-    <>
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col>
-          <Select
-            allowClear
-            placeholder="Filter by Role"
-            style={{ width: 240 }}
-            options={roleOptions}
-            value={filterAuthorityId}
-            onChange={(val) => {
-              setFilterAuthorityId(val);
-              actionRef.current?.reload();
-            }}
-          />
-        </Col>
-        <Col>
-          <Select
-            allowClear
-            placeholder="Filter by Menu"
-            style={{ width: 240 }}
-            options={menuOptions}
-            value={filterMenuId}
-            onChange={(val) => {
-              setFilterMenuId(val);
-              actionRef.current?.reload();
-            }}
-          />
-        </Col>
-      </Row>
+    <div style={{ padding: 24 }}>
+      <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
+        <Input.Search
+          placeholder="搜索菜单名 / 路径"
+          allowClear
+          style={{ width: 320 }}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <span style={{ color: '#999', fontSize: 12 }}>
+          勾选 = 该角色在此菜单拥有该按钮权限（运行时 getMyBtnPerms 即读此数据）。super_admin 永远全权限，不在此管理。
+        </span>
+      </Space>
 
-      <ProTable<AuthorityBtn>
-        headerTitle="Authority Buttons"
-        actionRef={actionRef}
-        rowKey="id"
-        columns={columns}
-        request={async () => {
-          const result = await getAuthorityBtns({
-            authorityId: filterAuthorityId,
-            menuId: filterMenuId,
-          });
-          return {
-            data: result,
-            total: result.length,
-            success: true,
-          };
-        }}
-        pagination={{ pageSize: 20 }}
-        toolBarRender={() => [
-          <Button
-            key="set"
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => {
-              setEditingRecord(null);
-              setModalOpen(true);
-            }}
-          >
-            Configure Buttons
-          </Button>,
-        ]}
-      />
-
-      <ModalForm
-        title="Configure Button Permissions"
-        open={modalOpen}
-        onOpenChange={(open) => {
-          setModalOpen(open);
-        }}
-        onFinish={handleSetSubmit}
-        modalProps={{ destroyOnClose: true, width: 560 }}
-      >
-        <ProFormSelect
-          name="authorityId"
-          label="Role"
-          options={roleOptions}
-          placeholder="Select a role"
-          showSearch
-          rules={[{ required: true, message: 'Please select a role' }]}
-        />
-        <ProFormSelect
-          name="menuId"
-          label="Menu"
-          options={menuOptions}
-          placeholder="Select a menu"
-          showSearch
-          rules={[{ required: true, message: 'Please select a menu' }]}
-        />
-        <ProFormSelect
-          name="btnNames"
-          label="Button Names"
-          mode="tags"
-          placeholder="Type button names and press Enter"
-          rules={[{ required: true, message: 'Please enter at least one button name' }]}
-          fieldProps={{ tokenSeparators: [','] }}
-        />
-      </ModalForm>
-    </>
+      <Spin spinning={loading}>
+        {filtered.length === 0 && !loading ? (
+          <Empty description="暂无按钮权限数据（生成业务表后会出现）" />
+        ) : (
+          filtered.map((group) => (
+            <Card
+              key={group.menu.id}
+              size="small"
+              style={{ marginBottom: 12 }}
+              title={
+                <Space>
+                  <span>{group.menu.name || '(未命名菜单)'}</span>
+                  <Tag>{group.menu.path}</Tag>
+                  {group.menu.component ? (
+                    <Tag color="geekblue">{group.menu.component}</Tag>
+                  ) : null}
+                </Space>
+              }
+            >
+              <Table<BtnMatrixButton>
+                rowKey="id"
+                size="small"
+                pagination={false}
+                dataSource={group.buttons}
+                columns={buildColumns()}
+              />
+            </Card>
+          ))
+        )}
+      </Spin>
+    </div>
   );
 }

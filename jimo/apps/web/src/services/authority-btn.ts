@@ -75,3 +75,36 @@ export async function deleteAuthorityBtn(id: string): Promise<void> {
 export async function getMyBtnPerms(): Promise<Record<string, string[]>> {
   return request.get('/authority-btns/my');
 }
+
+// ---- Button-permission matrix (the REAL runtime system) ----
+// getMyBtnPerms reads button sub-menus (sysMenus menu_type=3) via sys_role_menus.
+// This matrix UI manages exactly that — not the legacy sys_authority_btns table.
+
+export interface BtnMatrixButton {
+  id: string;
+  name: string;
+  assignedRoleIds: string[];
+}
+
+export interface BtnMatrixGroup {
+  menu: { id: string; name: string; path: string; component: string };
+  buttons: BtnMatrixButton[];
+}
+
+/**
+ * Get the button-permission matrix grouped by menu.
+ */
+export async function getBtnMatrix(): Promise<BtnMatrixGroup[]> {
+  return request.get('/authority-btns/matrix');
+}
+
+/**
+ * Grant/revoke a button for a role (writes sys_role_menus).
+ */
+export async function toggleBtn(
+  roleId: string,
+  buttonMenuId: string,
+  assigned: boolean,
+): Promise<void> {
+  return request.post('/authority-btns/toggle', { roleId, buttonMenuId, assigned });
+}

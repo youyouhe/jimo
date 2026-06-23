@@ -219,4 +219,98 @@ export class AuthorityBtnService {
       .set({ deletedAt: sql`NOW()` })
       .where(and(eq(sysAuthorityBtns.id, id), isNull(sysAuthorityBtns.deletedAt)));
   }
+
+  // =========================================================================
+  // Button-permission matrix (the REAL runtime system)
+  // getMyBtnPerms reads button sub-menus (sysMenus menu_type=3) via sys_role_menus,
+  // NOT the legacy sys_authority_btns table. These power the management UI.
+  // =========================================================================
+
+  /**
+   * Return the button-permission matrix grouped by page menu:
+   * each group = a page menu + its button sub-menus, each button carrying the
+   * list of role ids currently granted. Roles are resolved to names client-side.
+   */
+  async getMatrix(): Promise<BtnMatrixGroup[]> {
+    const btnMenus = await this.db
+      .select({ id: sysMenus.id, name: sysMenus.name, parentId: sysMenus.parentId })
+      .from(sysMenus)
+      .where(and(eq(sysMenus.menuType, 3), isNull(sysMenus.deletedAt)));
+    if (btnMenus.length === 0) return [];
+
+    const parentIds = [...new Set(btnMenus.map((b) => b.parentId).filter(Boolean))] as string[];
+    const parents = parentIds.length
+      ? await this.db
+          .select({
+            id: sysMenus.id,
+            name: sysMenus.name,
+            path: sysMenus.path,
+            component: sysMenus.component,
+          })
+          .from(sysMenus)
+          .where(and(inArray(sysMenus.id, parentIds), isNull(sysMenus.deletedAt)))
+      : [];
+    const parentMap = new Map(parents.map((p) => [p.id, p]));
+
+    const btnMenuIds = btnMenus.map((b) => b.id);
+    const assignments = await this.db
+      .select({ menuId: sysRoleMenus.menuId, roleId: sysRoleMenus.roleId })
+      .from(sysRoleMenus)
+      .where(inArray(sysRoleMenus.menuId, btnMenuIds));
+    const assignedRoles = new Map<string, Set<string>>();
+    for (const a of assignments) {
+      if (!assignedRoles.has(a.menuId)) assignedRoles.set(a.menuId, new Set());
+      assignedRoles.get(a.menuId)!.add(a.roleId);
+    }
+
+    const groupMap = new Map<string, BtnMatrixGroup>();
+    for (const b of btnMenus) {
+      const pid = b.parentId;
+      if (!pid) continue;
+      const parent = parentMap.get(pid);
+      if (!parent) continue;
+      if (!groupMap.has(pid)) {
+        groupMap.set(pid, {
+          menu: {
+            id: parent.id,
+            name: parent.name ?? '',
+            path: parent.path ?? '',
+            component: parent.component ?? '',
+          },
+          buttons: [],
+        });
+      }
+      groupMap.get(pid)!.buttons.push({
+        id: b.id,
+        name: b.name ?? '',
+        assignedRoleIds: [...(assignedRoles.get(b.id) ?? [])],
+      });
+    }
+    return [...groupMap.values()];
+  }
+
+  /** Grant or revoke a single (role × button-sub-menu) entry in sys_role_menus. */
+  async toggleBtn(roleId: string, buttonMenuId: string, assigned: boolean): Promise<void> {
+    if (assigned) {
+      await this.db
+        .insert(sysRoleMenus)
+        .values({ roleId, menuId: buttonMenuId })
+        .onConflictDoNothing();
+    } else {
+      await this.db
+        .delete(sysRoleMenus)
+        .where(and(eq(sysRoleMenus.roleId, roleId), eq(sysRoleMenus.menuId, buttonMenuId)));
+    }
+  }
+}
+
+export interface BtnMatrixButton {
+  id: string;
+  name: string;
+  assignedRoleIds: string[];
+}
+
+export interface BtnMatrixGroup {
+  menu: { id: string; name: string; path: string; component: string };
+  buttons: BtnMatrixButton[];
 }

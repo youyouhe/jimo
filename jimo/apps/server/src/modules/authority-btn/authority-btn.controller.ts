@@ -15,9 +15,10 @@ import {
   ApiOperation,
   ApiResponse,
 } from '@nestjs/swagger';
-import { AuthorityBtnService } from './authority-btn.service';
+import { AuthorityBtnService, BtnMatrixGroup } from './authority-btn.service';
 import { CreateAuthorityBtnDto } from './dto/create-authority-btn.dto';
 import { SetAuthorityBtnsDto } from './dto/set-authority-btns.dto';
+import { ToggleBtnDto } from './dto/toggle-authority-btn.dto';
 import { QueryAuthorityBtnDto } from './dto/query-authority-btn.dto';
 import {
   ApiResponse as ApiResp,
@@ -52,6 +53,14 @@ export class AuthorityBtnController {
     return { code: 0, msg: 'success', data };
   }
 
+  @Get('matrix')
+  @ApiOperation({ summary: '按钮权限矩阵（按菜单分组，对接运行时 button 子菜单 + sys_role_menus）' })
+  @ApiResponse({ status: 200, description: 'Returns button-permission groups' })
+  async getMatrix(): Promise<ApiResp<BtnMatrixGroup[]>> {
+    const data = await this.authorityBtnService.getMatrix();
+    return { code: 0, msg: 'success', data };
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get authority button by id' })
   @ApiResponse({ status: 200, description: 'Returns the authority button' })
@@ -80,6 +89,16 @@ export class AuthorityBtnController {
   async set(@Body() dto: SetAuthorityBtnsDto): Promise<ApiResp<SysAuthorityBtn[]>> {
     const data = await this.authorityBtnService.set(dto);
     return { code: 0, msg: 'success', data };
+  }
+
+  @Post('toggle')
+  @HttpCode(HttpStatus.OK)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '授予/撤销某个按钮权限（role × button 子菜单，写 sys_role_menus）' })
+  @ApiResponse({ status: 200, description: 'Toggled' })
+  async toggle(@Body() dto: ToggleBtnDto): Promise<ApiResp<null>> {
+    await this.authorityBtnService.toggleBtn(dto.roleId, dto.buttonMenuId, dto.assigned);
+    return { code: 0, msg: 'success', data: null };
   }
 
   @Delete(':id')
