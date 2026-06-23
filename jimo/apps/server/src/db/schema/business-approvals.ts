@@ -22,7 +22,7 @@ import {
  * raw callback payload is kept in `payload` for audit.
  */
 export const businessApprovals = pgTable(
-  'lc_business_approvals',
+  'business_approvals',
   {
     id: uuid('id').defaultRandom().primaryKey(),
     businessType: varchar('business_type', { length: 50 }).notNull(),

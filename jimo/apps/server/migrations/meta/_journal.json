@@ -29,6 +29,13 @@
       "when": 1781508456284,
       "tag": "0003_pretty_payback",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782230000000,
+      "tag": "0004_drop_lc_prefix_business_approvals",
+      "breakpoints": true
     }
   ]
 }

@@ -39,7 +39,7 @@ interface FlowConfig {
  * Unified approval facade.
  * - applyBpmOutcome: ingest BPM outcome callbacks (MVP, idempotent).
  * - startApproval: resolve a dynamic chain from sys_approval_flows + the record,
- *   start the generic BPM flow, track in lc_business_approvals.
+ *   start the generic BPM flow, track in business_approvals.
  * - getMyTasks / approve: proxy to BPM /api/approvals.
  */
 @Injectable()
@@ -111,7 +111,7 @@ export class ApprovalService {
     return this.callBpm('POST', `approvals/${processInstanceId}/approve`, { approved, comment }, bpmId);
   }
 
-  /** Approvals I submitted (from lc_business_approvals by initiator). */
+  /** Approvals I submitted (from business_approvals by initiator). */
   async myInitiated(sysUserId: string) {
     const bpmId = await this.bpmIdFor(sysUserId);
     const rows = await this.db
@@ -186,7 +186,7 @@ export class ApprovalService {
       const res = await this.db.execute(sql`
         SELECT t.id, t.created_at, t.updated_at, a.status AS approval_status
         FROM ${sql.raw(`"lc_${f.businessType}"`)} t
-        LEFT JOIN lc_business_approvals a
+        LEFT JOIN business_approvals a
           ON a.business_id = t.id::text AND a.business_type = ${f.businessType} AND a.deleted_at IS NULL
         WHERE t.owner_id = ${sysUserId} AND t.deleted_at IS NULL
           AND (a.status IS NULL OR a.status = 'REJECTED')
@@ -365,7 +365,7 @@ export class ApprovalService {
   }
 
   /** Batch-enrich BPM task/result rows with businessType/businessId from
-   *  lc_business_approvals (looked up by processInstanceId). */
+   *  business_approvals (looked up by processInstanceId). */
   private async enrichTasks(
     items: Array<Record<string, unknown>>,
   ): Promise<Array<Record<string, unknown>>> {
