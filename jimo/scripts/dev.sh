@@ -82,6 +82,49 @@ read_pid() {
   return 1
 }
 
+# ── 获取端口监听者 PID ──
+port_owner() {
+  local port=$1
+  fuser "$port/tcp" 2>/dev/null | tr -d ' ' || true
+}
+
+# ── 检查 PID 是否拥有端口（自身或子孙进程） ──
+pid_owns_port() {
+  local pid=$1 port=$2
+  local owner
+  owner=$(port_owner "$port")
+  [ -z "$owner" ] && return 1
+
+  # 直接匹配
+  [ "$pid" = "$owner" ] && return 0
+
+  # 检查 owner 是否是 pid 的子孙进程（向上遍历 5 层 ppid）
+  local cur="$owner" depth=0
+  while [ "$depth" -lt 5 ]; do
+    [ "$cur" = "$pid" ] && return 0
+    local ppid
+    ppid=$(ps -o ppid= -p "$cur" 2>/dev/null | tr -d ' ' || true)
+    [ -z "$ppid" ] || [ "$ppid" = "1" ] && break
+    cur="$ppid"
+    depth=$((depth + 1))
+  done
+
+  # 检查 owner 是否是 pid 的子进程
+  local children
+  children=$(pgrep -P "$pid" 2>/dev/null || true)
+  for child in $children; do
+    [ "$child" = "$owner" ] && return 0
+    # 再往下一层（nest start --watch → npx → node dist/main）
+    local grandchildren
+    grandchildren=$(pgrep -P "$child" 2>/dev/null || true)
+    for gc in $grandchildren; do
+      [ "$gc" = "$owner" ] && return 0
+    done
+  done
+
+  return 1
+}
+
 # ── 等待端口就绪 ──
 wait_for_port() {
   local port=$1 name=$2 timeout=${3:-30}
@@ -129,14 +172,28 @@ ensure_shared() {
 start_backend() {
   local pid
   if pid=$(read_pid "$backend_pid_file"); then
-    warn "后端已在运行 (PID: $pid, 端口: $BACKEND_PORT)"
-    return 0
+    # PID 文件中的进程还活着，但需验证它（或子进程）确实在监听端口。
+    # 若端口被外部进程占用（如直接 node dist/main），
+    # 端口占有者的 Casbin 状态可能已损坏 → 杀掉并重启。
+    if pid_owns_port "$pid" "$BACKEND_PORT"; then
+      warn "后端已在运行 (PID: $pid, 端口: $BACKEND_PORT)"
+      return 0
+    fi
+    # PID 活着但端口被外人占了 → 僵尸接管，杀掉外人 + 失效 PID 文件
+    local owner
+    owner=$(port_owner "$BACKEND_PORT")
+    warn "后端 PID 文件指向 $pid 但端口 $BACKEND_PORT 被 PID $owner 占用（外部进程），正在修复..."
+    fuser -k "$BACKEND_PORT/tcp" 2>/dev/null || true
+    sleep 1
+    # 杀掉旧的 PID 文件进程（它已经没在监听了）
+    kill -9 "$pid" 2>/dev/null || true
+    rm -f "$backend_pid_file"
   fi
 
   if check_port "$BACKEND_PORT"; then
     # 端口被占用但 PID 文件不存在 → 僵尸进程,自动清理后继续
     local port_pid
-    port_pid=$(fuser "$BACKEND_PORT/tcp" 2>/dev/null | tr -d ' ' || true)
+    port_pid=$(port_owner "$BACKEND_PORT")
     if [ -n "$port_pid" ]; then
       warn "端口 $BACKEND_PORT 被僵尸进程占用 (PID: $port_pid)，自动释放..."
       fuser -k "$BACKEND_PORT/tcp" 2>/dev/null || true
