@@ -2,7 +2,7 @@ import { Injectable, Logger, Inject } from '@nestjs/common';
 import type { Response } from 'express';
 import { streamText, tool, jsonSchema, type CoreMessage } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
-import { eq, isNull, sql } from 'drizzle-orm';
+import { eq, isNull, sql, desc } from 'drizzle-orm';
 import { AI_GENERATOR_SYSTEM_PROMPT } from './ai-generator.prompt';
 import { isReservedTableName } from './reserved-names';
 import {
@@ -53,6 +53,7 @@ export class AiGeneratorService {
     baseUrl: string | undefined,
     model: string | undefined,
     res: Response,
+    userId?: string,
   ): Promise<void> {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -137,17 +138,48 @@ ${pkgList}`,
 
       this.logger.log(`[AiGenerator] AI baseURL: ${baseUrl.replace(/\/+$/, '')}`);
 
-      const result = streamText({
-        model: modelInstance,
-        system: AI_GENERATOR_SYSTEM_PROMPT,
-        messages,
-        maxSteps: 15,
-        tools: {
-          propose_entity: tool({
-            description: PROPOSE_ENTITY_TOOL.function.description,
-            parameters: jsonSchema(PROPOSE_ENTITY_TOOL.function.parameters as any),
-            execute: async (args: any) => {
-              this.logger.log(`[AiGenerator] ✓ propose_entity: ${args.tableName}`);
+      // Dynamically load entity agent tools when businessType is provided
+      let entityTools: Record<string, any> = {};
+      if (dto.businessType) {
+        entityTools = await this.loadEntityAgentTools(dto.businessType, userId);
+        if (Object.keys(entityTools).length > 0) {
+          this.logger.log(`[AiGenerator] Loaded ${Object.keys(entityTools).length} entity agent tools for '${dto.businessType}'`);
+        }
+      }
+
+      // ── Retry loop: detect hallucinated "已生成" claims that never called propose_entity ──
+      const MAX_RETRIES = 3;
+      let calledProposeEntity = false;
+      let textBuffer = '';
+
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        if (aborted) break;
+
+        calledProposeEntity = false;
+        textBuffer = '';
+
+        if (attempt > 1) {
+          this.logger.warn(`[AiGenerator] 🔄 retry attempt ${attempt}/${MAX_RETRIES}`);
+          write({ kind: 'retry', attempt, maxRetries: MAX_RETRIES, content: '检测到未实际提交工具调用，正在重试…' });
+          messages.push({
+            role: 'user',
+            content: '## ⚠️ 你上一轮的回复里描述了实体字段但**没有调用 propose_entity 工具**提交！你只是在文字里"说"了，但没有真正执行。请**现在立刻**调用 propose_entity 工具提交实体定义。不要再只描述不提交。如果涉及字典或 Package，也在同一轮调 create_dict / create_package。',
+          });
+        }
+
+        const result = streamText({
+          model: modelInstance,
+          system: AI_GENERATOR_SYSTEM_PROMPT,
+          messages,
+          maxSteps: 15,
+          // entity agent mode: only CRUD tools. autocode mode: full global tools.
+          tools: Object.keys(entityTools).length > 0 ? entityTools : {
+            propose_entity: tool({
+              description: PROPOSE_ENTITY_TOOL.function.description,
+              parameters: jsonSchema(PROPOSE_ENTITY_TOOL.function.parameters as any),
+              execute: async (args: any) => {
+                calledProposeEntity = true;
+                this.logger.log(`[AiGenerator] ✓ propose_entity: ${args.tableName}`);
               // Guard: 系统保留名前置拦截(防止生成覆盖系统页面/服务)
               if (isReservedTableName(args.tableName)) {
                 return { ok: false, error: `表名 '${args.tableName}' 是系统保留名,会覆盖平台自带的系统页面/服务。请改用其他名称。` };
@@ -163,12 +195,12 @@ ${pkgList}`,
                   .catch(() => []),
                 this.db
                   .execute(sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ${lcTable} LIMIT 1`)
-                  .catch(() => ({ rows: [] as any[] })),
+                  .catch(() => [] as any[]),
               ]);
               if (existing.length > 0) {
                 return { ok: false, error: `表 '${args.tableName}' 已存在(生成历史中有记录)。若要修改请用 update 流程；若要重建请先 delete_entity 删除后再 propose。` };
               }
-              if (physCheck.rows?.length) {
+              if (Array.from(physCheck as any).length) {
                 return {
                   ok: false,
                   error: `物理表 '${lcTable}' 已存在于数据库,但不在生成历史中(历史遗留/孤儿表)。直接 propose 会导致 drizzle-kit push 与现有结构冲突并静默失败。请先处理: ① 若要复用现有数据/结构,改用 update 流程; ② 若确认无用,请提示用户手动执行 DROP TABLE ${lcTable} 后再 propose。`,
@@ -217,10 +249,10 @@ ${pkgList}`,
                     .catch(() => [] as { tableName: string }[]),
                   this.db
                     .execute(sql`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name ~ '^lc_' ORDER BY table_name`)
-                    .catch(() => ({ rows: [] as any[] })),
+                    .catch(() => [] as any[]),
                 ]);
                 const histSet = new Set(histRows.map((r) => r.tableName));
-                const physNames = (physRows.rows ?? []).map((r: any) =>
+                const physNames = Array.from(physRows as any).map((r: any) =>
                   String(r.table_name).replace(/^lc_/, ''),
                 );
                 const orphans = physNames.filter((n) => !histSet.has(n)); // 物理存在但历史无记录
@@ -270,20 +302,9 @@ ${pkgList}`,
             parameters: jsonSchema(GENERATE_MOCK_TOOL.function.parameters as any),
             execute: async (args: unknown) => {
               const { tableName, count } = args as { tableName: string; count?: number };
-              // Guard: verify the physical table exists in the database before inserting
+              const safeCount = Math.min(Math.max(count ?? 10, 1), 100);
               try {
-                const tableCheck = await this.db.execute(
-                  sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ${'lc_' + tableName} LIMIT 1`
-                );
-                if (!tableCheck.rows?.length) {
-                  return { ok: false, tableName, error: `数据库中不存在表 'lc_${tableName}'。该表可能尚未通过 drizzle-kit push 创建，请先确认生成流程是否成功完成。` };
-                }
-              } catch (e: any) {
-                return { ok: false, tableName, error: `检查表存在性失败: ${e?.message}` };
-              }
-              try {
-                const safeCount = Math.min(Math.max(count ?? 10, 1), 100);
-                const result = await this.autocodeService.generateMockForTable(tableName, safeCount);
+                const result = await this.autocodeService.generateMockForTable(tableName, safeCount, userId);
                 write({ kind: 'progress', content: `已为 '${tableName}' 插入 ${result.inserted} 条 mock 数据` });
                 return { ok: true, tableName, inserted: result.inserted };
               } catch (e: any) {
@@ -437,6 +458,7 @@ ${pkgList}`,
         onChunk: ({ chunk }: any) => {
           if (aborted) return;
           if (chunk.type === 'text-delta') {
+            textBuffer += chunk.textDelta;
             write({ kind: 'token', content: chunk.textDelta });
           }
         },
@@ -446,18 +468,56 @@ ${pkgList}`,
         if (aborted) break;
       }
 
-      if (!aborted) {
-        write({ kind: 'done' });
-        res.end();
+      if (aborted) break;
+
+      // ── Hallucination detection (global tools mode only) ──
+      // Model described creation ("已生成"/"已创建"/"字段总览") but never
+      // actually called propose_entity. Retry with a corrective nudge.
+      // Skip in entity-agent mode (no propose_entity tool available).
+      if (Object.keys(entityTools).length === 0 && !calledProposeEntity && this.isCreationHallucination(textBuffer)) {
+        this.logger.warn(
+          `[AiGenerator] ⚠ hallucination on attempt ${attempt}/${MAX_RETRIES}: ` +
+          `model claimed creation but never called propose_entity (textLen=${textBuffer.length})`,
+        );
+        if (attempt < MAX_RETRIES) continue;
+        // Exhausted retries: warn the user via SSE
+        write({ kind: 'warning', content: 'AI 多次描述实体方案但未实际调用提交工具，请尝试重新描述您的需求。' });
+        break;
       }
-    } catch (e: any) {
-      this.logger.error(`[AiGenerator] ✗ 流式调用失败: ${e?.message}\n${e?.stack?.slice(0, 800)}`);
-      if (!aborted) {
-        write({ kind: 'error', message: e?.message || 'AI 调用失败' });
-        write({ kind: 'done' });
-        res.end();
-      }
+
+      // Success (tool was called) or not a creation attempt — done
+      break;
+    } // end retry loop
+
+    if (!aborted) {
+      write({ kind: 'done' });
+      res.end();
     }
+  } catch (e: any) {
+    this.logger.error(`[AiGenerator] ✗ 流式调用失败: ${e?.message}\n${e?.stack?.slice(0, 800)}`);
+    if (!aborted) {
+      write({ kind: 'error', message: e?.message || 'AI 调用失败' });
+      write({ kind: 'done' });
+      res.end();
+    }
+  }
+}
+
+  /**
+   * Detect creation hallucination: model claimed to have created/提交 an entity
+   * in text but never actually called propose_entity.
+   */
+  private isCreationHallucination(text: string): boolean {
+    // Must contain creation-claim keywords
+    const creationClaims = ['已生成', '已创建', '已提交', '已为你生成', '表已就绪', '字段总览', '需要我插入 mock'];
+    const hasClaim = creationClaims.some((kw) => text.includes(kw));
+    if (!hasClaim) return false;
+
+    // Must contain table-like structure indicators (field name + type pattern)
+    const hasFieldTable = /`\w+`\s+(varchar|integer|text|decimal|boolean|timestamp|uuid|dict|relation|point|file|image|bigint)/i.test(text);
+    if (!hasFieldTable) return false;
+
+    return true;
   }
 
   /** create_dict：先查后建，幂等 */
@@ -574,6 +634,239 @@ ${pkgList}`,
       };
     } catch (e: any) {
       return { ok: false, message: e?.message || '连接失败(检查 baseUrl 是否可达)' };
+    }
+  }
+
+  /**
+   * Load entity agent tools from history record.
+   * Queries sys_auto_code_histories for the latest agent config of the given
+   * businessType entity, then builds dynamic tool definitions with parameterized
+   * Drizzle SQL execute callbacks (no ModuleRef needed).
+   */
+  private async loadEntityAgentTools(businessType: string, userId?: string): Promise<Record<string, any>> {
+    try {
+      const rows = await this.db
+        .select({ templates: sysAutoCodeHistories.templates })
+        .from(sysAutoCodeHistories)
+        .where(eq(sysAutoCodeHistories.tableName, businessType))
+        .orderBy(desc(sysAutoCodeHistories.createdAt))
+        .limit(1);
+
+      if (rows.length === 0) return {};
+
+      const templates = rows[0].templates as Record<string, any> | null;
+      const agentCfg = templates?.__agent as Record<string, any> | undefined;
+      if (!agentCfg) return {};
+
+      const enabledTools: string[] = agentCfg.enabledTools ?? [];
+      const tableName: string = agentCfg.tableName ?? businessType;
+      const lcTable = `lc_${tableName}`;
+      const visibilityStrategy: string = agentCfg.visibilityStrategy ?? 'private';
+      const isAdmin = false; // entity tools don't have role info, fallback to non-admin
+
+      // Build visibility WHERE fragment for SELECT tools.
+      // private: owner only. shared: owner OR shared_with. department/public: no filter.
+      const visFragment = (() => {
+        if (visibilityStrategy === 'public') return sql``; // no filter
+        if (visibilityStrategy === 'department') {
+          // Simplified: just owner-only. Full dept scope needs OwnershipHelper.
+          return sql`AND owner_id = ${userId ?? ''}`;
+        }
+        if (visibilityStrategy === 'shared') {
+          const uid = userId ?? '';
+          const sharedJson = JSON.stringify([uid]);
+          return sql`AND (owner_id = ${uid} OR shared_with @> ${sql.raw(`'${sharedJson}'::jsonb`)})`;
+        }
+        // private (default): owner only
+        return sql`AND owner_id = ${userId ?? ''}`;
+      })();
+      const creatableFields: any[] = agentCfg.creatableFields ?? [];
+      const editableFields: any[] = agentCfg.editableFields ?? [];
+      const searchableFields: any[] = agentCfg.searchableFields ?? [];
+
+      const tools: Record<string, any> = {};
+
+      const tbl = sql.identifier(lcTable);
+
+      if (enabledTools.includes('query')) {
+        tools[`query_${tableName}`] = tool({
+          description: `Get a ${tableName} record by ID`,
+          parameters: jsonSchema({
+            type: 'object',
+            properties: { id: { type: 'string', description: 'Record UUID' } },
+            required: ['id'],
+          }),
+          execute: async (args: { id: string }) => {
+            const res = await this.db.execute(
+              sql`SELECT * FROM ${tbl} WHERE id = ${args.id} AND deleted_at IS NULL ${visFragment} LIMIT 1`,
+            );
+            const r = Array.from(res as any);
+            if (r.length === 0) throw new Error(`${tableName} with id ${args.id} not found`);
+            this.logger.log(`[EntityTool] query_${tableName} id=${args.id} → ${r.length} rows`);
+            return r[0];
+          },
+        });
+      }
+
+      if (enabledTools.includes('create') && creatableFields.length > 0) {
+        const colNames = creatableFields.map((f: any) => f.name);
+        const props: Record<string, any> = {};
+        const requiredCols: string[] = [];
+        for (const f of creatableFields) {
+          const jsType = f.type === 'integer' || f.type === 'bigint' ? 'number'
+            : f.type === 'boolean' ? 'boolean' : 'string';
+          props[f.name] = { type: jsType, description: f.description || f.name };
+          if (f.required) requiredCols.push(f.name);
+        }
+        tools[`create_${tableName}`] = tool({
+          description: `Create a new ${tableName} record`,
+          parameters: jsonSchema({ type: 'object', properties: props, required: requiredCols }),
+          execute: async (args: any) => {
+            const colIdents = colNames.map((n: string) => sql.identifier(n));
+            const vals = colNames.map((n: string) => sql`${args[n] ?? null}`);
+            const ownerVal = userId ? sql`${userId}` : sql`gen_random_uuid()`;
+            const res = await this.db.execute(sql`
+              INSERT INTO ${tbl} (${sql.join(colIdents, sql`, `)}, owner_id)
+              VALUES (${sql.join(vals, sql`, `)}, ${ownerVal})
+              RETURNING *
+            `);
+            return Array.from(res as any)[0] ?? null;
+          },
+        });
+      }
+
+      if (enabledTools.includes('update') && editableFields.length > 0) {
+        const colNames = editableFields.map((f: any) => f.name);
+        const props: Record<string, any> = {
+          id: { type: 'string', description: 'Record UUID' },
+        };
+        for (const f of editableFields) {
+          const jsType = f.type === 'integer' || f.type === 'bigint' ? 'number'
+            : f.type === 'boolean' ? 'boolean' : 'string';
+          props[f.name] = { type: jsType, description: f.description || f.name };
+        }
+        tools[`update_${tableName}`] = tool({
+          description: `Update a ${tableName} record`,
+          parameters: jsonSchema({ type: 'object', properties: props, required: ['id'] }),
+          execute: async (args: any) => {
+            const setPairs = colNames.map((n: string) => {
+              const col = sql.identifier(n);
+              return sql`${col} = ${args[n] ?? null}`;
+            });
+            const res = await this.db.execute(sql`
+              UPDATE ${tbl}
+              SET ${sql.join(setPairs, sql`, `)}, updated_at = NOW()
+              WHERE id = ${args.id} AND owner_id = ${userId ?? ''} AND deleted_at IS NULL
+              RETURNING *
+            `);
+            return Array.from(res as any)[0] ?? null;
+          },
+        });
+      }
+
+      if (enabledTools.includes('delete')) {
+        tools[`delete_${tableName}`] = tool({
+          description: `Soft-delete a ${tableName} record by ID`,
+          parameters: jsonSchema({
+            type: 'object',
+            properties: { id: { type: 'string', description: 'Record UUID' } },
+            required: ['id'],
+          }),
+          execute: async (args: { id: string }) => {
+            await this.db.execute(
+              sql`UPDATE ${tbl} SET deleted_at = NOW() WHERE id = ${args.id} AND owner_id = ${userId ?? ''} AND deleted_at IS NULL`,
+            );
+            this.logger.log(`[EntityTool] delete_${tableName} id=${args.id}`);
+            return { deleted: args.id };
+          },
+        });
+      }
+
+      if (enabledTools.includes('search')) {
+        const props: Record<string, any> = {
+          page: { type: 'number', description: 'Page number (1-based)' },
+          pageSize: { type: 'number', description: 'Items per page' },
+        };
+        for (const f of searchableFields) {
+          if (f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal') {
+            props[`${f.name}Min`] = { type: 'number', description: `${f.description || f.name} minimum` };
+            props[`${f.name}Max`] = { type: 'number', description: `${f.description || f.name} maximum` };
+          } else if (f.type !== 'relation') {
+            props[f.name] = { type: 'string', description: f.description || f.name };
+          }
+        }
+        tools[`search_${tableName}`] = tool({
+          description: `Search ${tableName} records with filters and pagination`,
+          parameters: jsonSchema({ type: 'object', properties: props }),
+          execute: async (args: any) => {
+            // Debug: what does execute() actually return?
+            const tr = await this.db.execute(sql.raw(`SELECT COUNT(*) as cnt FROM ${lcTable} WHERE deleted_at IS NULL`));
+            this.logger.log(`[EntityTool] search_${tableName} DEBUG tr type=${typeof tr} keys=${JSON.stringify(Object.keys(tr||{}))} rowsLen=${Array.from(tr as any).length}`);
+            const page = Math.max(args.page ?? 1, 1);
+            const pageSize = Math.min(Math.max(args.pageSize ?? 10, 1), 100);
+            const off = (page - 1) * pageSize;
+
+            // Build filters
+            const filters: any[] = [];
+            for (const f of searchableFields) {
+              const col = sql.identifier(f.name);
+              if (f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal') {
+                if (args[`${f.name}Min`] != null) {
+                  filters.push(sql`${col} >= ${args[`${f.name}Min`]}`);
+                }
+                if (args[`${f.name}Max`] != null) {
+                  filters.push(sql`${col} <= ${args[`${f.name}Max`]}`);
+                }
+              } else if (f.type === 'varchar' || f.type === 'text') {
+                if (args[f.name]) {
+                  filters.push(sql`${col} ILIKE ${'%' + args[f.name] + '%'}`);
+                }
+              } else if (f.type !== 'relation') {
+                if (args[f.name]) {
+                  filters.push(sql`${col} = ${args[f.name]}`);
+                }
+              }
+            }
+
+            let countQ: any;
+            let listQ: any;
+            if (filters.length > 0) {
+              countQ = sql`SELECT COUNT(*) as total FROM ${tbl} WHERE deleted_at IS NULL AND ${sql.join(filters, sql` AND `)} ${visFragment}`;
+              listQ = sql`SELECT * FROM ${tbl} WHERE deleted_at IS NULL AND ${sql.join(filters, sql` AND `)} ${visFragment} ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${off}`;
+            } else {
+              countQ = sql`SELECT COUNT(*) as total FROM ${tbl} WHERE deleted_at IS NULL ${visFragment}`;
+              listQ = sql`SELECT * FROM ${tbl} WHERE deleted_at IS NULL ${visFragment} ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${off}`;
+            }
+            const [countRes, listRes] = await Promise.all([
+              this.db.execute(countQ),
+              this.db.execute(listQ),
+            ]);
+            const total = Number((Array.from(countRes as any)[0] as any)?.total ?? 0);
+            const listData = Array.from(listRes as any);
+            this.logger.log(`[EntityTool] search_${tableName} → ${listData.length} rows (total=${total}) page=${page} size=${pageSize} tbl=${lcTable}`);
+            return { list: listData, total, page, pageSize };
+          },
+        });
+      }
+
+      if (enabledTools.includes('mock')) {
+        tools[`mock_${tableName}`] = tool({
+          description: `Generate mock data rows for ${tableName}`,
+          parameters: jsonSchema({
+            type: 'object',
+            properties: { count: { type: 'number', description: 'Number of mock rows (1-100)' } },
+          }),
+          execute: async (args: { count?: number }) => {
+            const result = await this.autocodeService.generateMockForTable(tableName, args.count ?? 10, userId);
+            return { ok: true, inserted: result.inserted, ownerSet: !!userId };
+          },
+        });
+      }
+
+      return tools;
+    } catch (e: any) {
+      this.logger.error(`[AiGenerator] Failed to load entity agent tools for '${businessType}': ${e?.message}`);
+      return {};
     }
   }
 }
