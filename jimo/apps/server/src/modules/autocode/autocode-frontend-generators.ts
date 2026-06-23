@@ -972,6 +972,9 @@ ${grandchildNormalize ? grandchildNormalize + '\n' : ''}${tsOverrides ? tsOverri
   if (hasUploadFields) {
     iconImports.push('UploadOutlined');
   }
+  if (dto.agentConfig?.enabled) {
+    iconImports.push('RobotOutlined');
+  }
 
   return `import React, { useRef, useState, useEffect, useCallback } from 'react';
 ${needsDayjs ? "import dayjs from 'dayjs';\n" : ''}import { ${antdImports.join(', ')} } from 'antd';
@@ -988,7 +991,9 @@ import {
   ${apiFunctions.join(',\n  ')},
   type ${typeImports.join(',\n  type ')},
 } from '${n.serviceImportAlias}';
-import ReassignModal from '@/components/ReassignModal';
+${dto.approvalFlow?.enabled ? `import ReassignModal from '@/components/ReassignModal';` : ''}${dto.visibilityStrategy === 'shared' ? `
+import ShareModal from '@/components/ShareModal';` : ''}${dto.agentConfig?.enabled ? `
+import EntityAgentPanel from '@/components/EntityAgentPanel';` : ''}
 import { getMyBtnPerms } from '@/services/authority-btn';${hasUploadFields ? `\nimport { uploadFile } from '@/services/file';` : ''}${hasDictFields ? `\nimport { getDictDetailsByType } from '@/services/dictionary';` : ''}${hasPointFields ? `\nimport GeoField from '@/components/GeoField';` : ''}
 
 ${grandchildSubComponents.join('')}
@@ -996,8 +1001,10 @@ export default function ${n.pascalName}Page() {
   const actionRef = useRef<ActionType>(undefined);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<${n.pascalSingular} | null>(null);
-  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
-  const [reassignOpen, setReassignOpen] = useState(false);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);${dto.approvalFlow?.enabled ? `
+  const [reassignOpen, setReassignOpen] = useState(false);` : ''}${dto.visibilityStrategy === 'shared' ? `
+  const [shareOpen, setShareOpen] = useState(false);` : ''}${dto.agentConfig?.enabled ? `
+  const [agentOpen, setAgentOpen] = useState(false);` : ''}
   const [form] = Form.useForm();
 ${hasOneToMany ? `${dto.fields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many').map(f => `  const [${toCamelCase(f.name)}EditableKeys, set${toPascalCase(f.name)}EditableKeys] = useState<React.Key[]>([]);`).join('\n')}\n  const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([]);\n  const currentDataRef = useRef<${n.pascalSingular}[]>([]);\n` : ''}${dictFields.length > 0 ? dictFields.map(f => `  const [${toCamelCase(f.name)}Options, set${toPascalCase(f.name)}Options] = useState<Record<string, { text: string }>>({});`).join('\n') + '\n' : ''}${manyToOneDictFields.length > 0 ? manyToOneDictFields.map(({ field: f }) => `  const [${toCamelCase(f.name)}TypeMap, set${toPascalCase(f.name)}TypeMap] = useState<Record<string, string>>({});`).join('\n') + '\n' : ''}${tableSearchableFields.flatMap(f => (f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal') ? [`  const [search${toPascalCase(f.name)}Min, setSearch${toPascalCase(f.name)}Min] = useState('');`, `  const [search${toPascalCase(f.name)}Max, setSearch${toPascalCase(f.name)}Max] = useState('');`] : [`  const [search${toPascalCase(f.name)}, setSearch${toPascalCase(f.name)}] = useState('');`]).join('\n')}${tableSearchableFields.length > 0 ? `
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1032,22 +1039,6 @@ ${manyToOneDictFields.map(({ field: f, dictType }) => `    getDictDetailsByType(
 
   const columns: ProColumns<${n.pascalSingular}>[] = [
 ${columnLines.join('\n')}
-    {
-      title: '创建时间',
-      dataIndex: 'createdAt',
-      valueType: 'dateTime',
-      width: 180,
-      search: false,
-      sorter: (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-      defaultSortOrder: 'descend',
-    },
-    {
-      title: '创建人',
-      dataIndex: 'createdBy',
-      valueType: 'text',
-      width: 120,
-      search: false,
-    },
     {
       title: '操作',
       key: 'action',
@@ -1316,14 +1307,31 @@ ${oneToManyFields.length > 0 ? `        expandable={{
               </Button>
             </Popconfirm>
           ),
-          selectedRowKeys.length > 0 && (
+          ${dto.approvalFlow?.enabled ? `selectedRowKeys.length > 0 && (
             <Button
               key="reassign"
               onClick={() => setReassignOpen(true)}
             >
               移交 ({selectedRowKeys.length})
             </Button>
-          ),
+          ),` : ''}${dto.visibilityStrategy === 'shared' ? `
+          selectedRowKeys.length > 0 && (
+            <Button
+              key="share"
+              onClick={() => setShareOpen(true)}
+            >
+              共享 ({selectedRowKeys.length})
+            </Button>
+          ),` : ''}${dto.agentConfig?.enabled ? `
+          btnPerms.has('agent') && (
+            <Button
+              key="agent"
+              icon={<RobotOutlined />}
+              onClick={() => setAgentOpen(true)}
+            >
+              AI 助手
+            </Button>
+          ),` : ''}
         ].filter(Boolean)}
       />
 
@@ -1373,7 +1381,7 @@ ${tabItems}
 })()}
       </ModalForm>
 
-      <ReassignModal
+      ${dto.approvalFlow?.enabled ? `<ReassignModal
         open={reassignOpen}
         businessType="${n.tableName}"
         ids={selectedRowKeys}
@@ -1382,7 +1390,22 @@ ${tabItems}
           setSelectedRowKeys([]);
           actionRef.current?.reload();
         }}
-      />
+      />` : ''}${dto.visibilityStrategy === 'shared' ? `
+      <ShareModal
+        open={shareOpen}
+        businessType="${n.tableName}"
+        ids={selectedRowKeys}
+        onClose={() => setShareOpen(false)}
+        onSuccess={() => {
+          setSelectedRowKeys([]);
+          actionRef.current?.reload();
+        }}
+      />` : ''}${dto.agentConfig?.enabled ? `
+      <EntityAgentPanel
+        open={agentOpen}
+        businessType="${n.tableName}"
+        onClose={() => setAgentOpen(false)}
+      />` : ''}
     </>
   );
 }
