@@ -1626,15 +1626,11 @@ export class AutocodeService {
    * Get list of jimo-generated tables in the database.
    */
   async getTables(): Promise<string[]> {
-    const rows = await this.db.execute(sql`
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_type = 'BASE TABLE'
-        AND table_name LIKE 'lc_%'
-      ORDER BY table_name
-    `);
-    return rows.map((r: any) => (r.table_name as string).replace(/^lc_/, ''));
+    const rows = await this.db
+      .selectDistinct({ tableName: sysAutoCodeHistories.tableName })
+      .from(sysAutoCodeHistories)
+      .orderBy(sysAutoCodeHistories.tableName);
+    return rows.map((r) => r.tableName);
   }
 
   /**
