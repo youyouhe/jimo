@@ -28,13 +28,22 @@ import { OperationInterceptor } from './common/interceptors/operation.intercepto
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { AuthzGuard } from './common/guards/authz.guard';
-import { PostModule } from './modules/post/post.module';
 import { DepartmentModule } from './modules/department/department.module';
 import { ApprovalModule } from './modules/approval/approval.module';
 import { BpmSyncModule } from './modules/bpm-sync/bpm-sync.module';
 import { OwnershipModule } from './common/ownership/ownership.module';
-import { ReimbursementModule } from './modules/reimbursement/reimbursement.module';
-import { StudentModule } from './modules/student/student.module';
+import { ContractAgentModule } from './modules/contract/agent/contract.agent.module';
+import { WarehousAgentModule } from './modules/warehous/agent/warehous.agent.module';
+import { MaterialAgentModule } from './modules/material/agent/material.agent.module';
+import { StockInOrderAgentModule } from './modules/stock-in-order/agent/stock-in-order.agent.module';
+import { SupplierAgentModule } from './modules/supplier/agent/supplier.agent.module';
+import { SupplierModule } from './modules/supplier/supplier.module';
+import { ProcurementContractModule } from './modules/procurement-contract/procurement-contract.module';
+import { ProcurementContractAgentModule } from './modules/procurement-contract/agent/procurement-contract.agent.module';
+import { AccountModule } from './modules/account/account.module';
+import { AccountAgentModule } from './modules/account/agent/account.agent.module';
+import { VoucherModule } from './modules/voucher/voucher.module';
+import { VoucherAgentModule } from './modules/voucher/agent/voucher.agent.module';
 
 @Module({
   imports: [
@@ -51,9 +60,11 @@ import { StudentModule } from './modules/student/student.module';
     MinioModule,
     DictionaryModule,
     DictionaryDetailModule,
-    OperationRecordModule,    StudentModule,
-    ReimbursementModule,    PostModule,
-    ApprovalModule,
+    OperationRecordModule,
+    VoucherModule,
+    AccountModule,
+    ProcurementContractModule,
+    SupplierModule,    ApprovalModule,
     BpmSyncModule,
     OwnershipModule,
     DepartmentModule,
