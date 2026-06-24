@@ -2622,34 +2622,38 @@ export class AutocodeService {
       .where(and(eq(sysMenus.path, menuPath), isNull(sysMenus.deletedAt)))
       .limit(1);
 
+    let menuId: string;
+
     if (existing.length > 0) {
-      return existing[0].id;
+      // Menu already exists — reuse it but still fall through to ensure all
+      // button sub-menus are present (guards against partial creation on prior run).
+      menuId = existing[0].id;
+    } else {
+      const sortWhere = parentMenuId
+        ? eq(sysMenus.parentId, parentMenuId)
+        : isNull(sysMenus.parentId);
+      const maxSortRows = await this.db
+        .select({ maxSort: sql<number>`COALESCE(MAX(${sysMenus.sort}), -1)` })
+        .from(sysMenus)
+        .where(sortWhere);
+      const nextSort = (maxSortRows[0]?.maxSort ?? -1) + 1;
+
+      const menuRows = await this.db
+        .insert(sysMenus)
+        .values({
+          name: extractMenuName(dto.description, n.pascalName),
+          path: menuPath,
+          component: componentName,
+          icon: 'TableOutlined',
+          parentId: parentMenuId ?? null,
+          sort: nextSort,
+          isVisible: 1,
+          menuType: 2,
+        })
+        .returning();
+
+      menuId = menuRows[0]!.id;
     }
-
-    const sortWhere = parentMenuId
-      ? eq(sysMenus.parentId, parentMenuId)
-      : isNull(sysMenus.parentId);
-    const maxSortRows = await this.db
-      .select({ maxSort: sql<number>`COALESCE(MAX(${sysMenus.sort}), -1)` })
-      .from(sysMenus)
-      .where(sortWhere);
-    const nextSort = (maxSortRows[0]?.maxSort ?? -1) + 1;
-
-    const menuRows = await this.db
-      .insert(sysMenus)
-      .values({
-        name: extractMenuName(dto.description, n.pascalName),
-        path: menuPath,
-        component: componentName,
-        icon: 'TableOutlined',
-        parentId: parentMenuId ?? null,
-        sort: nextSort,
-        isVisible: 1,
-        menuType: 2,
-      })
-      .returning();
-
-    const menuId = menuRows[0]!.id;
 
     // Roles that get the page menu + CRUD button sub-menus + per-API Casbin
     // policies for this generated table. editor is included so editors can CRUD

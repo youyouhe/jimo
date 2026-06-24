@@ -6,7 +6,15 @@ import {
   smallint,
   timestamp,
   index,
+  jsonb,
 } from 'drizzle-orm/pg-core';
+
+export interface BtnConfig {
+  label: string;
+  actionType: 'navigate';
+  targetTable: string;
+  sourceField: string;
+}
 
 export const sysMenus = pgTable(
   'sys_menus',
@@ -24,6 +32,7 @@ export const sysMenus = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    btnConfig: jsonb('btn_config').$type<BtnConfig>(),
   },
   (t) => [
     index('idx_sys_menus_parent_id').on(t.parentId),

@@ -9,13 +9,15 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { CreateCustomBtnDto, RemoveCustomBtnDto } from './dto/custom-btn.dto';
+
 import {
   ApiTags,
   ApiBearerAuth,
   ApiOperation,
   ApiResponse,
 } from '@nestjs/swagger';
-import { AuthorityBtnService, BtnMatrixGroup } from './authority-btn.service';
+import { AuthorityBtnService, BtnMatrixGroup, BtnPermsDetail, BtnPermsEntry } from './authority-btn.service';
 import { CreateAuthorityBtnDto } from './dto/create-authority-btn.dto';
 import { SetAuthorityBtnsDto } from './dto/set-authority-btns.dto';
 import { ToggleBtnDto } from './dto/toggle-authority-btn.dto';
@@ -98,6 +100,43 @@ export class AuthorityBtnController {
   @ApiResponse({ status: 200, description: 'Toggled' })
   async toggle(@Body() dto: ToggleBtnDto): Promise<ApiResp<null>> {
     await this.authorityBtnService.toggleBtn(dto.roleId, dto.buttonMenuId, dto.assigned);
+    return { code: 0, msg: 'success', data: null };
+  }
+
+  @Get('by-table/:tableName')
+  @ApiOperation({ summary: '查询某张表的所有按钮及角色授权状态（agent 用）' })
+  @ApiResponse({ status: 200, description: 'Returns button list with role assignments' })
+  async listBtnPermsByTable(
+    @Param('tableName') tableName: string,
+  ): Promise<ApiResp<BtnPermsDetail[]>> {
+    const data = await this.authorityBtnService.listBtnPerms(tableName);
+    return { code: 0, msg: 'success', data };
+  }
+
+  @Post('custom')
+  @HttpCode(HttpStatus.CREATED)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '为已生成的业务表创建自定义导航按钮并授权给指定角色' })
+  @ApiResponse({ status: 201, description: 'Custom button created' })
+  @ApiResponse({ status: 409, description: 'Button name already exists on this table' })
+  async createCustomBtn(
+    @Body() dto: CreateCustomBtnDto,
+  ): Promise<ApiResp<{ id: string; name: string }>> {
+    const data = await this.authorityBtnService.createCustomBtn(dto);
+    return { code: 0, msg: 'success', data };
+  }
+
+  @Delete('custom')
+  @HttpCode(HttpStatus.OK)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '删除自定义按钮（系统按钮不可删除）' })
+  @ApiResponse({ status: 200, description: 'Custom button removed' })
+  @ApiResponse({ status: 400, description: 'System button cannot be removed via this API' })
+  @ApiResponse({ status: 404, description: 'Button not found' })
+  async removeCustomBtn(
+    @Body() dto: RemoveCustomBtnDto,
+  ): Promise<ApiResp<null>> {
+    await this.authorityBtnService.removeCustomBtn(dto.tableName, dto.btnName);
     return { code: 0, msg: 'success', data: null };
   }
 

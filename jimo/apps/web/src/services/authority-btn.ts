@@ -67,13 +67,64 @@ export async function deleteAuthorityBtn(id: string): Promise<void> {
   return request.delete(`/authority-btns/${id}`);
 }
 
+export interface CustomBtnEntry {
+  name: string;
+  label: string;
+  actionType: 'navigate';
+  targetTable: string;
+  sourceField: string;
+}
+
+export interface BtnPermsEntry {
+  systemBtns: string[];
+  customBtns: CustomBtnEntry[];
+}
+
 /**
  * Get the current user's button permissions.
- * Returns { component -> btnName[] }, e.g. { './test/index': ['add', 'edit', 'delete'] }
- * This is the single source of truth for frontend button visibility.
+ * Returns { component -> { systemBtns, customBtns } }
+ * systemBtns: built-in buttons (edit/delete/add/query/agent/batchDelete)
+ * customBtns: custom navigate buttons defined via add_custom_btn
  */
-export async function getMyBtnPerms(): Promise<Record<string, string[]>> {
+export async function getMyBtnPerms(): Promise<Record<string, BtnPermsEntry>> {
   return request.get('/authority-btns/my');
+}
+
+export interface BtnPermsDetail {
+  id: string;
+  name: string;
+  isCustom: boolean;
+  btnConfig?: {
+    label: string;
+    actionType: 'navigate';
+    targetTable: string;
+    sourceField: string;
+  };
+  assignedRoleIds: string[];
+}
+
+export interface CreateCustomBtnPayload {
+  tableName: string;
+  btnName: string;
+  label: string;
+  targetTable: string;
+  sourceField: string;
+  roles: string[];
+}
+
+/** List all buttons for a table with role assignment info (admin use). */
+export async function listBtnPermsByTable(tableName: string): Promise<BtnPermsDetail[]> {
+  return request.get(`/authority-btns/by-table/${tableName}`);
+}
+
+/** Create a custom navigate button for a table. */
+export async function createCustomBtn(payload: CreateCustomBtnPayload): Promise<{ id: string; name: string }> {
+  return request.post('/authority-btns/custom', payload);
+}
+
+/** Remove a custom button (system buttons are protected). */
+export async function removeCustomBtn(tableName: string, btnName: string): Promise<void> {
+  return request.delete('/authority-btns/custom', { data: { tableName, btnName } });
 }
 
 // ---- Button-permission matrix (the REAL runtime system) ----

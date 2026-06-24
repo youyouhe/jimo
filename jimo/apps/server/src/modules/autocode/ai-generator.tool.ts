@@ -135,6 +135,18 @@ export const PROPOSE_ENTITY_TOOL = {
           description:
             "数据可见性策略（可选，默认 private）。private=仅 owner；department=owner 所在部门含子部门；shared=owner+显式 shared_with（仅此模式查 shared_with）；public=所有登录用户。admin 永远旁路。用户未指定则不设。",
         },
+        agentConfig: {
+          type: 'object',
+          description: '实体伴随agent配置(可选)',
+          properties: {
+            enabled: { type: 'boolean', description: '是否启用agent,默认false' },
+            tools: {
+              type: 'array',
+              items: { type: 'string', enum: ['query', 'create', 'update', 'delete', 'search', 'mock'] },
+            },
+            systemPrompt: { type: 'string', description: 'agent自定义系统提示词' },
+          },
+        },
       },
       required: ['tableName', 'description', 'fields'],
     },
@@ -360,6 +372,88 @@ export const DESCRIBE_TABLE_TOOL = {
   },
 };
 
+export const LIST_BTN_PERMS_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'list_btn_perms',
+    description:
+      '查询一张已生成业务表当前拥有的所有按钮（系统按钮 + 自定义按钮），以及每个按钮已授权的角色 id 列表。在 add_custom_btn 前调用，确认按钮名不重复。tableName 不含 lc_ 前缀。',
+    parameters: {
+      type: 'object',
+      properties: {
+        tableName: {
+          type: 'string',
+          description: '目标表名（snake_case，不含 lc_ 前缀），如 contracts',
+        },
+      },
+      required: ['tableName'],
+    },
+  },
+};
+
+export const ADD_CUSTOM_BTN_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'add_custom_btn',
+    description:
+      '为已生成的业务表在操作列添加一个自定义导航按钮。点击后跳转到目标表列表页并通过 ?id= 参数自动弹出对应记录。调用前先用 list_btn_perms 确认按钮名不重复，用 list_tables 确认 targetTable 存在。',
+    parameters: {
+      type: 'object',
+      properties: {
+        tableName: {
+          type: 'string',
+          description: '要添加按钮的业务表名（不含 lc_ 前缀），如 contracts',
+        },
+        btnName: {
+          type: 'string',
+          description: '按钮唯一标识（snake_case），如 view_party_a',
+        },
+        label: {
+          type: 'string',
+          description: '按钮显示文字（中文），如 查看甲方',
+        },
+        targetTable: {
+          type: 'string',
+          description: '点击后跳转到的目标表名（不含 lc_ 前缀），如 companies',
+        },
+        sourceField: {
+          type: 'string',
+          description: '本表上存储目标记录 id 的字段名（snake_case），如 party_a_id',
+        },
+        roles: {
+          type: 'array',
+          items: { type: 'string', enum: ['super_admin', 'admin', 'editor', 'viewer'] },
+          description: '授权可见此按钮的角色 code 列表，如 ["editor","admin"]',
+        },
+      },
+      required: ['tableName', 'btnName', 'label', 'targetTable', 'sourceField', 'roles'],
+    },
+  },
+};
+
+export const REMOVE_CUSTOM_BTN_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'remove_custom_btn',
+    description:
+      '删除一张业务表上的自定义按钮及其所有角色授权。系统内置按钮（edit/delete/add/query 等）无法通过此接口删除。调用前先用 list_btn_perms 确认按钮存在且 isCustom=true。',
+    parameters: {
+      type: 'object',
+      properties: {
+        tableName: {
+          type: 'string',
+          description: '目标表名（不含 lc_ 前缀）',
+        },
+        btnName: {
+          type: 'string',
+          description: '要删除的按钮名称',
+        },
+      },
+      required: ['tableName', 'btnName'],
+    },
+  },
+};
+
 export const ALL_TOOLS = [
   PROPOSE_ENTITY_TOOL,
   CREATE_DICT_TOOL,
@@ -373,4 +467,7 @@ export const ALL_TOOLS = [
   LIST_MENUS_BY_PACKAGE_TOOL,
   ASSIGN_TO_PACKAGE_TOOL,
   DESCRIBE_TABLE_TOOL,
+  LIST_BTN_PERMS_TOOL,
+  ADD_CUSTOM_BTN_TOOL,
+  REMOVE_CUSTOM_BTN_TOOL,
 ];

@@ -3,9 +3,10 @@ import {
   Inject,
   NotFoundException,
   ConflictException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { eq, and, isNull, inArray, sql } from 'drizzle-orm';
+import { eq, and, isNull, inArray, sql, like } from 'drizzle-orm';
 import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import {
   sysAuthorityBtns,
@@ -16,8 +17,9 @@ import { CreateAuthorityBtnDto } from './dto/create-authority-btn.dto';
 import { SetAuthorityBtnsDto } from './dto/set-authority-btns.dto';
 import { ApiErrorCode, RoleCode } from '@jimo/shared';
 import { sysUserRoles } from '../../db/schema/user-roles';
-import { sysMenus } from '../../db/schema/menus';
+import { sysMenus, BtnConfig } from '../../db/schema/menus';
 import { sysRoleMenus } from '../../db/schema/role-menus';
+import { sysRoles } from '../../db/schema/roles';
 
 @Injectable()
 export class AuthorityBtnService {
@@ -28,71 +30,49 @@ export class AuthorityBtnService {
   ) {}
 
   /**
-   * Return { component -> Set<btnName> } for the current user.
-   * super_admin gets all buttons for all menus.
-   * Others get only the btns in sys_authority_btns for their roles.
+   * Return { component -> { systemBtns, customBtns } } for the current user.
+   * super_admin gets all buttons. Others get only buttons assigned via sys_role_menus.
+   * Buttons with btn_config = NULL are system buttons (edit/delete/add/query/agent/batchDelete).
+   * Buttons with btn_config set are custom navigate buttons.
    */
-  async getMyBtnPerms(userId: string, userRoles: string[]): Promise<Record<string, string[]>> {
-    // super_admin bypasses sys_role_menus and always gets all button menus.
+  async getMyBtnPerms(userId: string, userRoles: string[]): Promise<Record<string, BtnPermsEntry>> {
+    let btnMenuRows: { btnName: string; parentId: string | null; btnConfig: BtnConfig | null }[];
+
     if (userRoles.includes(RoleCode.SUPER_ADMIN)) {
-      const rows = await this.db
-        .select({ btnName: sysMenus.name, parentId: sysMenus.parentId })
+      btnMenuRows = await this.db
+        .select({ btnName: sysMenus.name, parentId: sysMenus.parentId, btnConfig: sysMenus.btnConfig })
         .from(sysMenus)
         .where(and(eq(sysMenus.menuType, 3), isNull(sysMenus.deletedAt)));
+    } else {
+      const userRoleRows = await this.db
+        .select({ roleId: sysUserRoles.roleId })
+        .from(sysUserRoles)
+        .where(eq(sysUserRoles.userId, userId));
 
-      const parentIds = [...new Set(rows.map((r) => r.parentId).filter(Boolean))] as string[];
-      if (parentIds.length === 0) return {};
+      const roleIds = userRoleRows.map((r) => r.roleId);
+      if (roleIds.length === 0) return {};
 
-      const parents = await this.db
-        .select({ id: sysMenus.id, component: sysMenus.component })
-        .from(sysMenus)
-        .where(and(inArray(sysMenus.id, parentIds), isNull(sysMenus.deletedAt)));
-
-      const parentMap = new Map(parents.map((p) => [p.id, p.component]));
-      const result: Record<string, string[]> = {};
-      for (const row of rows) {
-        const comp = parentMap.get(row.parentId ?? '') ?? '';
-        if (!comp) continue;
-        if (!result[comp]) result[comp] = [];
-        result[comp].push(row.btnName);
-      }
-      return result;
+      btnMenuRows = await this.db
+        .select({
+          btnName: sysMenus.name,
+          parentId: sysMenus.parentId,
+          btnConfig: sysMenus.btnConfig,
+        })
+        .from(sysRoleMenus)
+        .innerJoin(
+          sysMenus,
+          and(
+            eq(sysMenus.id, sysRoleMenus.menuId),
+            eq(sysMenus.menuType, 3),
+            isNull(sysMenus.deletedAt),
+          ),
+        )
+        .where(inArray(sysRoleMenus.roleId, roleIds));
     }
-
-    // Regular user: look up their role IDs
-    const userRoleRows = await this.db
-      .select({ roleId: sysUserRoles.roleId })
-      .from(sysUserRoles)
-      .where(eq(sysUserRoles.userId, userId));
-
-    const roleIds = userRoleRows.map((r) => r.roleId);
-    if (roleIds.length === 0) return {};
-
-    // Get menuType=3 (button) menus assigned to any of the user's roles via sys_role_menus
-    const btnMenuRows = await this.db
-      .select({
-        btnId: sysMenus.id,
-        btnName: sysMenus.name,
-        parentId: sysMenus.parentId,
-      })
-      .from(sysRoleMenus)
-      .innerJoin(
-        sysMenus,
-        and(
-          eq(sysMenus.id, sysRoleMenus.menuId),
-          eq(sysMenus.menuType, 3),
-          isNull(sysMenus.deletedAt),
-        ),
-      )
-      .where(inArray(sysRoleMenus.roleId, roleIds));
 
     if (btnMenuRows.length === 0) return {};
 
-    // Resolve parentId -> component for each button menu
-    const parentIds = [...new Set(
-      btnMenuRows.map((r) => r.parentId).filter(Boolean),
-    )] as string[];
-
+    const parentIds = [...new Set(btnMenuRows.map((r) => r.parentId).filter(Boolean))] as string[];
     if (parentIds.length === 0) return {};
 
     const parentRows = await this.db
@@ -101,14 +81,190 @@ export class AuthorityBtnService {
       .where(and(inArray(sysMenus.id, parentIds), isNull(sysMenus.deletedAt)));
 
     const parentMap = new Map(parentRows.map((p) => [p.id, p.component ?? '']));
-    const result: Record<string, string[]> = {};
+    const result: Record<string, BtnPermsEntry> = {};
+
     for (const btn of btnMenuRows) {
       const comp = parentMap.get(btn.parentId ?? '') ?? '';
       if (!comp) continue;
-      if (!result[comp]) result[comp] = [];
-      if (!result[comp].includes(btn.btnName)) result[comp].push(btn.btnName);
+      if (!result[comp]) result[comp] = { systemBtns: [], customBtns: [] };
+
+      if (btn.btnConfig) {
+        const already = result[comp].customBtns.find((c) => c.name === btn.btnName);
+        if (!already) {
+          result[comp].customBtns.push({
+            name: btn.btnName,
+            label: btn.btnConfig.label,
+            actionType: btn.btnConfig.actionType,
+            targetTable: btn.btnConfig.targetTable,
+            sourceField: btn.btnConfig.sourceField,
+          });
+        }
+      } else {
+        if (!result[comp].systemBtns.includes(btn.btnName)) {
+          result[comp].systemBtns.push(btn.btnName);
+        }
+      }
     }
     return result;
+  }
+
+  /** Find the page menu (menu_type=2) component path for a given lc table name. */
+  private async findPageMenuByTable(tableName: string): Promise<{ id: string; component: string }> {
+    const componentPattern = `%lc/${tableName}%`;
+    const rows = await this.db
+      .select({ id: sysMenus.id, component: sysMenus.component })
+      .from(sysMenus)
+      .where(
+        and(
+          eq(sysMenus.menuType, 2),
+          like(sysMenus.component, componentPattern),
+          isNull(sysMenus.deletedAt),
+        ),
+      )
+      .limit(1);
+
+    if (rows.length === 0 || !rows[0].component) {
+      throw new NotFoundException(`No page menu found for table '${tableName}'`);
+    }
+    return { id: rows[0].id, component: rows[0].component };
+  }
+
+  /** List all buttons (system + custom) for a table, with their assigned role ids. */
+  async listBtnPerms(tableName: string): Promise<BtnPermsDetail[]> {
+    const parent = await this.findPageMenuByTable(tableName);
+
+    const btns = await this.db
+      .select({ id: sysMenus.id, name: sysMenus.name, btnConfig: sysMenus.btnConfig })
+      .from(sysMenus)
+      .where(
+        and(
+          eq(sysMenus.parentId, parent.id),
+          eq(sysMenus.menuType, 3),
+          isNull(sysMenus.deletedAt),
+        ),
+      );
+
+    if (btns.length === 0) return [];
+
+    const btnIds = btns.map((b) => b.id);
+    const assignments = await this.db
+      .select({ menuId: sysRoleMenus.menuId, roleId: sysRoleMenus.roleId })
+      .from(sysRoleMenus)
+      .where(inArray(sysRoleMenus.menuId, btnIds));
+
+    const roleMap = new Map<string, Set<string>>();
+    for (const a of assignments) {
+      if (!roleMap.has(a.menuId)) roleMap.set(a.menuId, new Set());
+      roleMap.get(a.menuId)!.add(a.roleId);
+    }
+
+    return btns.map((b) => ({
+      id: b.id,
+      name: b.name,
+      isCustom: b.btnConfig !== null,
+      btnConfig: b.btnConfig ?? undefined,
+      assignedRoleIds: [...(roleMap.get(b.id) ?? [])],
+    }));
+  }
+
+  /** Create a custom navigate button for a table and assign it to the specified roles. */
+  async createCustomBtn(dto: {
+    tableName: string;
+    btnName: string;
+    label: string;
+    targetTable: string;
+    sourceField: string;
+    roles: string[];
+  }): Promise<{ id: string; name: string }> {
+    const parent = await this.findPageMenuByTable(dto.tableName);
+
+    // Check for name collision
+    const existing = await this.db
+      .select({ id: sysMenus.id })
+      .from(sysMenus)
+      .where(
+        and(
+          eq(sysMenus.parentId, parent.id),
+          eq(sysMenus.menuType, 3),
+          eq(sysMenus.name, dto.btnName),
+          isNull(sysMenus.deletedAt),
+        ),
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      throw new ConflictException(`Button '${dto.btnName}' already exists on table '${dto.tableName}'`);
+    }
+
+    const btnConfig: BtnConfig = {
+      label: dto.label,
+      actionType: 'navigate',
+      targetTable: dto.targetTable,
+      sourceField: dto.sourceField,
+    };
+
+    const inserted = await this.db
+      .insert(sysMenus)
+      .values({
+        name: dto.btnName,
+        parentId: parent.id,
+        menuType: 3,
+        isVisible: 0,
+        sort: 99,
+        btnConfig,
+      })
+      .returning({ id: sysMenus.id, name: sysMenus.name });
+
+    const newMenuId = inserted[0].id;
+
+    // Resolve role codes to IDs
+    if (dto.roles.length > 0) {
+      const roleRows = await this.db
+        .select({ id: sysRoles.id })
+        .from(sysRoles)
+        .where(inArray(sysRoles.code, dto.roles));
+
+      for (const role of roleRows) {
+        await this.db
+          .insert(sysRoleMenus)
+          .values({ roleId: role.id, menuId: newMenuId })
+          .onConflictDoNothing();
+      }
+    }
+
+    return inserted[0];
+  }
+
+  /** Soft-delete a custom button (btn_config IS NOT NULL guard prevents removing system buttons). */
+  async removeCustomBtn(tableName: string, btnName: string): Promise<void> {
+    const parent = await this.findPageMenuByTable(tableName);
+
+    const rows = await this.db
+      .select({ id: sysMenus.id, btnConfig: sysMenus.btnConfig })
+      .from(sysMenus)
+      .where(
+        and(
+          eq(sysMenus.parentId, parent.id),
+          eq(sysMenus.menuType, 3),
+          eq(sysMenus.name, btnName),
+          isNull(sysMenus.deletedAt),
+        ),
+      )
+      .limit(1);
+
+    if (rows.length === 0) {
+      throw new NotFoundException(`Button '${btnName}' not found on table '${tableName}'`);
+    }
+    if (!rows[0].btnConfig) {
+      throw new BadRequestException(`'${btnName}' is a system button and cannot be removed via this API`);
+    }
+
+    const btnMenuId = rows[0].id;
+    await this.db.delete(sysRoleMenus).where(eq(sysRoleMenus.menuId, btnMenuId));
+    await this.db
+      .update(sysMenus)
+      .set({ deletedAt: sql`NOW()` })
+      .where(eq(sysMenus.id, btnMenuId));
   }
 
   async findByAuthority(query: { authorityId?: string; menuId?: string }): Promise<SysAuthorityBtn[]> {
@@ -313,4 +469,25 @@ export interface BtnMatrixButton {
 export interface BtnMatrixGroup {
   menu: { id: string; name: string; path: string; component: string };
   buttons: BtnMatrixButton[];
+}
+
+export interface CustomBtnEntry {
+  name: string;
+  label: string;
+  actionType: 'navigate';
+  targetTable: string;
+  sourceField: string;
+}
+
+export interface BtnPermsEntry {
+  systemBtns: string[];
+  customBtns: CustomBtnEntry[];
+}
+
+export interface BtnPermsDetail {
+  id: string;
+  name: string;
+  isCustom: boolean;
+  btnConfig?: BtnConfig;
+  assignedRoleIds: string[];
 }

@@ -18,7 +18,11 @@ import {
   LIST_MENUS_BY_PACKAGE_TOOL,
   ASSIGN_TO_PACKAGE_TOOL,
   DESCRIBE_TABLE_TOOL,
+  LIST_BTN_PERMS_TOOL,
+  ADD_CUSTOM_BTN_TOOL,
+  REMOVE_CUSTOM_BTN_TOOL,
 } from './ai-generator.tool';
+import { AuthorityBtnService } from '../authority-btn/authority-btn.service';
 import type { AiChatRequestDto } from './ai-generator.dto';
 import { DATABASE_CONNECTION, type DrizzleDb } from '../../db/connection';
 import { sysDictionaries } from '../../db/schema/dictionaries';
@@ -45,6 +49,7 @@ export class AiGeneratorService {
   constructor(
     @Inject(DATABASE_CONNECTION) private readonly db: DrizzleDb,
     private readonly autocodeService: AutocodeService,
+    private readonly authorityBtnService: AuthorityBtnService,
   ) {}
 
   async streamChatToRes(
@@ -451,6 +456,52 @@ ${pkgList}`,
                 return { ok: false, id, error: '删除超时' };
               } catch (e: any) {
                 return { ok: false, id, error: e?.message };
+              }
+            },
+          }),
+          list_btn_perms: tool({
+            description: LIST_BTN_PERMS_TOOL.function.description,
+            parameters: jsonSchema(LIST_BTN_PERMS_TOOL.function.parameters as any),
+            execute: async (args: unknown) => {
+              const { tableName } = (args as any) ?? {};
+              try {
+                const btns = await this.authorityBtnService.listBtnPerms(tableName);
+                return { ok: true, tableName, buttons: btns };
+              } catch (e: any) {
+                return { ok: false, tableName, error: e?.message };
+              }
+            },
+          }),
+
+          add_custom_btn: tool({
+            description: ADD_CUSTOM_BTN_TOOL.function.description,
+            parameters: jsonSchema(ADD_CUSTOM_BTN_TOOL.function.parameters as any),
+            execute: async (args: unknown) => {
+              const { tableName, btnName, label, targetTable, sourceField, roles } = (args as any) ?? {};
+              try {
+                write({ kind: 'progress', content: `正在为 '${tableName}' 添加按钮 '${label}'…` });
+                const result = await this.authorityBtnService.createCustomBtn({
+                  tableName, btnName, label, targetTable, sourceField, roles,
+                });
+                write({ kind: 'progress', content: `按钮 '${label}' 已创建并授权给 ${roles.join(', ')}` });
+                return { ok: true, tableName, btnName, id: result.id };
+              } catch (e: any) {
+                return { ok: false, tableName, btnName, error: e?.message };
+              }
+            },
+          }),
+
+          remove_custom_btn: tool({
+            description: REMOVE_CUSTOM_BTN_TOOL.function.description,
+            parameters: jsonSchema(REMOVE_CUSTOM_BTN_TOOL.function.parameters as any),
+            execute: async (args: unknown) => {
+              const { tableName, btnName } = (args as any) ?? {};
+              try {
+                write({ kind: 'progress', content: `正在删除 '${tableName}' 上的按钮 '${btnName}'…` });
+                await this.authorityBtnService.removeCustomBtn(tableName, btnName);
+                return { ok: true, tableName, btnName };
+              } catch (e: any) {
+                return { ok: false, tableName, btnName, error: e?.message };
               }
             },
           }),

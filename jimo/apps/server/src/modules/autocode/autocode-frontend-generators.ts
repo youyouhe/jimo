@@ -874,6 +874,7 @@ ${grandchildNormalize ? grandchildNormalize + '\n' : ''}${tsOverrides ? tsOverri
 
   const apiFunctions = [
     `get${n.pascalName}List`,
+    `get${n.pascalSingular}`,
     `create${n.pascalSingular}`,
     `update${n.pascalSingular}`,
     `delete${n.pascalSingular}`,
@@ -977,6 +978,7 @@ ${grandchildNormalize ? grandchildNormalize + '\n' : ''}${tsOverrides ? tsOverri
   }
 
   return `import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { history } from 'umi';
 ${needsDayjs ? "import dayjs from 'dayjs';\n" : ''}import { ${antdImports.join(', ')} } from 'antd';
 import { ${iconImports.join(', ')} } from '@ant-design/icons';
 import { ActionType, ProColumns, ProTable${hasOneToMany ? ', EditableProTable' : ''} } from '@ant-design/pro-components';
@@ -994,7 +996,7 @@ import {
 ${dto.approvalFlow?.enabled ? `import ReassignModal from '@/components/ReassignModal';` : ''}${dto.visibilityStrategy === 'shared' ? `
 import ShareModal from '@/components/ShareModal';` : ''}${dto.agentConfig?.enabled ? `
 import EntityAgentPanel from '@/components/EntityAgentPanel';` : ''}
-import { getMyBtnPerms } from '@/services/authority-btn';${hasUploadFields ? `\nimport { uploadFile } from '@/services/file';` : ''}${hasDictFields ? `\nimport { getDictDetailsByType } from '@/services/dictionary';` : ''}${hasPointFields ? `\nimport GeoField from '@/components/GeoField';` : ''}
+import { getMyBtnPerms, type CustomBtnEntry } from '@/services/authority-btn';${hasUploadFields ? `\nimport { uploadFile } from '@/services/file';` : ''}${hasDictFields ? `\nimport { getDictDetailsByType } from '@/services/dictionary';` : ''}${hasPointFields ? `\nimport GeoField from '@/components/GeoField';` : ''}
 
 ${grandchildSubComponents.join('')}
 export default function ${n.pascalName}Page() {
@@ -1028,13 +1030,26 @@ ${manyToOneDictFields.map(({ field: f, dictType }) => `    getDictDetailsByType(
   }, []);
 ` : ''}
   // ── Button-level permission check ──
-  // Fetch directly from sys_authority_btns on every page visit.
-  // This is the single source of truth — same data the backend Guard checks.
   const [btnPerms, setBtnPerms] = useState<Set<string>>(new Set());
+  const [customBtns, setCustomBtns] = useState<CustomBtnEntry[]>([]);
   useEffect(() => {
     getMyBtnPerms().then((perms) => {
-      setBtnPerms(new Set(perms['${n.pageComponentPath}'] ?? []));
-    }).catch(() => setBtnPerms(new Set()));
+      const entry = perms['${n.pageComponentPath}'];
+      setBtnPerms(new Set(entry?.systemBtns ?? []));
+      setCustomBtns(entry?.customBtns ?? []);
+    }).catch(() => {});
+  }, []);
+
+  // ── Jump-to-record: if ?id= param present, open that record in modal ──
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const jumpId = params.get('id');
+    if (!jumpId) return;
+    get${n.pascalSingular}(jumpId).then((record) => {
+      form.setFieldsValue(record);
+      setEditingRecord(record);
+      setModalOpen(true);
+    }).catch(() => {});
   }, []);
 
   const columns: ProColumns<${n.pascalSingular}>[] = [
@@ -1116,6 +1131,21 @@ ${columnLines.join('\n')}
             提交审批
           </Button>
           ` : ''}
+          {customBtns.map((btn) => (
+            <Button
+              key={btn.name}
+              type="link"
+              size="small"
+              onClick={() => {
+                const targetId = (record as any)[btn.sourceField];
+                if (targetId) {
+                  history.push(\`/lc/\${btn.targetTable}?id=\${targetId}\`);
+                }
+              }}
+            >
+              {btn.label}
+            </Button>
+          ))}
         </Space>
       ),
     },
