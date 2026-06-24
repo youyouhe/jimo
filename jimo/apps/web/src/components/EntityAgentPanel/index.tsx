@@ -131,6 +131,8 @@ export default function EntityAgentPanel({ open, businessType, onClose }: Entity
     const userMsg: ChatMessage = { id: newId(), role: 'user', content: text };
     const aiMsg: ChatMessage = { id: newId(), role: 'assistant', content: '', streaming: true };
 
+    // Only send role+content to model — strip progressLines (tool notes) to
+    // avoid inflating context with operational output that the model doesn't need.
     const history = [...messages, userMsg]
       .filter((m) => m.content)
       .map((m) => ({ role: m.role, content: m.content }));
@@ -194,11 +196,13 @@ export default function EntityAgentPanel({ open, businessType, onClose }: Entity
               );
               break;
             case 'progress':
+              // Store progress notes separately — never append to content to avoid
+              // inflating the context sent back to the model on the next turn.
               if (evt.content) {
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === aiMsg.id
-                      ? { ...m, content: m.content + (m.content ? '\n' : '') + `[${evt.content}]` }
+                      ? { ...m, progressLines: [...(m.progressLines ?? []), evt.content!] }
                       : m,
                   ),
                 );
@@ -331,9 +335,26 @@ export default function EntityAgentPanel({ open, businessType, onClose }: Entity
                     wordBreak: 'break-word',
                   }}
                 >
-                  {m.streaming && !m.content ? (
+                  {m.streaming && !m.content && !m.progressLines?.length ? (
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>思考中...</Typography.Text>
-                  ) : m.content}
+                  ) : (
+                    <>
+                      {m.progressLines && m.progressLines.length > 0 && (
+                        <div style={{ marginBottom: m.content ? 6 : 0 }}>
+                          {m.progressLines.map((line, i) => (
+                            <Typography.Text
+                              key={i}
+                              type="secondary"
+                              style={{ fontSize: 11, display: 'block', lineHeight: 1.5 }}
+                            >
+                              ▸ {line}
+                            </Typography.Text>
+                          ))}
+                        </div>
+                      )}
+                      {m.content}
+                    </>
+                  )}
                 </div>
                 <Typography.Text
                   type="secondary"
