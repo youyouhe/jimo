@@ -66,7 +66,7 @@ export class ApprovalService {
       .where(and(eq(sysUsers.id, initiatorSysUserId), isNull(sysUsers.deletedAt)))
       .limit(1);
     if (!u[0]?.bpmUserId) {
-      throw new BadRequestException('Initiator is not synced to BPM (no bpm_user_id)');
+      throw new BadRequestException('当前用户未同步到 BPM 审批系统，无法发起审批。如需使用审批功能，请联系管理员同步用户至 BPM。');
     }
     const initiatorBpmId = u[0]!.bpmUserId;
 
@@ -98,6 +98,7 @@ export class ApprovalService {
 
   async getMyTasks(sysUserId: string) {
     const bpmId = await this.bpmIdFor(sysUserId);
+    if (!bpmId) return { list: [], total: 0 };
     const res = await this.callBpm('GET', `approvals/my-tasks`, undefined, bpmId);
     const items: Array<Record<string, unknown>> = res?.data?.list ?? [];
     if (items.length === 0) return { list: [], total: 0 };
@@ -108,12 +109,14 @@ export class ApprovalService {
 
   async approve(processInstanceId: string, sysUserId: string, approved: boolean, comment?: string) {
     const bpmId = await this.bpmIdFor(sysUserId);
+    if (!bpmId) throw new BadRequestException('当前用户未同步到 BPM，无法执行审批。管理员账户无需参与审批流程。');
     return this.callBpm('POST', `approvals/${processInstanceId}/approve`, { approved, comment }, bpmId);
   }
 
   /** Approvals I submitted (from business_approvals by initiator). */
   async myInitiated(sysUserId: string) {
     const bpmId = await this.bpmIdFor(sysUserId);
+    if (!bpmId) return { list: [], total: 0 };
     const rows = await this.db
       .select({
         businessType: businessApprovals.businessType,
@@ -136,6 +139,7 @@ export class ApprovalService {
   /** Tasks I've already acted on (已办) — BPM historic tasks, enriched. */
   async myDoneTasks(sysUserId: string) {
     const bpmId = await this.bpmIdFor(sysUserId);
+    if (!bpmId) return { list: [], total: 0 };
     const res = await this.callBpm('GET', 'approvals/my-done', undefined, bpmId);
     const items: Array<Record<string, unknown>> = res?.data?.list ?? [];
     if (items.length === 0) return { list: [], total: 0 };
@@ -147,6 +151,7 @@ export class ApprovalService {
    *  the initiator or the final approver. Unified local view (works for both engines). */
   async finalized(sysUserId: string) {
     const bpmId = await this.bpmIdFor(sysUserId);
+    if (!bpmId) return { list: [], total: 0 };
     const rows = await this.db
       .select({
         businessType: businessApprovals.businessType,
@@ -419,14 +424,13 @@ export class ApprovalService {
     return out;
   }
 
-  private async bpmIdFor(sysUserId: string): Promise<string> {
+  private async bpmIdFor(sysUserId: string): Promise<string | null> {
     const u = await this.db
       .select({ bpmUserId: sysUsers.bpmUserId })
       .from(sysUsers)
       .where(and(eq(sysUsers.id, sysUserId), isNull(sysUsers.deletedAt)))
       .limit(1);
-    if (!u[0]?.bpmUserId) throw new BadRequestException('User is not synced to BPM (no bpm_user_id)');
-    return u[0]!.bpmUserId;
+    return u[0]?.bpmUserId ?? null;
   }
 
   private async findActive(businessType: string, businessId: string): Promise<BusinessApproval | undefined> {
