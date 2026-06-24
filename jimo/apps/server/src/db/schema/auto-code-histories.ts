@@ -3,6 +3,7 @@ import {
   uuid,
   varchar,
   integer,
+  boolean,
   text,
   jsonb,
   timestamp,
@@ -31,6 +32,10 @@ export const sysAutoCodeHistories = pgTable(
     parentId: uuid('parent_id'),
     /** Row-level visibility strategy: private/department/shared/public */
     visibilityStrategy: varchar('visibility_strategy', { length: 20 }).default('private'),
+    /** Whether approval flow is enabled for this table */
+    hasApprovalFlow: boolean('has_approval_flow').default(false),
+    /** Whether AI agent is enabled for this table */
+    hasAgent: boolean('has_agent').default(false),
   },
 );
 

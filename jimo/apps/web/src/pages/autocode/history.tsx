@@ -810,6 +810,28 @@ export default function AutocodeHistoryPage() {
       },
     },
     {
+      title: '审批流',
+      dataIndex: 'hasApprovalFlow',
+      width: 75,
+      search: false,
+      render: (_, record) => (
+        record.hasApprovalFlow
+          ? <Tag color="blue">启用</Tag>
+          : <Text type="secondary">-</Text>
+      ),
+    },
+    {
+      title: 'Agent',
+      dataIndex: 'hasAgent',
+      width: 70,
+      search: false,
+      render: (_, record) => (
+        record.hasAgent
+          ? <Tag color="purple">启用</Tag>
+          : <Text type="secondary">-</Text>
+      ),
+    },
+    {
       title: 'Change Log',
       dataIndex: 'changeLog',
       width: 260,

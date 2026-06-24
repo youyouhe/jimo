@@ -43,6 +43,13 @@
       "when": 1782240000000,
       "tag": "0005_add_visibility_strategy",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1782245000000,
+      "tag": "0006_add_approval_flow_agent",
+      "breakpoints": true
     }
   ]
 }

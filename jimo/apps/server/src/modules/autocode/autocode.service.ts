@@ -643,6 +643,8 @@ export class AutocodeService {
         businessDB: (dto as any).businessDB || '',
         templates,
         visibilityStrategy: dto.visibilityStrategy ?? 'private',
+        hasApprovalFlow: dto.approvalFlow?.enabled ?? false,
+        hasAgent: dto.agentConfig?.enabled ?? false,
       });
     } catch (historyErr: unknown) {
       // History save failure should not block the generate result
@@ -1286,6 +1288,8 @@ export class AutocodeService {
           operation: 'update',
           parentId: latest.id,
           visibilityStrategy: dto.visibilityStrategy ?? latest.visibilityStrategy ?? 'private',
+          hasApprovalFlow: dto.approvalFlow?.enabled ?? latest.hasApprovalFlow ?? false,
+          hasAgent: dto.agentConfig?.enabled ?? latest.hasAgent ?? false,
         });
       } catch (historyErr: unknown) {
         this.logger.error('[AutocodeService] Failed to save update history:', historyErr);
@@ -1535,6 +1539,8 @@ export class AutocodeService {
           operation: 'create',
           parentId: existing?.id ?? null,
           visibilityStrategy: dto.visibilityStrategy ?? existing?.visibilityStrategy ?? 'private',
+          hasApprovalFlow: dto.approvalFlow?.enabled ?? existing?.hasApprovalFlow ?? false,
+          hasAgent: dto.agentConfig?.enabled ?? existing?.hasAgent ?? false,
         });
       } catch (historyErr: unknown) {
         this.logger.error('[AutocodeService] Failed to save generation history:', historyErr);
@@ -1747,6 +1753,8 @@ export class AutocodeService {
         operation: 'rollback',
         parentId: latest?.id ?? null,
         visibilityStrategy: history.visibilityStrategy ?? 'private',
+        hasApprovalFlow: history.hasApprovalFlow ?? false,
+        hasAgent: history.hasAgent ?? false,
       });
     } catch (historyErr: unknown) {
       this.logger.error('[AutocodeService] Failed to save rollback history:', historyErr);

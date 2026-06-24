@@ -249,6 +249,8 @@ export interface AutoCodeHistory {
   operation?: 'create' | 'update' | 'rollback';
   parentId?: string;
   visibilityStrategy?: 'private' | 'department' | 'shared' | 'public';
+  hasApprovalFlow?: boolean;
+  hasAgent?: boolean;
 }
 
 export interface AutoCodeHistoryListParams {
