@@ -1119,7 +1119,9 @@ ${pkgList}`,
               const refTbl = sql.identifier(guessedTable);
               const refToolName = guessedTable.replace(/^lc_/, '');
               tools[`search_${refToolName}`] = tool({
-                description: `【查询】查询 ${guessedTable} 获取有效记录。在调用 create_${subToolName} 前，必须先调用此工具获取 "${uuidCol.column_name}" 字段所需的 UUID（从结果的 id 字段取值）。`,
+                description: `【查询】查询 ${guessedTable} 获取有效记录及其 UUID。` +
+                  `在调用 create_${subToolName} 时，"${uuidCol.column_name}" 字段必须填写本工具返回结果中的 "id" 字段值（UUID 格式），` +
+                  `不能使用 code/name 等其他字段，也不能自行构造 UUID。`,
                 parameters: jsonSchema({
                   type: 'object',
                   properties: {
@@ -1133,7 +1135,18 @@ ${pkgList}`,
                   const listRes = await this.db.execute(
                     sql`SELECT * FROM ${refTbl} WHERE deleted_at IS NULL ORDER BY created_at ASC LIMIT ${pageSize}`
                   );
-                  return { list: Array.from(listRes as any) };
+                  // Return only id + first few text columns to keep response concise
+                  // and ensure the model sees the id field prominently
+                  const rows = Array.from(listRes as any).map((r: any) => {
+                    const textCols = Object.entries(r)
+                      .filter(([k]) => !['owner_id','shared_with','created_at','updated_at','deleted_at'].includes(k))
+                      .reduce((acc, [k, v]) => ({ ...acc, [k]: v }), {} as any);
+                    return textCols;
+                  });
+                  return {
+                    note: `"${uuidCol.column_name}" 字段必须使用以下列表中的 "id" 值，不得自行构造`,
+                    list: rows,
+                  };
                 },
               });
               this.logger.log(`[EntityTool] auto-loaded search_${refToolName} for uuid FK column "${uuidCol.column_name}" in ${subLcTable}`);
