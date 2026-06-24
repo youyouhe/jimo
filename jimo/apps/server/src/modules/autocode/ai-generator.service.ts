@@ -196,30 +196,23 @@ ${pkgList}`,
         }
       }
 
-      // ── Retry loop: detect hallucination (model describes action but never calls a tool) ──
+      // ── Retry loop (autocode mode only: detect propose_entity hallucination) ──
       const MAX_RETRIES = 3;
       let calledProposeEntity = false;
-      let calledAnyEntityTool = false;    // any entity tool was invoked
-      let calledMutatingEntityTool = false; // a create/update/delete tool was invoked
       let textBuffer = '';
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         if (aborted) break;
 
         calledProposeEntity = false;
-        calledAnyEntityTool = false;
-        calledMutatingEntityTool = false;
         textBuffer = '';
 
         if (attempt > 1) {
           this.logger.warn(`[AiGenerator] 🔄 retry attempt ${attempt}/${MAX_RETRIES}`);
-          write({ kind: 'retry', attempt, maxRetries: MAX_RETRIES, content: '检测到未实际执行操作，正在重试…' });
-          const isEntityMode = Object.keys(entityTools).length > 0;
+          write({ kind: 'retry', attempt, maxRetries: MAX_RETRIES, content: '检测到未实际提交工具调用，正在重试…' });
           messages.push({
             role: 'user',
-            content: isEntityMode
-              ? '## ⚠️ 你上一轮只描述了操作计划，但**没有实际调用任何工具**执行！请**立刻**调用相应工具（create_*/search_*/update_*/delete_*）完成操作，不要只用文字描述。'
-              : '## ⚠️ 你上一轮的回复里描述了实体字段但**没有调用 propose_entity 工具**提交！你只是在文字里"说"了，但没有真正执行。请**现在立刻**调用 propose_entity 工具提交实体定义。不要再只描述不提交。如果涉及字典或 Package，也在同一轮调 create_dict / create_package。',
+            content: '## ⚠️ 你上一轮的回复里描述了实体字段但**没有调用 propose_entity 工具**提交！你只是在文字里"说"了，但没有真正执行。请**现在立刻**调用 propose_entity 工具提交实体定义。不要再只描述不提交。如果涉及字典或 Package，也在同一轮调 create_dict / create_package。',
           });
         }
 
@@ -233,22 +226,7 @@ ${pkgList}`,
           // Users can cancel via the frontend stop button; the server handles
           // res.on('close') for genuine disconnects.
           maxSteps: 200,
-          // entity agent mode: wrap each tool to track if any tool was actually called
-          tools: Object.keys(entityTools).length > 0 ? Object.fromEntries(
-            Object.entries(entityTools).map(([name, t]: [string, any]) => [
-              name,
-              {
-                ...t,
-                execute: async (...args: any[]) => {
-                  calledAnyEntityTool = true;
-                  if (/^(create|update|delete)_/.test(name)) {
-                    calledMutatingEntityTool = true;
-                  }
-                  return t.execute(...args);
-                },
-              },
-            ])
-          ) : {
+          tools: Object.keys(entityTools).length > 0 ? entityTools : {
             propose_entity: tool({
               description: PROPOSE_ENTITY_TOOL.function.description,
               parameters: jsonSchema(PROPOSE_ENTITY_TOOL.function.parameters as any),
@@ -611,28 +589,9 @@ ${pkgList}`,
 
       if (aborted) break;
 
-      const isEntityMode = Object.keys(entityTools).length > 0;
-
-      // ── Hallucination detection: entity agent mode ──
-      // Entity agent hallucination: user asked for a write operation but no
-      // mutating tool (create_*/update_*/delete_*) was called.
-      // Strategy: check the USER's last message for write intent, not the model's
-      // response text — this is far more reliable than keyword-matching model output.
-      const lastUserMsg = messages.filter((m) => m.role === 'user').at(-1)?.content ?? '';
-      const userWantsWrite = isEntityMode && this.isUserWriteIntent(lastUserMsg);
-      if (userWantsWrite && !calledMutatingEntityTool) {
-        this.logger.warn(
-          `[AiGenerator] ⚠ entity agent hallucination on attempt ${attempt}/${MAX_RETRIES}: ` +
-          `user requested write but no mutating tool was called ` +
-          `(calledAny=${calledAnyEntityTool}, textLen=${textBuffer.length})`,
-        );
-        if (attempt < MAX_RETRIES) continue;
-        write({ kind: 'warning', content: 'AI 多次描述了操作计划但未实际执行写入，请尝试重新描述需求或换一种方式提问。' });
-        break;
-      }
-
-      // ── Hallucination detection: autocode mode ──
+      // ── Hallucination detection: autocode mode only ──
       // Model described creation ("已生成"/"已创建"/"字段总览") but never called propose_entity.
+      const isEntityMode = Object.keys(entityTools).length > 0;
       if (!isEntityMode && !calledProposeEntity && this.isCreationHallucination(textBuffer)) {
         this.logger.warn(
           `[AiGenerator] ⚠ hallucination on attempt ${attempt}/${MAX_RETRIES}: ` +
@@ -667,36 +626,6 @@ ${pkgList}`,
    * Detect creation hallucination: model claimed to have created/提交 an entity
    * in text but never actually called propose_entity.
    */
-  /** Check if the USER's message expresses write/create/update/delete intent. */
-  private isUserWriteIntent(userMsg: string): boolean {
-    if (!userMsg || userMsg.length < 2) return false;
-    const writeIntents = [
-      '增加', '添加', '新增', '创建', '录入', '插入', '写入',
-      '生成明细', '生成分录', '生成数据', '生成记录',
-      '修改', '更新', '编辑', '变更',
-      '删除', '移除', '清除', '撤销',
-      '请调用', '执行创建', '执行操作', '请执行',
-      'create', 'insert', 'add', 'update', 'delete',
-    ];
-    return writeIntents.some((kw) => userMsg.includes(kw));
-  }
-
-  private isActionHallucination(text: string): boolean {
-    // Model described an intended action but never called any tool.
-    // Only flag when the text contains action-intent language, not just conversational answers.
-    if (text.length < 30) return false;
-    const actionIntents = [
-      '现在创建', '开始创建', '为您创建', '帮你创建', '批量创建',
-      '现在插入', '开始插入', '插入明细', '录入明细',
-      '我来创建', '我来插入', '我会创建', '分批创建',
-      '创建借贷', '创建分录', '生成分录', '生成明细',
-      '我来为它创建', '为它创建', '为其创建', '创建三条', '创建两条', '创建明细',
-      '为凭证创建', '为该凭证', '添加明细', '添加分录',
-      '典型分录如下', '分录如下', '会计分录如下',
-    ];
-    return actionIntents.some((kw) => text.includes(kw));
-  }
-
   private isCreationHallucination(text: string): boolean {
     // Must contain creation-claim keywords
     const creationClaims = ['已生成', '已创建', '已提交', '已为你生成', '表已就绪', '字段总览', '需要我插入 mock'];
@@ -881,7 +810,7 @@ ${pkgList}`,
 
       if (enabledTools.includes('query')) {
         tools[`query_${tableName}`] = tool({
-          description: `Get a ${tableName} record by ID`,
+          description: `【精确查询】按 UUID 获取单条 ${tableName} 记录。已知 ID 时用此工具；未知 ID 时先用 search_${tableName}。`,
           parameters: jsonSchema({
             type: 'object',
             properties: { id: { type: 'string', description: 'Record UUID' } },
@@ -910,7 +839,7 @@ ${pkgList}`,
           if (f.required) requiredCols.push(f.name);
         }
         tools[`create_${tableName}`] = tool({
-          description: `Create a new ${tableName} record`,
+          description: `【写入】新建一条 ${tableName} 记录并立即写入数据库。用户要求"新增/创建/录入"时必须调用此工具完成操作，不要只用文字描述。`,
           parameters: jsonSchema({ type: 'object', properties: props, required: requiredCols }),
           execute: async (args: any) => {
             const colIdents = colNames.map((n: string) => sql.identifier(n));
@@ -937,7 +866,7 @@ ${pkgList}`,
           props[f.name] = { type: jsType, description: f.description || f.name };
         }
         tools[`update_${tableName}`] = tool({
-          description: `Update a ${tableName} record`,
+          description: `【写入】更新一条 ${tableName} 记录。用户要求"修改/更新/编辑"时必须调用此工具，需先用 search_${tableName} 或 query_${tableName} 获取目标记录的 id。`,
           parameters: jsonSchema({ type: 'object', properties: props, required: ['id'] }),
           execute: async (args: any) => {
             const setPairs = colNames.map((n: string) => {
@@ -957,7 +886,7 @@ ${pkgList}`,
 
       if (enabledTools.includes('delete')) {
         tools[`delete_${tableName}`] = tool({
-          description: `Soft-delete a ${tableName} record by ID`,
+          description: `【写入】软删除一条 ${tableName} 记录（设置 deleted_at，不物理删除）。需先确认目标记录 id。`,
           parameters: jsonSchema({
             type: 'object',
             properties: { id: { type: 'string', description: 'Record UUID' } },
@@ -987,12 +916,9 @@ ${pkgList}`,
           }
         }
         tools[`search_${tableName}`] = tool({
-          description: `Search ${tableName} records with filters and pagination`,
+          description: `【查询】按条件筛选 ${tableName} 记录，支持分页。用户要求"查询/列出/找到/搜索"时调用。结果含各记录的 id，可直接传给 create_*/update_*/delete_* 工具。`,
           parameters: jsonSchema({ type: 'object', properties: props }),
           execute: async (args: any) => {
-            // Debug: what does execute() actually return?
-            const tr = await this.db.execute(sql.raw(`SELECT COUNT(*) as cnt FROM ${lcTable} WHERE deleted_at IS NULL`));
-            this.logger.log(`[EntityTool] search_${tableName} DEBUG tr type=${typeof tr} keys=${JSON.stringify(Object.keys(tr||{}))} rowsLen=${Array.from(tr as any).length}`);
             const page = Math.max(args.page ?? 1, 1);
             const pageSize = Math.min(Math.max(args.pageSize ?? 10, 1), 100);
             const off = (page - 1) * pageSize;
@@ -1042,7 +968,7 @@ ${pkgList}`,
 
       if (enabledTools.includes('mock')) {
         tools[`mock_${tableName}`] = tool({
-          description: `Generate mock data rows for ${tableName}`,
+          description: `【写入】为 ${tableName} 批量生成模拟测试数据（1-100条）。仅用于测试，不影响真实业务数据。`,
           parameters: jsonSchema({
             type: 'object',
             properties: { count: { type: 'number', description: 'Number of mock rows (1-100)' } },
@@ -1090,7 +1016,7 @@ ${pkgList}`,
 
         // search sub-table rows by parent FK
         tools[`search_${subToolName}`] = tool({
-          description: `Search rows in sub-table ${subLcTable}. Use ${fkCol?.column_name ?? 'parent_id'} to filter by parent record.`,
+          description: `【查询】查询子表 ${subLcTable} 的记录。传入 ${fkCol?.column_name ?? 'parent_id'} 可按父记录过滤。结果含各行 id，可用于后续的 update_/delete_ 操作。`,
           parameters: jsonSchema({
             type: 'object',
             properties: {
@@ -1131,7 +1057,7 @@ ${pkgList}`,
             if (c.is_nullable === 'NO' && c.column_name !== 'id') required.push(c.column_name);
           }
           tools[`create_${subToolName}`] = tool({
-            description: `Create a new row in sub-table ${subLcTable}. For uuid FK columns (like "account"), first search the referenced table to get a valid UUID.`,
+            description: `【写入】在子表 ${subLcTable} 中新建一条记录并立即写入数据库。用户要求"添加/新增/录入明细/添加分录"时必须调用此工具。${fkCol ? `必填字段 ${fkCol.column_name} = 父记录 UUID（从 search_${tableName} 结果取）。` : ''}uuid 类型字段需先用对应的 search_* 工具查出有效 UUID 再传入。`,
             parameters: jsonSchema({ type: 'object', properties: props, required }),
             execute: async (args: any) => {
               const allInsertCols = [...(fkCol ? [fkCol.column_name] : []), ...userCols.map((c: any) => c.column_name)];
@@ -1145,7 +1071,7 @@ ${pkgList}`,
           });
 
           tools[`update_${subToolName}`] = tool({
-            description: `Update a row in sub-table ${subLcTable} by id`,
+            description: `【写入】按 id 更新子表 ${subLcTable} 中的一条记录。需先用 search_${subToolName} 获取目标行 id。`,
             parameters: jsonSchema({
               type: 'object',
               properties: { id: { type: 'string' }, ...props },
@@ -1164,7 +1090,7 @@ ${pkgList}`,
           });
 
           tools[`delete_${subToolName}`] = tool({
-            description: `Soft-delete a row in sub-table ${subLcTable} by id`,
+            description: `【写入】软删除子表 ${subLcTable} 中的一条记录（设置 deleted_at）。需先确认目标行 id。`,
             parameters: jsonSchema({
               type: 'object',
               properties: { id: { type: 'string', description: 'Row UUID' } },
@@ -1193,7 +1119,7 @@ ${pkgList}`,
               const refTbl = sql.identifier(guessedTable);
               const refToolName = guessedTable.replace(/^lc_/, '');
               tools[`search_${refToolName}`] = tool({
-                description: `Search rows in ${guessedTable} to find valid UUIDs for the "${uuidCol.column_name}" field. Returns id, name/code/title of each record.`,
+                description: `【查询】查询 ${guessedTable} 获取有效记录。在调用 create_${subToolName} 前，必须先调用此工具获取 "${uuidCol.column_name}" 字段所需的 UUID（从结果的 id 字段取值）。`,
                 parameters: jsonSchema({
                   type: 'object',
                   properties: {
@@ -1226,10 +1152,14 @@ ${pkgList}`,
         : '';
       const customPrompt: string = agentCfg.systemPrompt?.trim() ?? '';
       const systemPrompt = customPrompt ||
-        `你是「${tableName}」业务数据助手。` +
-        `你可以帮用户查询、录入、修改、搜索「${tableName}」及其关联子表的数据记录。${subTableSummary}` +
-        `直接调用工具完成操作，结果用简洁的中文说明。` +
-        `不要提建表、字典、Package、代码生成等内容——那不是你的职责。`;
+        `你是「${tableName}」业务数据助手。${subTableSummary}
+
+## 核心行为准则
+1. **立即调用工具，不要先描述计划**：用户要求增/改/删时，直接调用对应的【写入】工具执行，不要先用文字描述"我将要做什么"再做。
+2. **工具调用顺序**：需要写入前如不知道 ID，先调【查询】工具取到 id，再调【写入】工具。
+3. **uuid 外键字段**：子表中 uuid 类型的字段（如 account）必须先调对应的查询工具取到有效 UUID，不能自己编造。
+4. **结果用中文简洁说明**：调用完成后报告结果（成功几条、失败原因等），不要重复工具内部细节。
+5. **不涉及建表、字典、Package**：这些不在你的职责范围内。`;
 
       return { tools, systemPrompt };
     } catch (e: any) {
