@@ -222,9 +222,10 @@ ${pkgList}`,
           // autocode mode: use the standard code-generation system prompt
           system: Object.keys(entityTools).length > 0 ? entitySystemPrompt : AI_GENERATOR_SYSTEM_PROMPT,
           messages,
-          // entity agent may need many tool calls for bulk operations (e.g. 10 records × 4 items)
-          // autocode only needs ~15 steps for schema design + dict + package
-          maxSteps: Object.keys(entityTools).length > 0 ? 80 : 15,
+          // No hard step limit — let the model complete naturally.
+          // Users can cancel via the frontend stop button; the server handles
+          // res.on('close') for genuine disconnects.
+          maxSteps: 200,
           // entity agent mode: only CRUD tools. autocode mode: full global tools.
           tools: Object.keys(entityTools).length > 0 ? entityTools : {
             propose_entity: tool({

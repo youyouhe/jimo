@@ -78,8 +78,8 @@ export default function EncodingRulesPage() {
   useEffect(() => {
     getMyBtnPerms()
       .then((perms) => {
-        const pagePerms = perms['./encoding-rules/index'] ?? [];
-        setBtnPerms(pagePerms);
+        const entry = perms['./encoding-rules/index'];
+        setBtnPerms(entry?.systemBtns ?? []);
       })
       .catch(() => {});
   }, []);

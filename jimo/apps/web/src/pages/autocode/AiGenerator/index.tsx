@@ -378,9 +378,18 @@ export function AiGeneratorPanel({ onGenerate, onGenerateBatch, onFillForm }: Pr
           onPressEnter={send}
           disabled={loading}
         />
-        <Button type="primary" icon={<SendOutlined />} onClick={send} loading={loading}>
-          发送
-        </Button>
+        {loading ? (
+          <Button
+            danger
+            onClick={() => { abortRef.current?.abort(); }}
+          >
+            停止
+          </Button>
+        ) : (
+          <Button type="primary" icon={<SendOutlined />} onClick={send}>
+            发送
+          </Button>
+        )}
       </Space.Compact>
 
       {/* History Drawer */}
