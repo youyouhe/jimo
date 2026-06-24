@@ -37,6 +37,12 @@ export interface AutoCodeDto {
   packageName?: string;
   // Mock-data generation (opt-in). When absent the backend defaults to no mock rows.
   mockData?: { enabled: boolean; count: number };
+  // Approval flow (opt-in). Enables BPM approval for this entity.
+  approvalFlow?: { enabled: boolean; defaultChain: string[] };
+  // Visibility strategy for this entity.
+  visibilityStrategy?: 'private' | 'department' | 'shared' | 'public';
+  // Agent configuration (opt-in). Enables an accompanying agent for the entity.
+  agentConfig?: { enabled: boolean; tools?: ('query' | 'create' | 'update' | 'delete' | 'search' | 'mock')[]; systemPrompt?: string };
 }
 
 export interface TemplateMetadata {
@@ -242,6 +248,7 @@ export interface AutoCodeHistory {
   changeLog?: string;
   operation?: 'create' | 'update' | 'rollback';
   parentId?: string;
+  visibilityStrategy?: 'private' | 'department' | 'shared' | 'public';
 }
 
 export interface AutoCodeHistoryListParams {

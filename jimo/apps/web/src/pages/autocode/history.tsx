@@ -787,6 +787,29 @@ export default function AutocodeHistoryPage() {
       },
     },
     {
+      title: '可见性',
+      dataIndex: 'visibilityStrategy',
+      width: 100,
+      search: false,
+      render: (_, record) => {
+        const vs = record.visibilityStrategy;
+        if (!vs) return <Tag>private</Tag>;
+        const colorMap: Record<string, string> = {
+          private: 'default',
+          department: 'blue',
+          shared: 'orange',
+          public: 'green',
+        };
+        const labelMap: Record<string, string> = {
+          private: '仅自己',
+          department: '本部门',
+          shared: '指定共享',
+          public: '公开',
+        };
+        return <Tag color={colorMap[vs] || 'default'}>{labelMap[vs] || vs}</Tag>;
+      },
+    },
+    {
       title: 'Change Log',
       dataIndex: 'changeLog',
       width: 260,

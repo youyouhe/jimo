@@ -642,6 +642,7 @@ export class AutocodeService {
         tableName: dto.tableName,
         businessDB: (dto as any).businessDB || '',
         templates,
+        visibilityStrategy: dto.visibilityStrategy ?? 'private',
       });
     } catch (historyErr: unknown) {
       // History save failure should not block the generate result
@@ -1284,6 +1285,7 @@ export class AutocodeService {
           changeLog,
           operation: 'update',
           parentId: latest.id,
+          visibilityStrategy: dto.visibilityStrategy ?? latest.visibilityStrategy ?? 'private',
         });
       } catch (historyErr: unknown) {
         this.logger.error('[AutocodeService] Failed to save update history:', historyErr);
@@ -1532,6 +1534,7 @@ export class AutocodeService {
           changeLog: dto.force ? '强制重新生成' : '初始创建',
           operation: 'create',
           parentId: existing?.id ?? null,
+          visibilityStrategy: dto.visibilityStrategy ?? existing?.visibilityStrategy ?? 'private',
         });
       } catch (historyErr: unknown) {
         this.logger.error('[AutocodeService] Failed to save generation history:', historyErr);
@@ -1743,6 +1746,7 @@ export class AutocodeService {
         changeLog: `回滚到版本 v${rollbackVersion}`,
         operation: 'rollback',
         parentId: latest?.id ?? null,
+        visibilityStrategy: history.visibilityStrategy ?? 'private',
       });
     } catch (historyErr: unknown) {
       this.logger.error('[AutocodeService] Failed to save rollback history:', historyErr);

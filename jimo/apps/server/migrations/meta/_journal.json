@@ -36,6 +36,13 @@
       "when": 1782230000000,
       "tag": "0004_drop_lc_prefix_business_approvals",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1782240000000,
+      "tag": "0005_add_visibility_strategy",
+      "breakpoints": true
     }
   ]
 }

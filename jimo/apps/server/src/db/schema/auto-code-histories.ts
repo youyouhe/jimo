@@ -29,6 +29,8 @@ export const sysAutoCodeHistories = pgTable(
     operation: varchar('operation', { length: 20 }).default('create'),
     /** ID of the previous version record (version chain) */
     parentId: uuid('parent_id'),
+    /** Row-level visibility strategy: private/department/shared/public */
+    visibilityStrategy: varchar('visibility_strategy', { length: 20 }).default('private'),
   },
 );
 
