@@ -122,10 +122,22 @@ export function AiGeneratorPanel({ onGenerate, onGenerateBatch, onFillForm }: Pr
     const text = messages
       .map((m) => `${m.role === 'user' ? 'You' : 'AI'}: ${m.content}`)
       .join('\n\n');
-    navigator.clipboard.writeText(text).then(
-      () => message.success('已复制'),
-      () => message.error('复制失败'),
-    );
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => message.success('已复制'),
+        () => message.error('复制失败'),
+      );
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      message.success('已复制');
+    }
   }, [messages]);
 
   const handleDeleteConv = useCallback((id: string) => {
