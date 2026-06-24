@@ -138,7 +138,43 @@ ${pkgList}`,
 
       const messages: CoreMessage[] = [stateMessage, stateAck, ...userMessages];
 
-      const openaiProvider = createOpenAI({ baseURL: baseUrl.replace(/\/+$/, ''), apiKey: aiKey });
+      // Custom fetch that strips reasoning_content / thinking blocks from outgoing
+      // messages before each API call. This prevents "reasoning_content must be
+      // passed back" errors when the user is using a reasoning model (DeepSeek-R1,
+      // QwQ, etc.) via a custom base URL: the @ai-sdk/openai adapter doesn't
+      // preserve these non-standard fields when building multi-step message history.
+      const strippedFetch: typeof fetch = async (url, options) => {
+        if (options?.body && typeof options.body === 'string') {
+          try {
+            const body = JSON.parse(options.body);
+            if (Array.isArray(body.messages)) {
+              body.messages = body.messages.map((m: any) => {
+                // Strip top-level reasoning_content field (DeepSeek-R1 style)
+                const { reasoning_content, ...rest } = m;
+                // If content is an array (Anthropic thinking blocks), keep only text blocks
+                if (Array.isArray(rest.content)) {
+                  const text = rest.content
+                    .filter((b: any) => b.type === 'text')
+                    .map((b: any) => b.text ?? '')
+                    .join('');
+                  rest.content = text;
+                }
+                return rest;
+              });
+            }
+            return fetch(url as string, { ...options, body: JSON.stringify(body) });
+          } catch {
+            // JSON parse failed — pass through unchanged
+          }
+        }
+        return fetch(url as string, options as RequestInit);
+      };
+
+      const openaiProvider = createOpenAI({
+        baseURL: baseUrl.replace(/\/+$/, ''),
+        apiKey: aiKey,
+        fetch: strippedFetch,
+      });
       const modelInstance = openaiProvider(model) as any;
 
       this.logger.log(`[AiGenerator] AI baseURL: ${baseUrl.replace(/\/+$/, '')}`);
