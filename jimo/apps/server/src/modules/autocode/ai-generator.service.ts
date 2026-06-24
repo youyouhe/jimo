@@ -86,9 +86,14 @@ export class AiGeneratorService {
     }
 
     let aborted = false;
+    let doneSent = false;
     res.on('close', () => {
-      aborted = true;
-      this.logger.log('[AiGenerator] client disconnected (SSE close)');
+      if (!doneSent) {
+        // close before done = genuine client disconnect (navigation, tab close, etc.)
+        aborted = true;
+        this.logger.log('[AiGenerator] client disconnected (SSE close)');
+      }
+      // close after done = normal TCP teardown after response ended — ignore
     });
 
     try {
@@ -217,7 +222,9 @@ ${pkgList}`,
           // autocode mode: use the standard code-generation system prompt
           system: Object.keys(entityTools).length > 0 ? entitySystemPrompt : AI_GENERATOR_SYSTEM_PROMPT,
           messages,
-          maxSteps: 15,
+          // entity agent may need many tool calls for bulk operations (e.g. 10 records × 4 items)
+          // autocode only needs ~15 steps for schema design + dict + package
+          maxSteps: Object.keys(entityTools).length > 0 ? 80 : 15,
           // entity agent mode: only CRUD tools. autocode mode: full global tools.
           tools: Object.keys(entityTools).length > 0 ? entityTools : {
             propose_entity: tool({
@@ -602,12 +609,14 @@ ${pkgList}`,
     } // end retry loop
 
     if (!aborted) {
+      doneSent = true;
       write({ kind: 'done' });
       res.end();
     }
   } catch (e: any) {
     this.logger.error(`[AiGenerator] ✗ 流式调用失败: ${e?.message}\n${e?.stack?.slice(0, 800)}`);
     if (!aborted) {
+      doneSent = true;
       write({ kind: 'error', message: e?.message || 'AI 调用失败' });
       write({ kind: 'done' });
       res.end();
