@@ -4,6 +4,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AiGeneratorService } from './ai-generator.service';
 import { AiChatRequestDto } from './ai-generator.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UserRole } from '../../db/schema/users';
 
 /**
@@ -23,7 +24,6 @@ export class AiGeneratorController {
   constructor(private readonly aiService: AiGeneratorService) {}
 
   @Post('ai-chat')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'AI 对话生成实体(SSE 流式;BYOC key 经 header 传入)' })
   async aiChat(
     @Body() dto: AiChatRequestDto,
@@ -31,12 +31,12 @@ export class AiGeneratorController {
     @Headers('x-ai-base-url') baseUrl?: string,
     @Headers('x-ai-model') model?: string,
     @Res() res?: Response,
+    @CurrentUser() user?: { sub: string },
   ): Promise<void> {
-    return this.aiService.streamChatToRes(dto, aiKey, baseUrl, model, res!);
+    return this.aiService.streamChatToRes(dto, aiKey, baseUrl, model, res!, user?.sub);
   }
 
   @Post('ai-test')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: '测试 AI 配置连通性(BYOC key 经 header,非流式)' })
   async aiTest(
     @Headers('x-ai-api-key') aiKey?: string,

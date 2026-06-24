@@ -1,4 +1,4 @@
-import { IsArray, IsString, IsIn, ValidateNested } from 'class-validator';
+import { IsArray, IsString, IsIn, IsOptional, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -19,4 +19,12 @@ export class AiChatRequestDto {
   @ValidateNested({ each: true })
   @Type(() => ChatMessageDto)
   messages: ChatMessageDto[] = [];
+
+  @ApiProperty({
+    description: 'Optional business entity table name to load entity agent tools (e.g. "companies")',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  businessType?: string;
 }

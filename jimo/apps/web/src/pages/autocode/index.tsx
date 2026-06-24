@@ -503,6 +503,8 @@ export default function AutocodePage() {
   const [approvalChain, setApprovalChain] = useState('deptHead');
   // Visibility strategy (default private)
   const [visibilityStrategy, setVisibilityStrategy] = useState<'private' | 'department' | 'shared' | 'public'>('private');
+  // Agent config (opt-in). Enable to create a companion agent for the entity.
+  const [agentEnabled, setAgentEnabled] = useState(false);
 
   // Update mode state
   const [updateMode, setUpdateMode] = useState(false);
@@ -658,6 +660,7 @@ export default function AutocodePage() {
         ? { approvalFlow: { enabled: true, defaultChain: approvalChain.split(',').map((s) => s.trim()).filter(Boolean) } }
         : {}),
       visibilityStrategy,
+      ...(agentEnabled ? { agentConfig: { enabled: true } } : {}),
     };
     const { jobId } = await executeGenerate(finalDto);
     const kebab = dto.tableName.toLowerCase().replace(/_/g, '-');
@@ -1096,6 +1099,16 @@ export default function AutocodePage() {
                     { label: '公开（所有登录用户）', value: 'public' },
                   ]}
                   style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={6}>
+              <Form.Item label="启用实体Agent" tooltip="为该业务实体创建伴随agent，暴露CRUD tools">
+                <Switch
+                  checked={agentEnabled}
+                  onChange={setAgentEnabled}
+                  checkedChildren="开"
+                  unCheckedChildren="关"
                 />
               </Form.Item>
             </Col>

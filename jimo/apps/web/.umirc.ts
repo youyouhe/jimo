@@ -97,22 +97,28 @@ export default defineConfig({
     // code-generation time.  patchClientRoutes filters them at runtime
     // against the DB menu tree for role-based access control.
     {
-      path: '/lc/posts',
-      name: '博客文章',
+      path: '/lc/suppliers',
+      name: '供应商表',
       icon: 'TableOutlined',
-      component: './lc/posts/index',
+      component: './lc/suppliers/index',
     },
     {
-      path: '/lc/reimbursements',
-      name: '报销单',
+      path: '/lc/procurement-contracts',
+      name: '采购合同表',
       icon: 'TableOutlined',
-      component: './lc/reimbursements/index',
+      component: './lc/procurement-contracts/index',
     },
     {
-      path: '/lc/students',
-      name: '学生表',
+      path: '/lc/accounts',
+      name: '会计科目表',
       icon: 'TableOutlined',
-      component: './lc/students/index',
+      component: './lc/accounts/index',
+    },
+    {
+      path: '/lc/vouchers',
+      name: '记账凭证表',
+      icon: 'TableOutlined',
+      component: './lc/vouchers/index',
     },
     { path: '/*', redirect: '/dashboard' },
   ],

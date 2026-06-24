@@ -7,10 +7,10 @@ export class ShareDto {
   @IsNotEmpty()
   businessType!: string;
 
-  @ApiProperty()
-  @IsString()
-  @IsNotEmpty()
-  businessId!: string;
+  @ApiProperty({ type: [String], description: 'Record ids to share (batch, owner-only)' })
+  @IsArray()
+  @IsUUID('4', { each: true })
+  businessIds!: string[];
 
   @ApiProperty({ type: [String], description: 'sys_user ids to share with (replaces shared_with)' })
   @IsArray()

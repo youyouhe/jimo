@@ -276,6 +276,31 @@ export class ApprovalFlowConfigDto {
   defaultChain?: string[];
 }
 
+export class AgentConfigDto {
+  @ApiProperty({ description: 'Whether to enable the accompanying agent for this entity', default: false })
+  @IsOptional()
+  @IsBoolean()
+  enabled: boolean = false;
+
+  @ApiPropertyOptional({
+    description: 'Agent tool whitelist. Tools available to the agent: query, create, update, delete, search, mock',
+    example: ['query', 'create', 'search'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @IsIn(['query', 'create', 'update', 'delete', 'search', 'mock'], { each: true })
+  tools?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Custom system prompt for the agent',
+    example: 'You are a customer support assistant.',
+  })
+  @IsOptional()
+  @IsString()
+  systemPrompt?: string;
+}
+
 export class AutoCodeDto {
   @ApiProperty({
     description: 'Database table name in snake_case',
@@ -353,4 +378,13 @@ export class AutoCodeDto {
   @IsOptional()
   @IsIn(['private', 'department', 'shared', 'public'])
   visibilityStrategy?: 'private' | 'department' | 'shared' | 'public';
+
+  @ApiPropertyOptional({
+    description: '实体伴随agent配置',
+    type: () => AgentConfigDto,
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => AgentConfigDto)
+  agentConfig?: AgentConfigDto;
 }

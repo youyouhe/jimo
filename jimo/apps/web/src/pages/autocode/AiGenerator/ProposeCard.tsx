@@ -41,6 +41,9 @@ export function ProposeCard({
           {dto.packageId ? <Tag color="geekblue">{dto.packageName || dto.packageId.slice(0, 8)}</Tag> : null}
           <Typography.Text strong>{dto.tableName}</Typography.Text>
           <Typography.Text type="secondary">{dto.description}</Typography.Text>
+          {dto.agentConfig?.enabled && (
+            <Tag color="purple">Agent: 启用 {dto.agentConfig?.tools?.length ? `(${dto.agentConfig.tools.join(', ')})` : ''}</Tag>
+          )}
         </Space>
       }
       extra={

@@ -26,21 +26,31 @@ export class OwnershipService {
     return Array.isArray(res) ? res : (res?.rows ?? []);
   }
 
-  /** Share a record: replaces shared_with with the given user ids (owner-only). */
-  async share(businessType: string, businessId: string, userIds: string[], actorId: string) {
+  /**
+   * Share multiple records: replaces shared_with on each with the given user ids.
+   * Owner-only — non-owner records are skipped and returned in skippedIds.
+   */
+  async share(businessType: string, businessIds: string[], userIds: string[], actorId: string) {
     const t = this.tableRef(businessType);
-    const owned = this.rows(
+    const updated = this.rows(
       await this.db.execute(
-        sql`SELECT id FROM ${t} WHERE id=${businessId} AND owner_id=${actorId} AND deleted_at IS NULL LIMIT 1`,
+        sql`UPDATE ${t}
+            SET shared_with=${sql.raw(`'${JSON.stringify(userIds)}'::jsonb`)}, updated_at=now()
+            WHERE id IN (${sql.join(businessIds.map((id) => sql`${id}`), sql`, `)})
+              AND owner_id=${actorId}
+              AND deleted_at IS NULL
+            RETURNING id`,
       ),
-    );
-    if (owned.length === 0) {
-      throw new NotFoundException('Record not found or you are not the owner');
-    }
-    await this.db.execute(
-      sql`UPDATE ${t} SET shared_with=${sql.raw(`'${JSON.stringify(userIds)}'::jsonb`)}, updated_at=now() WHERE id=${businessId}`,
-    );
-    return { businessType, businessId, sharedWith: userIds };
+    ) as { id: string }[];
+    const sharedIds = updated.map((r) => r.id);
+    const skippedIds = businessIds.filter((id) => !sharedIds.includes(id));
+    return {
+      businessType,
+      shared: sharedIds.length,
+      skipped: skippedIds.length,
+      skippedIds,
+      userIds,
+    };
   }
 
   /** Transfer ownership to a new user (owner-only). Clears shared_with. */

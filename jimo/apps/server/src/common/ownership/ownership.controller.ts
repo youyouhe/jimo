@@ -11,9 +11,9 @@ export class OwnershipController {
   constructor(private readonly ownershipService: OwnershipService) {}
 
   @Post('share')
-  @ApiOperation({ summary: 'Share a record with users (owner-only). Replaces shared_with.' })
+  @ApiOperation({ summary: 'Share records with users (batch, owner-only). Replaces shared_with.' })
   async share(@Body() dto: ShareDto, @CurrentUser() user: { sub: string }) {
-    const data = await this.ownershipService.share(dto.businessType, dto.businessId, dto.userIds, user.sub);
+    const data = await this.ownershipService.share(dto.businessType, dto.businessIds, dto.userIds, user.sub);
     return { code: 0, msg: 'success', data };
   }
 
