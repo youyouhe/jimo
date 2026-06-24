@@ -210,7 +210,7 @@ export const LIST_TABLES_TOOL = {
   function: {
     name: 'list_tables',
     description:
-      '查询系统中已生成的实体表列表（来自代码生成历史）。在 propose_entity 前调用，确认目标表是否已存在，已存在的表可直接被 relation 字段引用。',
+      '查询系统中已生成的实体表列表。返回 tables（所有已知表）和 orphans（物理存在但无生成历史的表，通常是主表的子表/明细表，如 voucher_voucher_item）。子表不在 tables 里但在 orphans 里，可用 describe_table 查询其字段结构。在 propose_entity 前调用，确认目标表是否已存在，已存在的表可直接被 relation 字段引用。',
     parameters: {
       type: 'object',
       properties: {},
@@ -358,7 +358,7 @@ export const DESCRIBE_TABLE_TOOL = {
   function: {
     name: 'describe_table',
     description:
-      '查询一张已生成实体表的完整字段结构（AutoCodeField[]），包含字段名、类型、说明、relation/dict 配置等。在需要了解已有表结构、建立关联关系或扩展已有表时调用。tableName 不含 lc_ 前缀。',
+      '查询一张实体表的字段结构。优先从生成历史读取（含完整 relation/dict 元数据）；若未找到（子表/明细表不写历史），自动 fallback 读物理表列定义。tableName 不含 lc_ 前缀。子表名示例：voucher_voucher_item、stock_in_order_item（从 list_tables 的 orphans 字段获取）。',
     parameters: {
       type: 'object',
       properties: {

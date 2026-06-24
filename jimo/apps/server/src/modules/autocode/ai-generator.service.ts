@@ -385,28 +385,48 @@ ${pkgList}`,
             execute: async (args: unknown) => {
               const { tableName } = (args as any) ?? {};
               try {
+                // Primary: look up autocode history (has rich metadata)
                 const rows = await this.db
                   .select({ fields: sysAutoCodeHistories.fields, version: sysAutoCodeHistories.version })
                   .from(sysAutoCodeHistories)
                   .where(eq(sysAutoCodeHistories.tableName, tableName))
                   .orderBy(sysAutoCodeHistories.version)
                   .limit(1);
-                if (rows.length === 0 || !rows[0].fields) {
-                  return { ok: false, tableName, error: '未找到该表的生成记录，请先确认表名（不含 lc_ 前缀）' };
+                if (rows.length > 0 && rows[0].fields) {
+                  const fields = (rows[0].fields as any[])
+                    .filter((f) => !f.removed)
+                    .map((f) => ({
+                      name: f.name,
+                      type: f.type,
+                      description: f.description,
+                      required: f.required,
+                      ...(f.relationType ? { relationType: f.relationType, relationTable: f.relationTable } : {}),
+                      ...(f.dictType ? { dictType: f.dictType } : {}),
+                    }));
+                  write({ kind: 'progress', content: `已获取 '${tableName}' 字段结构（${fields.length} 个字段，来自生成历史）` });
+                  return { ok: true, tableName, source: 'history', fields };
                 }
-                const fields = rows[0].fields as any[];
-                const summary = fields
-                  .filter((f) => !f.removed)
-                  .map((f) => ({
-                    name: f.name,
-                    type: f.type,
-                    description: f.description,
-                    required: f.required,
-                    ...(f.relationType ? { relationType: f.relationType, relationTable: f.relationTable } : {}),
-                    ...(f.dictType ? { dictType: f.dictType } : {}),
+
+                // Fallback: sub-tables are never stored in history — read physical schema
+                const physRows = await this.db.execute(
+                  sql`SELECT column_name, data_type, is_nullable
+                      FROM information_schema.columns
+                      WHERE table_schema = 'public' AND table_name = ${'lc_' + tableName}
+                      ORDER BY ordinal_position`
+                );
+                const cols = Array.from(physRows as any[]);
+                if (cols.length === 0) {
+                  return { ok: false, tableName, error: `表 'lc_${tableName}' 不存在，请用 list_tables 确认名称` };
+                }
+                const fields = cols
+                  .filter((c: any) => !['id','created_at','updated_at','deleted_at','owner_id','shared_with'].includes(c.column_name))
+                  .map((c: any) => ({
+                    name: c.column_name,
+                    type: c.data_type,
+                    required: c.is_nullable === 'NO',
                   }));
-                write({ kind: 'progress', content: `已获取 '${tableName}' 字段结构（${summary.length} 个字段）` });
-                return { ok: true, tableName, fields: summary };
+                write({ kind: 'progress', content: `已获取 '${tableName}' 字段结构（${fields.length} 个字段，来自物理表，为子表）` });
+                return { ok: true, tableName, source: 'physical_schema', isSubTable: true, fields };
               } catch (e: any) {
                 return { ok: false, tableName, error: e?.message };
               }
