@@ -5,7 +5,7 @@ import {
 } from 'antd';
 import {
   SendOutlined, SettingOutlined, RobotOutlined, ClearOutlined,
-  CheckOutlined, HistoryOutlined, PlusOutlined, DeleteOutlined,
+  CheckOutlined, HistoryOutlined, PlusOutlined, DeleteOutlined, CopyOutlined,
 } from '@ant-design/icons';
 import type { AiMessage } from './types';
 import { getProposeItems } from './types';
@@ -117,6 +117,16 @@ export function AiGeneratorPanel({ onGenerate, onGenerateBatch, onFillForm }: Pr
     setConvList(loadConvList());
     message.success('对话历史已清除');
   }, [activeId]);
+
+  const handleCopy = useCallback(() => {
+    const text = messages
+      .map((m) => `${m.role === 'user' ? 'You' : 'AI'}: ${m.content}`)
+      .join('\n\n');
+    navigator.clipboard.writeText(text).then(
+      () => message.success('已复制'),
+      () => message.error('复制失败'),
+    );
+  }, [messages]);
 
   const handleDeleteConv = useCallback((id: string) => {
     deleteConv(id);
@@ -284,6 +294,9 @@ export function AiGeneratorPanel({ onGenerate, onGenerateBatch, onFillForm }: Pr
               type="text"
               onClick={() => setHistoryOpen(true)}
             />
+          </Tooltip>
+          <Tooltip title="复制对话">
+            <Button size="small" icon={<CopyOutlined />} type="text" disabled={messages.length === 0} onClick={handleCopy} />
           </Tooltip>
           <Popconfirm
             title="确定清除当前对话?"

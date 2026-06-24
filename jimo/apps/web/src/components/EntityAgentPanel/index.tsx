@@ -5,7 +5,7 @@ import {
 } from 'antd';
 import {
   SendOutlined, RobotOutlined, ClearOutlined,
-  HistoryOutlined, PlusOutlined, DeleteOutlined,
+  HistoryOutlined, PlusOutlined, DeleteOutlined, CopyOutlined,
 } from '@ant-design/icons';
 import { useUserStore } from '@/stores/user';
 import { loadAiConfig } from '@/pages/autocode/AiGenerator/key-config';
@@ -117,6 +117,16 @@ export default function EntityAgentPanel({ open, businessType, onClose }: Entity
     setConvList(loadConvList(businessType));
     message.success('对话已清除');
   }, [activeId, businessType]);
+
+  const handleCopy = useCallback(() => {
+    const text = messages
+      .map((m) => `${m.role === 'user' ? 'You' : 'AI'}: ${m.content}`)
+      .join('\n\n');
+    navigator.clipboard.writeText(text).then(
+      () => message.success('已复制'),
+      () => message.error('复制失败'),
+    );
+  }, [messages]);
 
   const send = async () => {
     const text = input.trim();
@@ -271,6 +281,14 @@ export default function EntityAgentPanel({ open, businessType, onClose }: Entity
               size="small"
               icon={<HistoryOutlined />}
               onClick={() => { setConvList(loadConvList(businessType)); setHistoryOpen(true); }}
+            />
+          </Tooltip>
+          <Tooltip title="复制对话">
+            <Button
+              size="small"
+              icon={<CopyOutlined />}
+              onClick={handleCopy}
+              disabled={messages.length === 0}
             />
           </Tooltip>
           <Tooltip title="清除当前对话">
