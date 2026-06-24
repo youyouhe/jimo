@@ -614,13 +614,16 @@ ${pkgList}`,
       const isEntityMode = Object.keys(entityTools).length > 0;
 
       // ── Hallucination detection: entity agent mode ──
-      // Model described a create/write action but never called a mutating tool.
-      // Note: calling search tools does NOT satisfy this — the model must have
-      // actually called create_*/update_*/delete_* to count as non-hallucinated.
-      if (isEntityMode && this.isActionHallucination(textBuffer) && !calledMutatingEntityTool) {
+      // Entity agent hallucination: user asked for a write operation but no
+      // mutating tool (create_*/update_*/delete_*) was called.
+      // Strategy: check the USER's last message for write intent, not the model's
+      // response text — this is far more reliable than keyword-matching model output.
+      const lastUserMsg = messages.filter((m) => m.role === 'user').at(-1)?.content ?? '';
+      const userWantsWrite = isEntityMode && this.isUserWriteIntent(lastUserMsg);
+      if (userWantsWrite && !calledMutatingEntityTool) {
         this.logger.warn(
           `[AiGenerator] ⚠ entity agent hallucination on attempt ${attempt}/${MAX_RETRIES}: ` +
-          `model described create/write action but called no mutating tools ` +
+          `user requested write but no mutating tool was called ` +
           `(calledAny=${calledAnyEntityTool}, textLen=${textBuffer.length})`,
         );
         if (attempt < MAX_RETRIES) continue;
@@ -664,6 +667,20 @@ ${pkgList}`,
    * Detect creation hallucination: model claimed to have created/提交 an entity
    * in text but never actually called propose_entity.
    */
+  /** Check if the USER's message expresses write/create/update/delete intent. */
+  private isUserWriteIntent(userMsg: string): boolean {
+    if (!userMsg || userMsg.length < 2) return false;
+    const writeIntents = [
+      '增加', '添加', '新增', '创建', '录入', '插入', '写入',
+      '生成明细', '生成分录', '生成数据', '生成记录',
+      '修改', '更新', '编辑', '变更',
+      '删除', '移除', '清除', '撤销',
+      '请调用', '执行创建', '执行操作', '请执行',
+      'create', 'insert', 'add', 'update', 'delete',
+    ];
+    return writeIntents.some((kw) => userMsg.includes(kw));
+  }
+
   private isActionHallucination(text: string): boolean {
     // Model described an intended action but never called any tool.
     // Only flag when the text contains action-intent language, not just conversational answers.
