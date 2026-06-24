@@ -579,6 +579,46 @@ ${pkgList}`,
           if (chunk.type === 'text-delta') {
             textBuffer += chunk.textDelta;
             write({ kind: 'token', content: chunk.textDelta });
+          } else if (chunk.type === 'tool-call') {
+            // Show tool invocation as progress so the user can see what the agent is doing
+            const args = chunk.args ?? {};
+            // Build a compact human-readable summary of the call arguments
+            const argSummary = Object.entries(args)
+              .filter(([k]) => !['page', 'pageSize'].includes(k))
+              .slice(0, 4)
+              .map(([k, v]) => {
+                const val = typeof v === 'string' ? v.slice(0, 40) : JSON.stringify(v).slice(0, 40);
+                return `${k}=${val}`;
+              })
+              .join(', ');
+            const label = argSummary ? `${chunk.toolName}(${argSummary})` : chunk.toolName;
+            write({ kind: 'progress', content: `⚙ ${label}` });
+          } else if (chunk.type === 'tool-result') {
+            // Show a compact result summary
+            const result = chunk.result;
+            let summary = '';
+            if (result == null) {
+              summary = 'done';
+            } else if (typeof result === 'object') {
+              if ('error' in result) {
+                summary = `✗ ${String(result.error).slice(0, 80)}`;
+              } else if ('total' in result) {
+                summary = `共 ${result.total} 条`;
+              } else if ('list' in result && Array.isArray(result.list)) {
+                summary = `返回 ${result.list.length} 条`;
+              } else if ('inserted' in result) {
+                summary = `已插入 ${result.inserted} 条`;
+              } else if ('deleted' in result) {
+                summary = `已删除 ${result.deleted}`;
+              } else if ('id' in result) {
+                summary = `id=${String(result.id).slice(0, 8)}…`;
+              } else {
+                summary = '✓';
+              }
+            } else {
+              summary = String(result).slice(0, 60);
+            }
+            write({ kind: 'progress', content: `  → ${summary}` });
           }
         },
       });
