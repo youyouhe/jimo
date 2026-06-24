@@ -1,7 +1,17 @@
 import type { AiMessage } from './types';
+import { useUserStore } from '@/stores/user';
 
-const LIST_KEY = 'autocode-ai-conv-list';
-const MSG_PREFIX = 'autocode-ai-conv-';
+function uid(): string {
+  return useUserStore.getState().userInfo?.id ?? 'anon';
+}
+
+function listKey(): string {
+  return `autocode-ai-${uid()}-conv-list`;
+}
+function msgKey(id: string): string {
+  return `autocode-ai-${uid()}-conv-${id}`;
+}
+
 const LEGACY_KEY = 'autocode-ai-history';
 const MAX_MESSAGES = 200;
 const MAX_CONVS = 50;
@@ -29,7 +39,7 @@ function titleFromMessages(messages: AiMessage[]): string {
 
 export function loadConvList(): ConvMeta[] {
   try {
-    const raw = localStorage.getItem(LIST_KEY);
+    const raw = localStorage.getItem(listKey());
     if (!raw) return [];
     const arr = JSON.parse(raw);
     return Array.isArray(arr) ? arr : [];
@@ -41,7 +51,7 @@ export function loadConvList(): ConvMeta[] {
 function saveConvList(list: ConvMeta[]): void {
   try {
     const trimmed = list.slice(0, MAX_CONVS);
-    localStorage.setItem(LIST_KEY, JSON.stringify(trimmed));
+    localStorage.setItem(listKey(), JSON.stringify(trimmed));
   } catch { /* ignore */ }
 }
 
@@ -51,7 +61,7 @@ const saveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 
 export function loadConvMessages(id: string): AiMessage[] {
   try {
-    const raw = localStorage.getItem(MSG_PREFIX + id);
+    const raw = localStorage.getItem(msgKey(id));
     if (!raw) return [];
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
@@ -66,7 +76,7 @@ export function saveConvMessages(id: string, messages: AiMessage[]): void {
   saveTimers[id] = setTimeout(() => {
     try {
       const sliced = messages.length > MAX_MESSAGES ? messages.slice(-MAX_MESSAGES) : messages;
-      localStorage.setItem(MSG_PREFIX + id, JSON.stringify(sliced));
+      localStorage.setItem(msgKey(id), JSON.stringify(sliced));
     } catch { /* ignore */ }
     delete saveTimers[id];
   }, 500);
@@ -79,7 +89,7 @@ function saveConvMessagesNow(id: string, messages: AiMessage[]): void {
   }
   try {
     const sliced = messages.length > MAX_MESSAGES ? messages.slice(-MAX_MESSAGES) : messages;
-    localStorage.setItem(MSG_PREFIX + id, JSON.stringify(sliced));
+    localStorage.setItem(msgKey(id), JSON.stringify(sliced));
   } catch { /* ignore */ }
 }
 
@@ -117,7 +127,7 @@ export function deleteConv(id: string): void {
     clearTimeout(saveTimers[id]);
     delete saveTimers[id];
   }
-  try { localStorage.removeItem(MSG_PREFIX + id); } catch { /* ignore */ }
+  try { localStorage.removeItem(msgKey(id)); } catch { /* ignore */ }
   const list = loadConvList().filter((c) => c.id !== id);
   saveConvList(list);
 }

@@ -1,13 +1,18 @@
 import type { ChatMessage } from './types';
+import { useUserStore } from '@/stores/user';
 
 const MAX_MESSAGES = 200;
 const MAX_CONVS = 30;
 
+function uid(): string {
+  return useUserStore.getState().userInfo?.id ?? 'anon';
+}
+
 function listKey(businessType: string) {
-  return `entity-agent-${businessType}-conv-list`;
+  return `entity-agent-${uid()}-${businessType}-conv-list`;
 }
 function msgKey(businessType: string, id: string) {
-  return `entity-agent-${businessType}-conv-${id}`;
+  return `entity-agent-${uid()}-${businessType}-conv-${id}`;
 }
 
 export interface ConvMeta {
