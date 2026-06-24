@@ -181,8 +181,11 @@ ${pkgList}`,
 
       // Dynamically load entity agent tools when businessType is provided
       let entityTools: Record<string, any> = {};
+      let entitySystemPrompt = '';
       if (dto.businessType) {
-        entityTools = await this.loadEntityAgentTools(dto.businessType, userId);
+        const loaded = await this.loadEntityAgentTools(dto.businessType, userId);
+        entityTools = loaded.tools;
+        entitySystemPrompt = loaded.systemPrompt;
         if (Object.keys(entityTools).length > 0) {
           this.logger.log(`[AiGenerator] Loaded ${Object.keys(entityTools).length} entity agent tools for '${dto.businessType}'`);
         }
@@ -210,7 +213,9 @@ ${pkgList}`,
 
         const result = streamText({
           model: modelInstance,
-          system: AI_GENERATOR_SYSTEM_PROMPT,
+          // entity agent mode: use entity-specific system prompt (user-defined or auto-generated)
+          // autocode mode: use the standard code-generation system prompt
+          system: Object.keys(entityTools).length > 0 ? entitySystemPrompt : AI_GENERATOR_SYSTEM_PROMPT,
           messages,
           maxSteps: 15,
           // entity agent mode: only CRUD tools. autocode mode: full global tools.
@@ -750,7 +755,8 @@ ${pkgList}`,
    * businessType entity, then builds dynamic tool definitions with parameterized
    * Drizzle SQL execute callbacks (no ModuleRef needed).
    */
-  private async loadEntityAgentTools(businessType: string, userId?: string): Promise<Record<string, any>> {
+  private async loadEntityAgentTools(businessType: string, userId?: string): Promise<{ tools: Record<string, any>; systemPrompt: string }> {
+    const empty = { tools: {}, systemPrompt: '' };
     try {
       const rows = await this.db
         .select({ templates: sysAutoCodeHistories.templates })
@@ -759,11 +765,11 @@ ${pkgList}`,
         .orderBy(desc(sysAutoCodeHistories.createdAt))
         .limit(1);
 
-      if (rows.length === 0) return {};
+      if (rows.length === 0) return empty;
 
       const templates = rows[0].templates as Record<string, any> | null;
       const agentCfg = templates?.__agent as Record<string, any> | undefined;
-      if (!agentCfg) return {};
+      if (!agentCfg) return empty;
 
       const enabledTools: string[] = agentCfg.enabledTools ?? [];
       const tableName: string = agentCfg.tableName ?? businessType;
@@ -970,10 +976,19 @@ ${pkgList}`,
         });
       }
 
-      return tools;
+      // Build entity-specific system prompt.
+      // Use user-defined systemPrompt if provided; otherwise generate a generic one.
+      const customPrompt: string = agentCfg.systemPrompt?.trim() ?? '';
+      const systemPrompt = customPrompt ||
+        `你是「${tableName}」业务数据助手。` +
+        `你可以帮用户查询、录入、修改、搜索「${tableName}」的数据记录。` +
+        `直接调用工具完成操作，结果用简洁的中文说明。` +
+        `不要提建表、字典、Package、代码生成等内容——那不是你的职责。`;
+
+      return { tools, systemPrompt };
     } catch (e: any) {
       this.logger.error(`[AiGenerator] Failed to load entity agent tools for '${businessType}': ${e?.message}`);
-      return {};
+      return empty;
     }
   }
 }
