@@ -673,6 +673,9 @@ ${pkgList}`,
       '现在插入', '开始插入', '插入明细', '录入明细',
       '我来创建', '我来插入', '我会创建', '分批创建',
       '创建借贷', '创建分录', '生成分录', '生成明细',
+      '我来为它创建', '为它创建', '为其创建', '创建三条', '创建两条', '创建明细',
+      '为凭证创建', '为该凭证', '添加明细', '添加分录',
+      '典型分录如下', '分录如下', '会计分录如下',
     ];
     return actionIntents.some((kw) => text.includes(kw));
   }
@@ -1103,11 +1106,15 @@ ${pkgList}`,
           }
           for (const c of userCols) {
             const jsType = c.data_type.includes('int') || c.data_type === 'numeric' ? 'number' : 'string';
-            props[c.column_name] = { type: jsType, description: c.column_name };
+            // For uuid columns that are not the FK, hint that a valid UUID from a related table is needed
+            const desc = c.data_type === 'uuid'
+              ? `UUID reference (use search_${c.column_name}s or search_${c.column_name} to get a valid ID)`
+              : c.column_name;
+            props[c.column_name] = { type: jsType, description: desc };
             if (c.is_nullable === 'NO' && c.column_name !== 'id') required.push(c.column_name);
           }
           tools[`create_${subToolName}`] = tool({
-            description: `Create a new row in sub-table ${subLcTable}`,
+            description: `Create a new row in sub-table ${subLcTable}. For uuid FK columns (like "account"), first search the referenced table to get a valid UUID.`,
             parameters: jsonSchema({ type: 'object', properties: props, required }),
             execute: async (args: any) => {
               const allInsertCols = [...(fkCol ? [fkCol.column_name] : []), ...userCols.map((c: any) => c.column_name)];
@@ -1155,13 +1162,50 @@ ${pkgList}`,
           });
         }
 
+        // For non-FK uuid columns (like "account"), auto-load a search tool for the
+        // referenced table so the model can look up valid UUIDs before inserting.
+        const nonFkUuidCols = userCols.filter((c: any) => c.data_type === 'uuid');
+        for (const uuidCol of nonFkUuidCols) {
+          // Guess the referenced table name: try lc_<colName>s and lc_<colName>
+          const guessedTables = [`lc_${uuidCol.column_name}s`, `lc_${uuidCol.column_name}`];
+          for (const guessedTable of guessedTables) {
+            const tableExists = await this.db.execute(
+              sql`SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=${guessedTable} LIMIT 1`
+            );
+            if (Array.from(tableExists as any).length > 0 && !tools[`search_${uuidCol.column_name}s`] && !tools[`search_${uuidCol.column_name}`]) {
+              const refTbl = sql.identifier(guessedTable);
+              const refToolName = guessedTable.replace(/^lc_/, '');
+              tools[`search_${refToolName}`] = tool({
+                description: `Search rows in ${guessedTable} to find valid UUIDs for the "${uuidCol.column_name}" field. Returns id, name/code/title of each record.`,
+                parameters: jsonSchema({
+                  type: 'object',
+                  properties: {
+                    keyword: { type: 'string', description: 'Optional keyword to filter by name/code/title' },
+                    page: { type: 'number' },
+                    pageSize: { type: 'number' },
+                  },
+                }),
+                execute: async (args: any) => {
+                  const pageSize = Math.min(args.pageSize ?? 50, 200);
+                  const listRes = await this.db.execute(
+                    sql`SELECT * FROM ${refTbl} WHERE deleted_at IS NULL ORDER BY created_at ASC LIMIT ${pageSize}`
+                  );
+                  return { list: Array.from(listRes as any) };
+                },
+              });
+              this.logger.log(`[EntityTool] auto-loaded search_${refToolName} for uuid FK column "${uuidCol.column_name}" in ${subLcTable}`);
+              break;
+            }
+          }
+        }
+
         this.logger.log(`[EntityTool] loaded sub-table tools for ${subLcTable} (${Object.keys(tools).filter(k => k.includes(subToolName)).length} tools)`);
       }
 
       // Build entity-specific system prompt.
       // Use user-defined systemPrompt if provided; otherwise generate a generic one.
       const subTableSummary = subTables.length > 0
-        ? `\n\n关联子表：${subTables.map(t => `\`${t.replace(/^lc_/, '')}\``).join('、')}（可通过 search/create/update/delete 工具操作）。`
+        ? `\n\n关联子表：${subTables.map(t => `\`${t.replace(/^lc_/, '')}\``).join('、')}（可通过 search/create/update/delete 工具操作）。子表中 uuid 类型的外键字段（如 account）需要先用对应的 search_* 工具查出有效 UUID，再传入 create_* 工具。`
         : '';
       const customPrompt: string = agentCfg.systemPrompt?.trim() ?? '';
       const systemPrompt = customPrompt ||
