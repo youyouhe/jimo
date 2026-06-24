@@ -41,6 +41,7 @@ function resolveIconString(icon: string | undefined): React.ReactElement | undef
   return ICON_MAP[icon];
 }
 import { useUserStore } from '@/stores/user';
+import { useTabsStore } from '@/stores/tabs';
 import { getAccessibleMenus, type MenuItem } from '@/services/menu';
 import { logout as logoutApi } from '@/services/auth';
 import { history } from '@umijs/max';
@@ -53,6 +54,8 @@ async function doLogout() {
     // swallow API errors — still clear local state
   }
   useUserStore.getState().clearUser();
+  // Clear persisted tabs so next user doesn't see previous user's pages
+  useTabsStore.getState().closeAll();
   history.push('/login');
 }
 

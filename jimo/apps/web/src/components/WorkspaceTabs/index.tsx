@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 import { Spin } from 'antd';
 import { useLocation, useAppData } from '@umijs/max';
 import { useTabsStore } from '@/stores/tabs';
+import { useUserStore } from '@/stores/user';
+import type { MenuItem } from '@/services/menu';
 import {
   populateRegistry,
   getRegisteredPaths,
@@ -12,6 +14,19 @@ import KeepAliveOutlet from './KeepAliveOutlet';
 
 /** Paths that must never become tabs (redirect target / out-of-layout login). */
 const SKIP_TAB = new Set(['/', '/login']);
+
+/** Collect all accessible paths from the user's menu tree (recursive). */
+function collectMenuPaths(nodes: MenuItem[]): Set<string> {
+  const paths = new Set<string>();
+  const walk = (items: MenuItem[]) => {
+    for (const item of items) {
+      if (item.path) paths.add(item.path);
+      if (item.children?.length) walk(item.children);
+    }
+  };
+  walk(nodes);
+  return paths;
+}
 
 /**
  * Workspace with a multi-tab strip + KeepAlive content area.
@@ -47,17 +62,31 @@ export default function WorkspaceTabs() {
   }
   const ready = populated.current;
 
-  // After first populate, drop persisted tabs that no longer resolve to a
-  // registered page (e.g. after a role/menu change).
+  // After first populate, drop persisted tabs that:
+  // 1. No longer resolve to a registered page (e.g. route changed), AND
+  // 2. Are not in the current user's menu tree (e.g. role changed).
+  // Intersection ensures only tabs that are BOTH registered AND accessible survive.
   useEffect(() => {
-    if (ready) sanitize(getRegisteredPaths());
+    if (!ready) return;
+    const registered = getRegisteredPaths();
+    const menuPaths = collectMenuPaths(useUserStore.getState().menuTree || []);
+    // Valid = registered AND in user's menu. Always keep dashboard.
+    const valid = new Set<string>();
+    valid.add('/dashboard');
+    for (const p of registered) {
+      if (menuPaths.has(p)) valid.add(p);
+    }
+    sanitize(valid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
-  // Route → tab: every navigation opens (or activates) a tab for the path.
+  // Route → tab: only open a tab if the path is in the user's accessible menu tree.
   useEffect(() => {
     const path = location.pathname;
     if (SKIP_TAB.has(path)) return;
+    const menuPaths = collectMenuPaths(useUserStore.getState().menuTree || []);
+    // Don't open tabs for pages the user can't access
+    if (!menuPaths.has(path) && path !== '/dashboard') return;
     const meta = resolveRouteMeta(path);
     openTab({ path, title: meta.title, icon: meta.icon });
   }, [location.pathname, openTab]);
