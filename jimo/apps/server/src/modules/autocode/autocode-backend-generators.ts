@@ -514,8 +514,11 @@ ${grandchildAttach.map(({ grandSchemaVar2, grandFkCol, gf }) => `      const ${g
       for (const r of rows) { (r as any).${gf.name} = ${gf.name}ByChild.get(r.id) || []; }`).join('\n')}
     }` : '';
 
+    // When adding display fields via leftJoin, must explicitly select all needed columns
+    // including id and FK — otherwise updateChildItems cannot diff by id.
+    // When no join is needed, use SELECT * (empty string) which includes id automatically.
     const getSelectExpr = childRelSelectFields
-      ? `{\n      ${detailCols.map((c: any) => `${c.name}: ${childSchemaVar}.${c.name},\n      `).join('')}${childRelSelectFields}\n    }`
+      ? `{\n      id: ${childSchemaVar}.id,\n      ${fkColName}: ${childSchemaVar}.${fkColName},\n      ${detailCols.map((c: any) => `${c.name}: ${childSchemaVar}.${c.name},\n      `).join('')}${childRelSelectFields}\n    }`
       : '';
     childMethods += `
   async get${toPascalCase(field.name)}(${fkColName}: string): Promise<any[]> {
