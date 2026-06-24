@@ -232,18 +232,14 @@ export function generateCreateDto(dto: AutoCodeDto): string {
       : f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal' ? 'number'
       : isOptionalFK ? 'string | null'
       : 'string';
-    const typeInit = f.type === 'boolean' ? 'false'
-      : f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal' ? '0'
-      : isOptionalFK ? 'null'
-      : "''";
-
     if (f.type === 'relation' && f.relationType === 'one-to-many') {
       const arraySwagger = `  @ApiPropertyOptional({ description: '${f.description || f.name}', type: [Object] })`;
       const arrayValidator = '  @IsOptional()\n  @IsArray()';
-      return `${arraySwagger}\n${arrayValidator}\n  ${f.name}: any[] = [];`;
+      return `${arraySwagger}\n${arrayValidator}\n  ${f.name}?: any[];`;
     }
 
-    return `${swagger}\n${validators}\n  ${f.name}: ${dtoType} = ${typeInit};`;
+    const typeDecl = isOptionalFK ? `${dtoType} | null` : f.required ? dtoType : `${dtoType} | undefined`;
+    return `${swagger}\n${validators}\n  ${f.name}${f.required ? '' : '?'}: ${typeDecl};`;
   });
 
   const needsNumber = creatableFields.some((f) => f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal');
@@ -836,13 +832,17 @@ ${oneToManyAttachInFindAll}
     return { list: rows, total, page, pageSize };
   }
 
-  async findOne(id: string): Promise<${n.schemaType}> {
+  async findOne(id: string, userId?: string, isAdmin: boolean = false): Promise<${n.schemaType}> {
+    const conditions = [eq(${n.schemaVar}.id, id), isNull(${n.schemaVar}.deletedAt)];
+    ${visibilityStrategy === 'department' ? `const _deptScope = userId ? await this.ownershipHelper.viewerDeptScope(userId) : undefined;
+    const _ownership = this.ownershipHelper.visibleCondition(${n.schemaVar}.ownerId, ${n.schemaVar}.sharedWith, userId, isAdmin, '${visibilityStrategy}', _deptScope);` : `const _ownership = this.ownershipHelper.visibleCondition(${n.schemaVar}.ownerId, ${n.schemaVar}.sharedWith, userId, isAdmin, '${visibilityStrategy}');`}
+    if (_ownership) conditions.push(_ownership);
 ${hasSelfRef ? `    const parent_alias = alias(${n.schemaVar}, 'parent_alias');\n` : ''}    const rows = await this.db
       .select(${hasManyToOne ? `{
         ...getTableColumns(${n.schemaVar}),${manyToOneSelectFields}${selfRefSelects}
       }` : ``})
       .from(${n.schemaVar})${manyToOneJoins}${selfRefJoins}
-      .where(and(eq(${n.schemaVar}.id, id), isNull(${n.schemaVar}.deletedAt)))
+      .where(and(...conditions))
       .limit(1);
 
     if (rows.length === 0) {
@@ -908,8 +908,8 @@ ${manyToManyFields.length > 0 ? `
 `}
   }
 
-  async update(id: string, dto: Update${n.pascalSingular}Dto): Promise<${n.schemaType}> {
-    const existing = await this.findOne(id);
+  async update(id: string, dto: Update${n.pascalSingular}Dto, userId?: string, isAdmin: boolean = false): Promise<${n.schemaType}> {
+    const existing = await this.findOne(id, userId, isAdmin);
 
 ${updateUniqueChecks}
     type ${n.pascalSingular}UpdateFields = {
@@ -928,7 +928,11 @@ ${updateDataBuilder}
     const rows = await this.db
       .update(${n.schemaVar})
       .set(updateData)
-      .where(and(eq(${n.schemaVar}.id, id), isNull(${n.schemaVar}.deletedAt)))
+      .where(
+        isAdmin
+          ? and(eq(${n.schemaVar}.id, id), isNull(${n.schemaVar}.deletedAt))
+          : and(eq(${n.schemaVar}.id, id), isNull(${n.schemaVar}.deletedAt), eq(${n.schemaVar}.ownerId, userId!)),
+      )
       .returning();
 ${manyToManyFields.length > 0 ? '\n' + manyToManyFields.map((f) => {
       return `    if (dto.${f.name} !== undefined) {
@@ -949,8 +953,8 @@ ${oneToManyFields.map((field) => `    if (dto.${field.name} !== undefined) {
     return rows[0]!;
   }
 
-  async remove(id: string): Promise<void> {
-    await this.findOne(id);
+  async remove(id: string, userId?: string, isAdmin: boolean = false): Promise<void> {
+    await this.findOne(id, userId, isAdmin);
 
 ${oneToManyRemoveCleanup}${manyToManyFields.length > 0 ? manyToManyFields.map((f) => `    // Remove all ${f.name} relations before deleting
     const existing${toPascalCase(f.name)} = await this.get${toPascalCase(f.name)}(id);
@@ -962,10 +966,14 @@ ${oneToManyRemoveCleanup}${manyToManyFields.length > 0 ? manyToManyFields.map((f
     await this.db
       .update(${n.schemaVar})
       .set({ deletedAt: sql\`NOW()\` })
-      .where(and(eq(${n.schemaVar}.id, id), isNull(${n.schemaVar}.deletedAt)));
+      .where(
+        isAdmin
+          ? and(eq(${n.schemaVar}.id, id), isNull(${n.schemaVar}.deletedAt))
+          : and(eq(${n.schemaVar}.id, id), isNull(${n.schemaVar}.deletedAt), eq(${n.schemaVar}.ownerId, userId!)),
+      );
   }
 
-  async batchRemove(ids: string[]): Promise<{ count: number }> {
+  async batchRemove(ids: string[], userId?: string, isAdmin: boolean = false): Promise<{ count: number }> {
 ${oneToManyBatchRemoveCleanup}${manyToManyFields.length > 0 ? `    // Remove all many-to-many relations for each id
     for (const id of ids) {
 ${manyToManyFields.map((f) => `      try {
@@ -982,7 +990,11 @@ ${manyToManyFields.map((f) => `      try {
     const rows = await this.db
       .update(${n.schemaVar})
       .set({ deletedAt: sql\`NOW()\` })
-      .where(and(inArray(${n.schemaVar}.id, ids), isNull(${n.schemaVar}.deletedAt)))
+      .where(
+        isAdmin
+          ? and(inArray(${n.schemaVar}.id, ids), isNull(${n.schemaVar}.deletedAt))
+          : and(inArray(${n.schemaVar}.id, ids), isNull(${n.schemaVar}.deletedAt), eq(${n.schemaVar}.ownerId, userId!)),
+      )
       .returning({ id: ${n.schemaVar}.id });
 
     return { count: rows.length };
@@ -1048,8 +1060,10 @@ export class ${n.pascalSingular}Controller {
   @ApiOperation({ summary: 'Get ${n.kebabSingular} by id' })
   @ApiResponse({ status: 200, description: 'Returns the ${n.kebabSingular}' })
   @ApiResponse({ status: 404, description: '${n.pascalSingular} not found' })
-  async findOne(@Param('id') id: string): Promise<ApiResp<${n.schemaType}>> {
-    const data = await this.${n.camelSingular}Service.findOne(id);
+  async findOne(@Param('id') id: string, @CurrentUser() user: { sub: string; roles: string[] }): Promise<ApiResp<${n.schemaType}>> {
+    const roles = user?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('admin');
+    const data = await this.${n.camelSingular}Service.findOne(id, user?.sub, isAdmin);
     return { code: 0, msg: 'success', data };
   }
 
@@ -1071,8 +1085,11 @@ export class ${n.pascalSingular}Controller {
   async update(
     @Param('id') id: string,
     @Body() dto: Update${n.pascalSingular}Dto,
+    @CurrentUser() user: { sub: string; roles: string[] },
   ): Promise<ApiResp<${n.schemaType}>> {
-    const data = await this.${n.camelSingular}Service.update(id, dto);
+    const roles = user?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('admin');
+    const data = await this.${n.camelSingular}Service.update(id, dto, user?.sub, isAdmin);
     return { code: 0, msg: 'success', data };
   }
 
@@ -1080,8 +1097,10 @@ export class ${n.pascalSingular}Controller {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Batch delete ${n.kebabName} by ids' })
   @ApiResponse({ status: 200, description: '${n.pascalName} deleted successfully' })
-  async batchRemove(@Body() dto: BatchDeleteDto): Promise<ApiResp<{ count: number }>> {
-    const data = await this.${n.camelSingular}Service.batchRemove(dto.ids);
+  async batchRemove(@Body() dto: BatchDeleteDto, @CurrentUser() user: { sub: string; roles: string[] }): Promise<ApiResp<{ count: number }>> {
+    const roles = user?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('admin');
+    const data = await this.${n.camelSingular}Service.batchRemove(dto.ids, user?.sub, isAdmin);
     return { code: 0, msg: 'success', data };
   }
 
@@ -1090,8 +1109,10 @@ export class ${n.pascalSingular}Controller {
   @ApiOperation({ summary: 'Delete ${n.kebabSingular} by id' })
   @ApiResponse({ status: 200, description: '${n.pascalSingular} deleted successfully' })
   @ApiResponse({ status: 404, description: '${n.pascalSingular} not found' })
-  async remove(@Param('id') id: string): Promise<ApiResp<null>> {
-    await this.${n.camelSingular}Service.remove(id);
+  async remove(@Param('id') id: string, @CurrentUser() user: { sub: string; roles: string[] }): Promise<ApiResp<null>> {
+    const roles = user?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('admin');
+    await this.${n.camelSingular}Service.remove(id, user?.sub, isAdmin);
     return { code: 0, msg: 'success', data: null };
   }
 }
@@ -1115,5 +1136,212 @@ import { ${n.pascalSingular}Service } from './${n.kebabSingular}.service';${hasC
   exports: [${n.pascalSingular}Service],
 })
 export class ${n.pascalSingular}Module {}
+`;
+}
+
+// ---------------------------------------------------------------------------
+// Agent service / module generators
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a JSON Schema property string for a single AutoCodeField.
+ */
+function fieldToJsonSchemaProp(f: AutoCodeField): string {
+  const desc = (f.description || f.name).replace(/'/g, "\\'");
+  let typeStr: string;
+  switch (f.type) {
+    case 'integer': case 'bigint': typeStr = 'number'; break;
+    case 'decimal': typeStr = 'string'; break;
+    case 'boolean': typeStr = 'boolean'; break;
+    case 'timestamp': typeStr = 'string'; break;
+    case 'uuid': typeStr = 'string'; break;
+    case 'relation': typeStr = 'string'; break;
+    case 'dict': typeStr = 'string'; break;
+    default: typeStr = 'string'; break;
+  }
+  return `{ type: '${typeStr}', description: '${desc}' }`;
+}
+
+/**
+ * Generate EntityAgentService that wraps entity CRUD as AI-callable tools.
+ */
+export function generateAgentService(dto: AutoCodeDto): string {
+  const n = deriveNames(dto.tableName);
+  const enabledTools = dto.agentConfig?.tools ?? ['query', 'create', 'update', 'delete', 'search', 'mock'];
+
+  const creatableFields = dto.fields.filter(
+    (f) => f.creatable && !(f.type === 'relation' && f.relationType === 'one-to-many') && f.type !== 'code',
+  );
+  const editableFields = dto.fields.filter(
+    (f) => f.editable && !(f.type === 'relation' && f.relationType === 'one-to-many'),
+  );
+  const searchableFields = dto.fields.filter((f) => f.searchable);
+  const requiredCreatable = creatableFields.filter((f) => f.required);
+
+  const tools: string[] = [];
+
+  // ---- query tool ----
+  if (enabledTools.includes('query')) {
+    tools.push(`    query_${n.camelName}: {
+      description: 'Get a ${n.kebabSingular} record by ID',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'Record UUID' } },
+        required: ['id'],
+      },
+      execute: async (args: { id: string }) => {
+        return this.${n.camelSingular}Service.findOne(args.id, userId, true);
+      },
+    }`);
+  }
+
+  // ---- create tool ----
+  if (enabledTools.includes('create') && creatableFields.length > 0) {
+    const createProps = creatableFields.map((f) => `        ${f.name}: ${fieldToJsonSchemaProp(f)},`).join('\n');
+    const createReq = requiredCreatable.map((f) => `'${f.name}'`).join(', ');
+    tools.push(`    create_${n.camelName}: {
+      description: 'Create a new ${n.kebabSingular} record',
+      parameters: {
+        type: 'object',
+        properties: {
+${createProps}
+        },
+        required: [${createReq}],
+      },
+      execute: async (args: any) => {
+        return this.${n.camelSingular}Service.create(args, userId);
+      },
+    }`);
+  }
+
+  // ---- update tool ----
+  if (enabledTools.includes('update') && editableFields.length > 0) {
+    const updateProps = editableFields.map((f) => `        ${f.name}: ${fieldToJsonSchemaProp(f)},`).join('\n');
+    tools.push(`    update_${n.camelName}: {
+      description: 'Update a ${n.kebabSingular} record',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Record UUID' },
+${updateProps}
+        },
+        required: ['id'],
+      },
+      execute: async (args: any) => {
+        return this.${n.camelSingular}Service.update(args.id, args, userId, true);
+      },
+    }`);
+  }
+
+  // ---- delete tool ----
+  if (enabledTools.includes('delete')) {
+    tools.push(`    delete_${n.camelName}: {
+      description: 'Soft-delete a ${n.kebabSingular} record by ID',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'Record UUID' } },
+        required: ['id'],
+      },
+      execute: async (args: { id: string }) => {
+        await this.${n.camelSingular}Service.remove(args.id, userId, true);
+        return { deleted: args.id };
+      },
+    }`);
+  }
+
+  // ---- search tool ----
+  if (enabledTools.includes('search')) {
+    const searchProps = ['page', 'pageSize', ...searchableFields.map((f) => f.name)];
+    const propLines: string[] = [];
+    propLines.push('        page: { type: \'number\', description: \'Page number (1-based)\' },');
+    propLines.push('        pageSize: { type: \'number\', description: \'Items per page\' },');
+    for (const f of searchableFields) {
+      if (f.type === 'relation') continue;
+      if (f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal') {
+        propLines.push(`        ${f.name}Min: { type: 'number', description: '${f.description || f.name} minimum' },`);
+        propLines.push(`        ${f.name}Max: { type: 'number', description: '${f.description || f.name} maximum' },`);
+      } else {
+        propLines.push(`        ${f.name}: ${fieldToJsonSchemaProp(f)},`);
+      }
+    }
+    tools.push(`    search_${n.camelName}: {
+      description: 'Search ${n.kebabName} with filters and pagination',
+      parameters: {
+        type: 'object',
+        properties: {
+${propLines.join('\n')}
+        },
+      },
+      execute: async (args: any) => {
+        return this.${n.camelSingular}Service.findAll(args, userId, true);
+      },
+    }`);
+  }
+
+  // ---- mock tool ----
+  if (enabledTools.includes('mock')) {
+    tools.push(`    mock_${n.camelName}: {
+      description: 'Generate mock data rows for ${n.kebabName}',
+      parameters: {
+        type: 'object',
+        properties: { count: { type: 'number', description: 'Number of mock rows (1-100)' } },
+      },
+      execute: async (args: { count?: number }) => {
+        const result = await this.autocodeService.generateMockForTable('${dto.tableName}', args.count ?? 10);
+        return { ok: true, inserted: result.inserted };
+      },
+    }`);
+  }
+
+  const systemPrompt = dto.agentConfig?.systemPrompt ?? '';
+
+  return `import { Injectable, Inject } from '@nestjs/common';
+import { DATABASE_CONNECTION, DrizzleDb } from '../../../db/connection';
+import { ${n.pascalSingular}Service } from '../${n.kebabSingular}.service';
+import { AutocodeService } from '../../autocode/autocode.service';
+
+/**
+ * Entity agent service for ${n.kebabName}.
+ * Wraps CRUD operations as AI-callable tool definitions.
+${systemPrompt ? ` * System prompt: ${systemPrompt}` : ''}
+ */
+@Injectable()
+export class ${n.pascalSingular}AgentService {
+  constructor(
+    private readonly ${n.camelSingular}Service: ${n.pascalSingular}Service,
+    @Inject(DATABASE_CONNECTION) private readonly db: DrizzleDb,
+    private readonly autocodeService: AutocodeService,
+  ) {}
+
+  /**
+   * Return AI-callable tool definitions scoped to the given user.
+   * Tools are compatible with the Vercel AI SDK streamText() tools parameter.
+   */
+  getTools(userId: string): Record<string, any> {
+    return {
+${tools.join(',\n\n')},
+    };
+  }
+}
+`;
+}
+
+/**
+ * Generate NestJS module file for the entity agent service.
+ */
+export function generateAgentModule(dto: AutoCodeDto): string {
+  const n = deriveNames(dto.tableName);
+
+  return `import { Module } from '@nestjs/common';
+import { ${n.pascalSingular}Module } from '../${n.kebabSingular}.module';
+import { AutocodeModule } from '../../autocode/autocode.module';
+import { ${n.pascalSingular}AgentService } from './${n.kebabSingular}.agent.service';
+
+@Module({
+  imports: [${n.pascalSingular}Module, AutocodeModule],
+  providers: [${n.pascalSingular}AgentService],
+  exports: [${n.pascalSingular}AgentService],
+})
+export class ${n.pascalSingular}AgentModule {}
 `;
 }
