@@ -196,23 +196,28 @@ ${pkgList}`,
         }
       }
 
-      // ── Retry loop: detect hallucinated "已生成" claims that never called propose_entity ──
+      // ── Retry loop: detect hallucination (model describes action but never calls a tool) ──
       const MAX_RETRIES = 3;
       let calledProposeEntity = false;
+      let calledAnyEntityTool = false;  // tracks whether any entity-agent tool was invoked
       let textBuffer = '';
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         if (aborted) break;
 
         calledProposeEntity = false;
+        calledAnyEntityTool = false;
         textBuffer = '';
 
         if (attempt > 1) {
           this.logger.warn(`[AiGenerator] 🔄 retry attempt ${attempt}/${MAX_RETRIES}`);
-          write({ kind: 'retry', attempt, maxRetries: MAX_RETRIES, content: '检测到未实际提交工具调用，正在重试…' });
+          write({ kind: 'retry', attempt, maxRetries: MAX_RETRIES, content: '检测到未实际执行操作，正在重试…' });
+          const isEntityMode = Object.keys(entityTools).length > 0;
           messages.push({
             role: 'user',
-            content: '## ⚠️ 你上一轮的回复里描述了实体字段但**没有调用 propose_entity 工具**提交！你只是在文字里"说"了，但没有真正执行。请**现在立刻**调用 propose_entity 工具提交实体定义。不要再只描述不提交。如果涉及字典或 Package，也在同一轮调 create_dict / create_package。',
+            content: isEntityMode
+              ? '## ⚠️ 你上一轮只描述了操作计划，但**没有实际调用任何工具**执行！请**立刻**调用相应工具（create_*/search_*/update_*/delete_*）完成操作，不要只用文字描述。'
+              : '## ⚠️ 你上一轮的回复里描述了实体字段但**没有调用 propose_entity 工具**提交！你只是在文字里"说"了，但没有真正执行。请**现在立刻**调用 propose_entity 工具提交实体定义。不要再只描述不提交。如果涉及字典或 Package，也在同一轮调 create_dict / create_package。',
           });
         }
 
@@ -226,8 +231,19 @@ ${pkgList}`,
           // Users can cancel via the frontend stop button; the server handles
           // res.on('close') for genuine disconnects.
           maxSteps: 200,
-          // entity agent mode: only CRUD tools. autocode mode: full global tools.
-          tools: Object.keys(entityTools).length > 0 ? entityTools : {
+          // entity agent mode: wrap each tool to track if any tool was actually called
+          tools: Object.keys(entityTools).length > 0 ? Object.fromEntries(
+            Object.entries(entityTools).map(([name, t]: [string, any]) => [
+              name,
+              {
+                ...t,
+                execute: async (...args: any[]) => {
+                  calledAnyEntityTool = true;
+                  return t.execute(...args);
+                },
+              },
+            ])
+          ) : {
             propose_entity: tool({
               description: PROPOSE_ENTITY_TOOL.function.description,
               parameters: jsonSchema(PROPOSE_ENTITY_TOOL.function.parameters as any),
@@ -590,22 +606,33 @@ ${pkgList}`,
 
       if (aborted) break;
 
-      // ── Hallucination detection (global tools mode only) ──
-      // Model described creation ("已生成"/"已创建"/"字段总览") but never
-      // actually called propose_entity. Retry with a corrective nudge.
-      // Skip in entity-agent mode (no propose_entity tool available).
-      if (Object.keys(entityTools).length === 0 && !calledProposeEntity && this.isCreationHallucination(textBuffer)) {
+      const isEntityMode = Object.keys(entityTools).length > 0;
+
+      // ── Hallucination detection: entity agent mode ──
+      // Model described the operation but never called any tool.
+      if (isEntityMode && !calledAnyEntityTool && this.isActionHallucination(textBuffer)) {
+        this.logger.warn(
+          `[AiGenerator] ⚠ entity agent hallucination on attempt ${attempt}/${MAX_RETRIES}: ` +
+          `model described action but called no tools (textLen=${textBuffer.length})`,
+        );
+        if (attempt < MAX_RETRIES) continue;
+        write({ kind: 'warning', content: 'AI 多次描述了操作计划但未实际执行，请尝试重新描述需求或换一种方式提问。' });
+        break;
+      }
+
+      // ── Hallucination detection: autocode mode ──
+      // Model described creation ("已生成"/"已创建"/"字段总览") but never called propose_entity.
+      if (!isEntityMode && !calledProposeEntity && this.isCreationHallucination(textBuffer)) {
         this.logger.warn(
           `[AiGenerator] ⚠ hallucination on attempt ${attempt}/${MAX_RETRIES}: ` +
           `model claimed creation but never called propose_entity (textLen=${textBuffer.length})`,
         );
         if (attempt < MAX_RETRIES) continue;
-        // Exhausted retries: warn the user via SSE
         write({ kind: 'warning', content: 'AI 多次描述实体方案但未实际调用提交工具，请尝试重新描述您的需求。' });
         break;
       }
 
-      // Success (tool was called) or not a creation attempt — done
+      // Success (tool was called) or not an action attempt — done
       break;
     } // end retry loop
 
@@ -629,6 +656,19 @@ ${pkgList}`,
    * Detect creation hallucination: model claimed to have created/提交 an entity
    * in text but never actually called propose_entity.
    */
+  private isActionHallucination(text: string): boolean {
+    // Model described an intended action but never called any tool.
+    // Only flag when the text contains action-intent language, not just conversational answers.
+    if (text.length < 30) return false;
+    const actionIntents = [
+      '现在创建', '开始创建', '为您创建', '帮你创建', '批量创建',
+      '现在插入', '开始插入', '插入明细', '录入明细',
+      '我来创建', '我来插入', '我会创建', '分批创建',
+      '创建借贷', '创建分录', '生成分录', '生成明细',
+    ];
+    return actionIntents.some((kw) => text.includes(kw));
+  }
+
   private isCreationHallucination(text: string): boolean {
     // Must contain creation-claim keywords
     const creationClaims = ['已生成', '已创建', '已提交', '已为你生成', '表已就绪', '字段总览', '需要我插入 mock'];
