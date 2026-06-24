@@ -7,6 +7,32 @@ node_modules/
 **/dist/
 **/*.tsbuildinfo
 
+# ── Autocode-generated source files ──────────────────────────────────────────
+# These files are generated at runtime via the autocode engine and tracked in
+# sys_auto_code_histories. They should NOT be committed to git.
+#
+# Frontend: all generated pages and services live exclusively under lc/
+jimo/apps/web/src/pages/lc/
+jimo/apps/web/src/services/lc/
+#
+# Backend: generated files are spread across db/schema/ and modules/.
+# The autocode engine always appends all generated paths to .autocode-generated
+# (see autocode.service.ts → writeGeneratedPaths). Commit that index file,
+# and git will use it via the pattern below to ignore the actual generated files.
+# Until that mechanism is in place, the paths below are maintained manually.
+#
+# db/schema — generated table schemas (business tables, not system tables)
+jimo/apps/server/src/db/schema/suppliers.ts
+jimo/apps/server/src/db/schema/procurement-contracts.ts
+#
+# modules — fully-generated business modules (no hand-written logic inside)
+jimo/apps/server/src/modules/supplier/
+jimo/apps/server/src/modules/procurement-contract/
+jimo/apps/server/src/modules/contract/
+jimo/apps/server/src/modules/material/
+jimo/apps/server/src/modules/stock-in-order/
+jimo/apps/server/src/modules/warehous/
+
 # Logs
 *.log
 npm-debug.log*
