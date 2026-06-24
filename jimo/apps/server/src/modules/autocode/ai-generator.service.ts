@@ -199,7 +199,8 @@ ${pkgList}`,
       // ── Retry loop: detect hallucination (model describes action but never calls a tool) ──
       const MAX_RETRIES = 3;
       let calledProposeEntity = false;
-      let calledAnyEntityTool = false;  // tracks whether any entity-agent tool was invoked
+      let calledAnyEntityTool = false;    // any entity tool was invoked
+      let calledMutatingEntityTool = false; // a create/update/delete tool was invoked
       let textBuffer = '';
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -207,6 +208,7 @@ ${pkgList}`,
 
         calledProposeEntity = false;
         calledAnyEntityTool = false;
+        calledMutatingEntityTool = false;
         textBuffer = '';
 
         if (attempt > 1) {
@@ -239,6 +241,9 @@ ${pkgList}`,
                 ...t,
                 execute: async (...args: any[]) => {
                   calledAnyEntityTool = true;
+                  if (/^(create|update|delete)_/.test(name)) {
+                    calledMutatingEntityTool = true;
+                  }
                   return t.execute(...args);
                 },
               },
@@ -609,14 +614,17 @@ ${pkgList}`,
       const isEntityMode = Object.keys(entityTools).length > 0;
 
       // ── Hallucination detection: entity agent mode ──
-      // Model described the operation but never called any tool.
-      if (isEntityMode && !calledAnyEntityTool && this.isActionHallucination(textBuffer)) {
+      // Model described a create/write action but never called a mutating tool.
+      // Note: calling search tools does NOT satisfy this — the model must have
+      // actually called create_*/update_*/delete_* to count as non-hallucinated.
+      if (isEntityMode && this.isActionHallucination(textBuffer) && !calledMutatingEntityTool) {
         this.logger.warn(
           `[AiGenerator] ⚠ entity agent hallucination on attempt ${attempt}/${MAX_RETRIES}: ` +
-          `model described action but called no tools (textLen=${textBuffer.length})`,
+          `model described create/write action but called no mutating tools ` +
+          `(calledAny=${calledAnyEntityTool}, textLen=${textBuffer.length})`,
         );
         if (attempt < MAX_RETRIES) continue;
-        write({ kind: 'warning', content: 'AI 多次描述了操作计划但未实际执行，请尝试重新描述需求或换一种方式提问。' });
+        write({ kind: 'warning', content: 'AI 多次描述了操作计划但未实际执行写入，请尝试重新描述需求或换一种方式提问。' });
         break;
       }
 
