@@ -976,12 +976,139 @@ ${pkgList}`,
         });
       }
 
+      // Discover and load sub-table tools (one-to-many children of this master table).
+      // Sub-tables follow the naming pattern lc_<singular(master)>_<child> and are
+      // NOT in sys_auto_code_histories — detect them via information_schema.
+      const subTablePrefix = `lc_${tableName.replace(/s$/, '')}_`;
+      const subTableRows = await this.db.execute(
+        sql`SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name LIKE ${subTablePrefix + '%'}
+              AND table_name != ${lcTable}
+            ORDER BY table_name`
+      );
+      const subTables = Array.from(subTableRows as any[]).map((r: any) => String(r.table_name));
+
+      for (const subLcTable of subTables) {
+        // Derive a readable tool-name prefix: strip the lc_ and master prefix
+        const subToolName = subLcTable.replace(/^lc_/, '');
+
+        // Get columns for this sub-table
+        const colRows = await this.db.execute(
+          sql`SELECT column_name, data_type, is_nullable
+              FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = ${subLcTable}
+              ORDER BY ordinal_position`
+        );
+        const allCols = Array.from(colRows as any[]);
+        const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at', 'deleted_at', 'owner_id', 'shared_with']);
+        const dataCols = allCols.filter((c: any) => !SYSTEM_COLS.has(c.column_name));
+
+        // FK column: any uuid column that ends with _id (e.g. voucher_id)
+        const fkCol = dataCols.find((c: any) => c.column_name.endsWith('_id') && c.data_type === 'uuid');
+        const userCols = dataCols.filter((c: any) => c !== fkCol);
+
+        const subTbl = sql.identifier(subLcTable);
+
+        // search sub-table rows by parent FK
+        tools[`search_${subToolName}`] = tool({
+          description: `Search rows in sub-table ${subLcTable}. Use ${fkCol?.column_name ?? 'parent_id'} to filter by parent record.`,
+          parameters: jsonSchema({
+            type: 'object',
+            properties: {
+              ...(fkCol ? { [fkCol.column_name]: { type: 'string', description: `Parent ${tableName} UUID` } } : {}),
+              page: { type: 'number' },
+              pageSize: { type: 'number' },
+            },
+          }),
+          execute: async (args: any) => {
+            const page = Math.max(args.page ?? 1, 1);
+            const pageSize = Math.min(args.pageSize ?? 50, 200);
+            const off = (page - 1) * pageSize;
+            const fkFilter = fkCol && args[fkCol.column_name]
+              ? sql`AND ${sql.identifier(fkCol.column_name)} = ${args[fkCol.column_name]}`
+              : sql``;
+            const listRes = await this.db.execute(
+              sql`SELECT * FROM ${subTbl} WHERE deleted_at IS NULL ${fkFilter} ORDER BY created_at ASC LIMIT ${pageSize} OFFSET ${off}`
+            );
+            return { list: Array.from(listRes as any), page, pageSize };
+          },
+        });
+
+        // create a sub-table row
+        if (userCols.length > 0) {
+          const props: Record<string, any> = {};
+          const required: string[] = [];
+          if (fkCol) {
+            props[fkCol.column_name] = { type: 'string', description: `Parent ${tableName} UUID (required)` };
+            required.push(fkCol.column_name);
+          }
+          for (const c of userCols) {
+            const jsType = c.data_type.includes('int') || c.data_type === 'numeric' ? 'number' : 'string';
+            props[c.column_name] = { type: jsType, description: c.column_name };
+            if (c.is_nullable === 'NO' && c.column_name !== 'id') required.push(c.column_name);
+          }
+          tools[`create_${subToolName}`] = tool({
+            description: `Create a new row in sub-table ${subLcTable}`,
+            parameters: jsonSchema({ type: 'object', properties: props, required }),
+            execute: async (args: any) => {
+              const allInsertCols = [...(fkCol ? [fkCol.column_name] : []), ...userCols.map((c: any) => c.column_name)];
+              const colIdents = allInsertCols.map((n) => sql.identifier(n));
+              const vals = allInsertCols.map((n) => sql`${args[n] ?? null}`);
+              const res = await this.db.execute(
+                sql`INSERT INTO ${subTbl} (${sql.join(colIdents, sql`, `)}) VALUES (${sql.join(vals, sql`, `)}) RETURNING *`
+              );
+              return Array.from(res as any)[0] ?? null;
+            },
+          });
+
+          tools[`update_${subToolName}`] = tool({
+            description: `Update a row in sub-table ${subLcTable} by id`,
+            parameters: jsonSchema({
+              type: 'object',
+              properties: { id: { type: 'string' }, ...props },
+              required: ['id'],
+            }),
+            execute: async (args: any) => {
+              const setPairs = userCols
+                .filter((c: any) => args[c.column_name] !== undefined)
+                .map((c: any) => sql`${sql.identifier(c.column_name)} = ${args[c.column_name]}`);
+              if (setPairs.length === 0) return { updated: false };
+              const res = await this.db.execute(
+                sql`UPDATE ${subTbl} SET ${sql.join(setPairs, sql`, `)}, updated_at = NOW() WHERE id = ${args.id} AND deleted_at IS NULL RETURNING *`
+              );
+              return Array.from(res as any)[0] ?? null;
+            },
+          });
+
+          tools[`delete_${subToolName}`] = tool({
+            description: `Soft-delete a row in sub-table ${subLcTable} by id`,
+            parameters: jsonSchema({
+              type: 'object',
+              properties: { id: { type: 'string', description: 'Row UUID' } },
+              required: ['id'],
+            }),
+            execute: async (args: { id: string }) => {
+              await this.db.execute(
+                sql`UPDATE ${subTbl} SET deleted_at = NOW() WHERE id = ${args.id} AND deleted_at IS NULL`
+              );
+              return { deleted: args.id };
+            },
+          });
+        }
+
+        this.logger.log(`[EntityTool] loaded sub-table tools for ${subLcTable} (${Object.keys(tools).filter(k => k.includes(subToolName)).length} tools)`);
+      }
+
       // Build entity-specific system prompt.
       // Use user-defined systemPrompt if provided; otherwise generate a generic one.
+      const subTableSummary = subTables.length > 0
+        ? `\n\n关联子表：${subTables.map(t => `\`${t.replace(/^lc_/, '')}\``).join('、')}（可通过 search/create/update/delete 工具操作）。`
+        : '';
       const customPrompt: string = agentCfg.systemPrompt?.trim() ?? '';
       const systemPrompt = customPrompt ||
         `你是「${tableName}」业务数据助手。` +
-        `你可以帮用户查询、录入、修改、搜索「${tableName}」的数据记录。` +
+        `你可以帮用户查询、录入、修改、搜索「${tableName}」及其关联子表的数据记录。${subTableSummary}` +
         `直接调用工具完成操作，结果用简洁的中文说明。` +
         `不要提建表、字典、Package、代码生成等内容——那不是你的职责。`;
 
