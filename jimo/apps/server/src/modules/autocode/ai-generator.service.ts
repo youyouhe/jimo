@@ -1057,7 +1057,7 @@ ${pkgList}`,
             if (c.is_nullable === 'NO' && c.column_name !== 'id') required.push(c.column_name);
           }
           tools[`create_${subToolName}`] = tool({
-            description: `【写入】在子表 ${subLcTable} 中新建一条记录并立即写入数据库。用户要求"添加/新增/录入明细/添加分录"时必须调用此工具。${fkCol ? `必填字段 ${fkCol.column_name} = 父记录 UUID（从 search_${tableName} 结果取）。` : ''}uuid 类型字段需先用对应的 search_* 工具查出有效 UUID 再传入。`,
+            description: `【写入】在子表 ${subLcTable} 中新建一条记录。${fkCol ? `"${fkCol.column_name}" 是父表外键，必须传入 search_${tableName} 返回的某条主键 id。` : ''}其余 uuid 类型字段同理，均须先查询对应表取得主键后再传入，不可凭空填写。`,
             parameters: jsonSchema({ type: 'object', properties: props, required }),
             execute: async (args: any) => {
               const allInsertCols = [...(fkCol ? [fkCol.column_name] : []), ...userCols.map((c: any) => c.column_name)];
@@ -1119,9 +1119,8 @@ ${pkgList}`,
               const refTbl = sql.identifier(guessedTable);
               const refToolName = guessedTable.replace(/^lc_/, '');
               tools[`search_${refToolName}`] = tool({
-                description: `【查询】查询 ${guessedTable} 获取有效记录及其 UUID。` +
-                  `在调用 create_${subToolName} 时，"${uuidCol.column_name}" 字段必须填写本工具返回结果中的 "id" 字段值（UUID 格式），` +
-                  `不能使用 code/name 等其他字段，也不能自行构造 UUID。`,
+                description: `【查询】查询 ${guessedTable} 的记录列表，每条记录包含其主键 "id"。` +
+                  `子表外键字段 "${uuidCol.column_name}" 必须引用此表某条记录的主键 —— 先调本工具，再将结果中对应记录的 "id" 传给 create_${subToolName}。`,
                 parameters: jsonSchema({
                   type: 'object',
                   properties: {
@@ -1144,7 +1143,7 @@ ${pkgList}`,
                     return textCols;
                   });
                   return {
-                    note: `"${uuidCol.column_name}" 字段必须使用以下列表中的 "id" 值，不得自行构造`,
+                    note: `外键字段 "${uuidCol.column_name}" 必须引用以下某条记录的主键 "id"`,
                     list: rows,
                   };
                 },
@@ -1161,7 +1160,7 @@ ${pkgList}`,
       // Build entity-specific system prompt.
       // Use user-defined systemPrompt if provided; otherwise generate a generic one.
       const subTableSummary = subTables.length > 0
-        ? `\n\n关联子表：${subTables.map(t => `\`${t.replace(/^lc_/, '')}\``).join('、')}（可通过 search/create/update/delete 工具操作）。子表中 uuid 类型的外键字段（如 account）需要先用对应的 search_* 工具查出有效 UUID，再传入 create_* 工具。`
+        ? `\n\n关联子表：${subTables.map(t => `\`${t.replace(/^lc_/, '')}\``).join('、')}（可通过 search/create/update/delete 工具操作）。子表中凡是外键字段（引用其他表），必须先查询被引用表取得主键，再作为外键值传入，不可凭空填写。`
         : '';
       const customPrompt: string = agentCfg.systemPrompt?.trim() ?? '';
       const systemPrompt = customPrompt ||
@@ -1170,7 +1169,7 @@ ${pkgList}`,
 ## 核心行为准则
 1. **立即调用工具，不要先描述计划**：用户要求增/改/删时，直接调用对应的【写入】工具执行，不要先用文字描述"我将要做什么"再做。
 2. **工具调用顺序**：需要写入前如不知道 ID，先调【查询】工具取到 id，再调【写入】工具。
-3. **uuid 外键字段**：子表中 uuid 类型的字段（如 account）必须先调对应的查询工具取到有效 UUID，不能自己编造。
+3. **外键约束**：子表中引用其他表的外键字段，必须先查询被引用表取得目标记录的主键，再将该主键传入写入工具。外键的值由被引用表的主键决定，不可凭空填写。
 4. **结果用中文简洁说明**：调用完成后报告结果（成功几条、失败原因等），不要重复工具内部细节。
 5. **不涉及建表、字典、Package**：这些不在你的职责范围内。`;
 
