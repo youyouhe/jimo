@@ -21,6 +21,7 @@ import {
   LIST_BTN_PERMS_TOOL,
   ADD_CUSTOM_BTN_TOOL,
   REMOVE_CUSTOM_BTN_TOOL,
+  DROP_ORPHAN_TABLES_TOOL,
 } from './ai-generator.tool';
 import { AuthorityBtnService } from '../authority-btn/authority-btn.service';
 import type { AiChatRequestDto } from './ai-generator.dto';
@@ -167,12 +168,24 @@ ${pkgList}`,
                 return rest;
               });
             }
-            return fetch(url as string, { ...options, body: JSON.stringify(body) });
-          } catch {
+            return checkResp(await fetch(url as string, { ...options, body: JSON.stringify(body) }));
+          } catch (e) {
+            if ((e as any)?.name === 'AiApiError') throw e;
             // JSON parse failed — pass through unchanged
           }
         }
-        return fetch(url as string, options as RequestInit);
+        return checkResp(await fetch(url as string, options as RequestInit));
+      };
+
+      // Intercept non-2xx responses so ai-sdk doesn't hang on error streams.
+      const checkResp = async (resp: Response): Promise<Response> => {
+        if (!resp.ok) {
+          const body = await resp.text().catch(() => '');
+          const err: any = new Error(`AI API 错误 ${resp.status}: ${body.slice(0, 200)}`);
+          err.name = 'AiApiError';
+          throw err;
+        }
+        return resp;
       };
 
       const openaiProvider = createOpenAI({
@@ -216,6 +229,8 @@ ${pkgList}`,
           });
         }
 
+        this.logger.log(`[AiGenerator] calling streamText attempt=${attempt} entityMode=${Object.keys(entityTools).length > 0}`);
+        const streamTimeoutId: ReturnType<typeof setInterval> | null = null;
         const result = streamText({
           model: modelInstance,
           // entity agent mode: use entity-specific system prompt (user-defined or auto-generated)
@@ -573,12 +588,46 @@ ${pkgList}`,
               }
             },
           }),
+
+          drop_orphan_tables: tool({
+            description: DROP_ORPHAN_TABLES_TOOL.function.description,
+            parameters: jsonSchema(DROP_ORPHAN_TABLES_TOOL.function.parameters as any),
+            execute: async (args: unknown) => {
+              const { tableNames } = (args as any) ?? {};
+              if (!Array.isArray(tableNames) || tableNames.length === 0) {
+                return { ok: false, error: 'tableNames 不能为空' };
+              }
+              const results: { tableName: string; ok: boolean; error?: string }[] = [];
+              for (const name of tableNames as string[]) {
+                const dbName = `lc_${name}`;
+                write({ kind: 'progress', content: `正在删除孤立表 ${dbName}…` });
+                try {
+                  await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${dbName}" CASCADE`));
+                  write({ kind: 'progress', content: `${dbName} 已删除` });
+                  results.push({ tableName: name, ok: true });
+                } catch (e: any) {
+                  results.push({ tableName: name, ok: false, error: e?.message });
+                }
+              }
+              const failed = results.filter(r => !r.ok);
+              return {
+                ok: failed.length === 0,
+                results,
+                ...(failed.length > 0 ? { errors: failed } : {}),
+              };
+            },
+          }),
         },
         onChunk: ({ chunk }: any) => {
           if (aborted) return;
           if (chunk.type === 'text-delta') {
             textBuffer += chunk.textDelta;
             write({ kind: 'token', content: chunk.textDelta });
+          } else if (chunk.type === 'reasoning') {
+            // reasoning model thinking — show as progress so user sees activity
+            if (chunk.textDelta) {
+              write({ kind: 'progress', content: `💭 ${chunk.textDelta}` });
+            }
           } else if (chunk.type === 'tool-call') {
             // Show tool invocation as progress so the user can see what the agent is doing
             const args = chunk.args ?? {};
@@ -623,8 +672,26 @@ ${pkgList}`,
         },
       });
 
-      for await (const _ of result.textStream) {
+      // Iterate fullStream — covers all chunk types (reasoning-delta, error, etc.)
+      // onChunk is called for each chunk by ai-sdk; we iterate here only to drive
+      // the stream forward and catch error chunks that consumeStream would swallow.
+      let streamApiError: any = null;
+      for await (const chunk of result.fullStream) {
         if (aborted) break;
+        if ((chunk as any).type === 'error') {
+          // ai-sdk wraps fetch errors as error chunks in fullStream
+          streamApiError = (chunk as any).error ?? new Error('AI 返回错误');
+          this.logger.error(`[AiGenerator] fullStream error chunk: ${streamApiError?.message ?? streamApiError}`);
+          break;
+        }
+      }
+
+      if (streamApiError) {
+        const msg = (streamApiError as any)?.message || String(streamApiError);
+        write({ kind: 'error', message: msg });
+        write({ kind: 'done' });
+        res.end();
+        return;
       }
 
       if (aborted) break;
@@ -1145,50 +1212,76 @@ ${pkgList}`,
           });
         }
 
-        // For non-FK uuid columns (like "account"), auto-load a search tool for the
-        // referenced table so the model can look up valid UUIDs before inserting.
-        const nonFkUuidCols = userCols.filter((c: any) => c.data_type === 'uuid');
+        // Register read-only tools (search + query) for each FK-referenced table.
+        // Priority: explicit subTableFkMap from __agent metadata (exact, naming-agnostic).
+        // Fallback: heuristic strip-_id + guess table name (handles old history records).
+        const subTableFkMap: Record<string, Record<string, string>> = agentCfg.subTableFkMap ?? {};
+        const explicitFkMap: Record<string, string> = subTableFkMap[subLcTable] ?? {};
+
+        const registerRefTableTools = async (fkColName: string, refLcTable: string) => {
+          const refToolName = refLcTable.replace(/^lc_/, '');
+          const searchKey = `search_${refToolName}`;
+          const queryKey = `query_${refToolName}`;
+          if (tools[searchKey]) return; // already registered
+          const refTbl = sql.identifier(refLcTable);
+          tools[searchKey] = tool({
+            description: `【查询列表】查询 ${refLcTable} 的记录，每条含 "id"。外键字段 "${fkColName}" 必须引用此表某条记录的 id —— 先调本工具取得有效 id，再传给子表写入工具，不可凭空填写 UUID。`,
+            parameters: jsonSchema({
+              type: 'object',
+              properties: {
+                keyword: { type: 'string', description: '按名称/编码/标题模糊过滤（可选）' },
+                pageSize: { type: 'number', description: '返回条数，默认 50，最大 200' },
+              },
+            }),
+            execute: async (args: any) => {
+              const pageSize = Math.min(args.pageSize ?? 50, 200);
+              const kw = args.keyword ? `%${args.keyword}%` : null;
+              const listRes = await this.db.execute(
+                kw
+                  ? sql`SELECT * FROM ${refTbl} WHERE deleted_at IS NULL AND (name ILIKE ${kw} OR code ILIKE ${kw} OR title ILIKE ${kw}) ORDER BY created_at ASC LIMIT ${pageSize}`
+                  : sql`SELECT * FROM ${refTbl} WHERE deleted_at IS NULL ORDER BY created_at ASC LIMIT ${pageSize}`
+              );
+              const SKIP = new Set(['owner_id', 'shared_with', 'created_at', 'updated_at', 'deleted_at']);
+              const rows = Array.from(listRes as any).map((r: any) =>
+                Object.fromEntries(Object.entries(r).filter(([k]) => !SKIP.has(k)))
+              );
+              return { note: `"${fkColName}" 必须引用以下某条记录的 "id"`, total: rows.length, list: rows };
+            },
+          });
+          tools[queryKey] = tool({
+            description: `【精确查询】按 UUID 获取单条 ${refToolName} 记录。`,
+            parameters: jsonSchema({
+              type: 'object',
+              properties: { id: { type: 'string', description: 'Record UUID' } },
+              required: ['id'],
+            }),
+            execute: async (args: { id: string }) => {
+              const res = await this.db.execute(
+                sql`SELECT * FROM ${refTbl} WHERE id = ${args.id} AND deleted_at IS NULL LIMIT 1`
+              );
+              const r = Array.from(res as any);
+              return r[0] ?? null;
+            },
+          });
+          this.logger.log(`[EntityTool] registered search/query tools for ${refLcTable} (FK: ${fkColName} in ${subLcTable})`);
+        };
+
+        // 1) Explicit FK map (from __agent metadata — exact, naming-agnostic)
+        for (const [fkCol, refTable] of Object.entries(explicitFkMap)) {
+          await registerRefTableTools(fkCol, refTable);
+        }
+
+        // 2) Fallback heuristic for uuid columns not covered by explicit map
+        const nonFkUuidCols = userCols.filter((c: any) => c.data_type === 'uuid' && !explicitFkMap[c.column_name]);
         for (const uuidCol of nonFkUuidCols) {
-          // Guess the referenced table name: try lc_<colName>s and lc_<colName>
-          const guessedTables = [`lc_${uuidCol.column_name}s`, `lc_${uuidCol.column_name}`];
-          for (const guessedTable of guessedTables) {
-            const tableExists = await this.db.execute(
-              sql`SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=${guessedTable} LIMIT 1`
+          const baseName = uuidCol.column_name.replace(/_id$/, '');
+          const candidates = [`lc_${baseName}s`, `lc_${baseName}`, `lc_${uuidCol.column_name}s`, `lc_${uuidCol.column_name}`];
+          for (const candidate of candidates) {
+            const exists = await this.db.execute(
+              sql`SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=${candidate} LIMIT 1`
             );
-            if (Array.from(tableExists as any).length > 0 && !tools[`search_${uuidCol.column_name}s`] && !tools[`search_${uuidCol.column_name}`]) {
-              const refTbl = sql.identifier(guessedTable);
-              const refToolName = guessedTable.replace(/^lc_/, '');
-              tools[`search_${refToolName}`] = tool({
-                description: `【查询】查询 ${guessedTable} 的记录列表，每条记录包含其主键 "id"。` +
-                  `子表外键字段 "${uuidCol.column_name}" 必须引用此表某条记录的主键 —— 先调本工具，再将结果中对应记录的 "id" 传给 create_${subToolName}。`,
-                parameters: jsonSchema({
-                  type: 'object',
-                  properties: {
-                    keyword: { type: 'string', description: 'Optional keyword to filter by name/code/title' },
-                    page: { type: 'number' },
-                    pageSize: { type: 'number' },
-                  },
-                }),
-                execute: async (args: any) => {
-                  const pageSize = Math.min(args.pageSize ?? 50, 200);
-                  const listRes = await this.db.execute(
-                    sql`SELECT * FROM ${refTbl} WHERE deleted_at IS NULL ORDER BY created_at ASC LIMIT ${pageSize}`
-                  );
-                  // Return only id + first few text columns to keep response concise
-                  // and ensure the model sees the id field prominently
-                  const rows = Array.from(listRes as any).map((r: any) => {
-                    const textCols = Object.entries(r)
-                      .filter(([k]) => !['owner_id','shared_with','created_at','updated_at','deleted_at'].includes(k))
-                      .reduce((acc, [k, v]) => ({ ...acc, [k]: v }), {} as any);
-                    return textCols;
-                  });
-                  return {
-                    note: `外键字段 "${uuidCol.column_name}" 必须引用以下某条记录的主键 "id"`,
-                    list: rows,
-                  };
-                },
-              });
-              this.logger.log(`[EntityTool] auto-loaded search_${refToolName} for uuid FK column "${uuidCol.column_name}" in ${subLcTable}`);
+            if (Array.from(exists as any).length > 0) {
+              await registerRefTableTools(uuidCol.column_name, candidate);
               break;
             }
           }

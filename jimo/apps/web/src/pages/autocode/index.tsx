@@ -505,6 +505,8 @@ export default function AutocodePage() {
   const [visibilityStrategy, setVisibilityStrategy] = useState<'private' | 'department' | 'shared' | 'public'>('private');
   // Agent config (opt-in). Enable to create a companion agent for the entity.
   const [agentEnabled, setAgentEnabled] = useState(false);
+  // Page type: list=standard table+modal (default), document=list+detail page
+  const [pageType, setPageType] = useState<'list' | 'document'>('list');
 
   // Update mode state
   const [updateMode, setUpdateMode] = useState(false);
@@ -661,6 +663,7 @@ export default function AutocodePage() {
         : {}),
       visibilityStrategy,
       ...(agentEnabled ? { agentConfig: { enabled: true } } : {}),
+      pageType,
     };
     const { jobId } = await executeGenerate(finalDto);
     const kebab = dto.tableName.toLowerCase().replace(/_/g, '-');
@@ -1109,6 +1112,18 @@ export default function AutocodePage() {
                   onChange={setAgentEnabled}
                   checkedChildren="开"
                   unCheckedChildren="关"
+                />
+              </Form.Item>
+            </Col>
+            <Col span={6}>
+              <Form.Item label="页面类型" tooltip="list=标准列表+弹窗编辑；document=单据页（列表+独立详情页，适合凭证/单据类业务）">
+                <Segmented
+                  value={pageType}
+                  onChange={(v) => setPageType(v as 'list' | 'document')}
+                  options={[
+                    { label: '标准列表', value: 'list' },
+                    { label: '单据页', value: 'document' },
+                  ]}
                 />
               </Form.Item>
             </Col>

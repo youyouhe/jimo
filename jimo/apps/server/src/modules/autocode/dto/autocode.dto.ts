@@ -387,4 +387,13 @@ export class AutoCodeDto {
   @ValidateNested()
   @Type(() => AgentConfigDto)
   agentConfig?: AgentConfigDto;
+
+  @ApiPropertyOptional({
+    description: '前端页面类型：list=标准列表弹窗编辑（默认），document=单据页（列表+独立详情页）',
+    enum: ['list', 'document'],
+    default: 'list',
+  })
+  @IsOptional()
+  @IsIn(['list', 'document'])
+  pageType?: 'list' | 'document';
 }

@@ -1,5 +1,6 @@
-import { Card, Table, Tag, Button, Space, Typography } from 'antd';
-import { CheckOutlined, EditOutlined } from '@ant-design/icons';
+import { useState } from 'react';
+import { Card, Table, Tag, Button, Space, Typography, Tooltip } from 'antd';
+import { CheckOutlined, EditOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { AutoCodeDto } from '../../../services/autocode';
 
 function fieldTypeName(f: any): string {
@@ -17,12 +18,31 @@ export function ProposeCard({
   status,
   onConfirm,
   onEdit,
+  onRecreate,
 }: {
   dto: AutoCodeDto;
   status: 'pending' | 'confirmed' | 'rejected';
   onConfirm: () => void;
   onEdit: () => void;
+  onRecreate?: () => Promise<void>;
 }) {
+  const [recreating, setRecreating] = useState(false);
+  const [recreateResult, setRecreateResult] = useState<'skipped' | 'done' | null>(null);
+
+  const handleRecreate = async () => {
+    if (!onRecreate) return;
+    setRecreating(true);
+    setRecreateResult(null);
+    try {
+      await onRecreate();
+      setRecreateResult('done');
+    } catch (e: any) {
+      if (e?.skipped) setRecreateResult('skipped');
+    } finally {
+      setRecreating(false);
+    }
+  };
+
   const columns = [
     { title: '字段', dataIndex: 'name', key: 'name', width: 120 },
     { title: '类型', key: 'type', render: (_: any, r: any) => fieldTypeName(r) },
@@ -57,9 +77,29 @@ export function ProposeCard({
             </Button>
           </Space>
         ) : (
-          <Tag color={status === 'confirmed' ? 'green' : 'default'}>
-            {status === 'confirmed' ? '已创建' : '已忽略'}
-          </Tag>
+          <Space>
+            <Tag color={status === 'confirmed' ? 'green' : 'default'}>
+              {status === 'confirmed' ? '已创建' : '已忽略'}
+            </Tag>
+            {status === 'confirmed' && onRecreate && (
+              recreateResult === 'skipped' ? (
+                <Tag color="blue">表已存在，已跳过</Tag>
+              ) : recreateResult === 'done' ? (
+                <Tag color="green">重建完成</Tag>
+              ) : (
+                <Tooltip title="先检查表是否存在：已存在则跳过，不存在则重新创建">
+                  <Button
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    loading={recreating}
+                    onClick={handleRecreate}
+                  >
+                    重新创建
+                  </Button>
+                </Tooltip>
+              )
+            )}
+          </Space>
         )
       }
     >

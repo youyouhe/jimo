@@ -454,6 +454,27 @@ export const REMOVE_CUSTOM_BTN_TOOL = {
   },
 };
 
+export const DROP_ORPHAN_TABLES_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'drop_orphan_tables',
+    description:
+      '删除孤立物理表（list_tables 返回的 orphans 列表中的表）。这些表没有生成历史记录，通常是主表已删但子表未被清理的残余，例如 voucher_voucher_item、stock_in_order_item。' +
+      '调用前必须先用 list_tables 确认 tableNames 中的每一项确实出现在 orphans 里，避免误删。此操作不可逆。',
+    parameters: {
+      type: 'object',
+      properties: {
+        tableNames: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '要删除的孤立表名列表（不含 lc_ 前缀，如 ["voucher_voucher_item", "stock_in_order_item"]）',
+        },
+      },
+      required: ['tableNames'],
+    },
+  },
+};
+
 export const ALL_TOOLS = [
   PROPOSE_ENTITY_TOOL,
   CREATE_DICT_TOOL,

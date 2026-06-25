@@ -153,10 +153,10 @@ export default function EntityAgentPanel({ open, businessType, onClose }: Entity
     const userMsg: ChatMessage = { id: newId(), role: 'user', content: text };
     const aiMsg: ChatMessage = { id: newId(), role: 'assistant', content: '', streaming: true };
 
-    // Only send role+content to model — strip progressLines (tool notes) to
-    // avoid inflating context with operational output that the model doesn't need.
+    // Only send role+content to model — strip progressLines (tool notes) and
+    // error/fallback messages (starting with ⚠️) to avoid polluting the context.
     const history = [...messages, userMsg]
-      .filter((m) => m.content)
+      .filter((m) => m.content && !m.content.startsWith('⚠️'))
       .map((m) => ({ role: m.role, content: m.content }));
 
     setMessages((prev) => [...prev, userMsg, aiMsg]);
@@ -165,6 +165,7 @@ export default function EntityAgentPanel({ open, businessType, onClose }: Entity
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+
 
     const { accessToken } = useUserStore.getState();
 
@@ -230,16 +231,28 @@ export default function EntityAgentPanel({ open, businessType, onClose }: Entity
                 );
               }
               break;
-            case 'error':
-              message.error(evt.message || 'AI 出错');
+            case 'error': {
+              const errMsg = evt.message || 'AI 出错';
+              // Extract the human-readable part: strip JSON wrapper if present
+              const friendlyMsg = (() => {
+                try {
+                  const m = errMsg.match(/:\s*(\{.*\})/s);
+                  if (m) {
+                    const obj = JSON.parse(m[1]);
+                    return obj?.error?.message || errMsg;
+                  }
+                } catch { /* ignore */ }
+                return errMsg;
+              })();
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === aiMsg.id
-                    ? { ...m, content: m.content || `(出错: ${evt.message})`, streaming: false }
+                    ? { ...m, content: `⚠️ ${friendlyMsg}`, streaming: false }
                     : m,
                 ),
               );
               break;
+            }
             case 'done':
               setMessages((prev) =>
                 prev.map((m) => (m.id === aiMsg.id ? { ...m, streaming: false } : m)),
@@ -259,6 +272,18 @@ export default function EntityAgentPanel({ open, businessType, onClose }: Entity
           ),
         );
       }
+      // User-triggered abort (stop button): no message shown
+    } finally {
+      // Fallback: if stream ended but assistant message is still empty (e.g. API
+      // quota exceeded causes an immediate close before any SSE event is written),
+      // show a persistent error in the bubble so the user doesn't miss it.
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== aiMsg.id) return m;
+          if (!m.streaming) return m; // already resolved by error/done handler
+          return { ...m, content: '⚠️ AI 无响应（可能是 API 余额不足或网络问题，请检查 AI 配置）', streaming: false };
+        }),
+      );
     }
 
     setLoading(false);

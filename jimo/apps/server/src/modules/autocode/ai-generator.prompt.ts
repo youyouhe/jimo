@@ -88,6 +88,7 @@ name(snake_case) · type · required · unique · description(中文) · searcha
 | 为已生成的表插入测试数据 | generate_mock(tableName, count)，count 默认 10 最大 100；point 字段自动生成北京周边真实坐标作为 mock 数据 |
 | N:N 中间表挂载到主表 | propose_entity 主表时，加 one-to-many 字段，detailMode='existing'，指定 relationTable/relationFkColumn/detailFields |
 | 撤销错误建表 | 先 list_history 找到 id，再 delete_entity(id) 删除，最后重新 propose_entity |
+| 清理孤立子表 | list_tables 确认 orphans 列表 → drop_orphan_tables(tableNames) 批量删除；这些表无历史记录，delete_entity 无法处理 |
 | 查看菜单分类现状 | list_menus_by_package → 返回每个 package 下的实体列表，id 空表示未分类 |
 | 调整实体归属 package | 先 list_menus_by_package 确认 packageId，再 assign_to_package(tableName, packageId) |
 | 批量整理分类 | list_menus_by_package 了解现状 → 分析 → 多次调用 assign_to_package 归类 |

@@ -72,6 +72,8 @@ import {
 import {
   generateFrontendService,
   generateFrontendPage,
+  generateFrontendDocumentListPage,
+  generateFrontendDocumentPage,
   generateFrontendMapPage,
 } from './autocode-frontend-generators';
 
@@ -149,7 +151,12 @@ export class AutocodeService {
     // Frontend files (only if generateWeb is true)
     if (dto.generateWeb) {
       files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto);
-      files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto);
+      if (dto.pageType === 'document') {
+        files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto);
+        files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto);
+      } else {
+        files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto);
+      }
       if (activeDto.fields.some((f) => !f.removed && f.type === 'point')) {
         files[`release/jimo/apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
       }
@@ -579,7 +586,12 @@ export class AutocodeService {
       const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
       if ([...relationDictTypes.values()].some((v) => v !== null)) {
         files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto, relationDictTypes);
-        files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
+        if (dto.pageType === 'document') {
+          files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto, relationDictTypes);
+          files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto, relationDictTypes);
+        } else {
+          files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
+        }
       }
     }
     const createdFiles: string[] = [];
@@ -700,6 +712,31 @@ export class AutocodeService {
    */
   private buildAgentConfigMetadata(dto: AutoCodeDto): Record<string, any> {
     const activeFieldsArray = activeFields(dto.fields);
+
+    // Build explicit FK map for sub-table uuid columns → referenced lc_ table.
+    // Schema: { [subLcTable]: { [fkColumn]: referencedLcTable } }
+    // Used by entity agent to inject read-only tools for referenced tables without guessing.
+    const subTableFkMap: Record<string, Record<string, string>> = {};
+    for (const f of activeFieldsArray) {
+      if (f.type !== 'relation' || f.relationType !== 'one-to-many') continue;
+      if (!f.detailFields || f.detailFields.length === 0) continue;
+      const singularMain = singularize(dto.tableName);
+      const singularField = singularize(f.name);
+      const subLcTable = (f.relationExistingTable && f.relationTable)
+        ? `lc_${f.relationTable}`
+        : `lc_${singularMain}_${singularField}`;
+      const fkMap: Record<string, string> = {};
+      for (const df of f.detailFields) {
+        if (df.type === 'relation' && (df.relationType === 'many-to-one' || df.relationType === 'many-to-many') && df.relationTable) {
+          // e.g. account_id → lc_accounts
+          fkMap[df.name] = `lc_${df.relationTable}`;
+        }
+      }
+      if (Object.keys(fkMap).length > 0) {
+        subTableFkMap[subLcTable] = fkMap;
+      }
+    }
+
     return {
       tableName: dto.tableName,
       visibilityStrategy: dto.visibilityStrategy ?? 'private',
@@ -712,6 +749,7 @@ export class AutocodeService {
         (f) => f.editable && !(f.type === 'relation' && f.relationType === 'one-to-many'),
       ),
       searchableFields: activeFieldsArray.filter((f) => f.searchable),
+      subTableFkMap,
     };
   }
 
@@ -1008,7 +1046,8 @@ export class AutocodeService {
               } catch { /* ignore */ }
             }
           }
-          // Drop child detail tables for one-to-many relations
+          // Drop child detail tables for one-to-many relations.
+          // Primary path: use fields from history record to enumerate child tables.
           for (const field of oneToManyFields) {
             const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
             if (isExisting) continue;
@@ -1027,6 +1066,26 @@ export class AutocodeService {
             try {
               await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${childDbName}" CASCADE`));
             } catch { /* Child table may not exist, ignore */ }
+          }
+          // Fallback path: when history.fields is null (old records), discover child tables
+          // from information_schema using the lc_<singular>_ prefix convention and drop them all.
+          if (oneToManyFields.length === 0) {
+            try {
+              const singularMain = singularize(tableName);
+              const childPrefix = `lc_${singularMain}_`;
+              const orphanRows = await this.db.execute(sql`
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name LIKE ${childPrefix + '%'}
+                  AND table_name != ${dbTableName}
+              `);
+              for (const row of orphanRows as any[]) {
+                await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${row.table_name}" CASCADE`));
+                this.logger.log(` fallback: dropped orphan child table '${row.table_name}'`);
+              }
+            } catch (err: unknown) {
+              this.logger.warn(` fallback child-table scan failed: ${(err as Error).message}`);
+            }
           }
           await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${dbTableName}" CASCADE`));
           droppedTable = true;
@@ -1226,7 +1285,12 @@ export class AutocodeService {
         const relationDictTypes2 = await this.lookupRelationDisplayDictTypes(activeDto2.fields);
         if ([...relationDictTypes2.values()].some((v) => v !== null)) {
           files[`release/jimo/apps/web/src/services/${n2.serviceRelDir}.ts`] = generateFrontendService(activeDto2, relationDictTypes2);
-          files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendPage(activeDto2, relationDictTypes2);
+          if (autoCodeDto.pageType === 'document') {
+            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto2, relationDictTypes2);
+            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto2, relationDictTypes2);
+          } else {
+            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendPage(activeDto2, relationDictTypes2);
+          }
         }
       }
 
@@ -1428,7 +1492,12 @@ export class AutocodeService {
         const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
         if ([...relationDictTypes.values()].some((v) => v !== null)) {
           files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto, relationDictTypes);
-          files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
+          if (dto.pageType === 'document') {
+            files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto, relationDictTypes);
+            files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto, relationDictTypes);
+          } else {
+            files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
+          }
         }
         if (activeDto.fields.some((f) => !f.removed && f.type === 'point')) {
           files[`release/jimo/apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
@@ -3258,12 +3327,33 @@ export class AutocodeService {
     );
     content = content.replace(existingBlock, '');
 
-    const routeEntry = `    {
+    let routeEntry: string;
+    if (dto.pageType === 'document') {
+      // Document mode: list + create + :id detail as nested routes
+      routeEntry = `    {
+      path: '${routePath}',
+      name: '${extractMenuName(dto.description, n.pascalName)}',
+      icon: 'TableOutlined',
+      component: '${n.pageComponentPath}',
+    },
+    {
+      path: '${routePath}/create',
+      component: '${n.pageDir}/detail',
+      layout: false,
+    },
+    {
+      path: '${routePath}/:id',
+      component: '${n.pageDir}/detail',
+      layout: false,
+    },`;
+    } else {
+      routeEntry = `    {
       path: '${routePath}',
       name: '${extractMenuName(dto.description, n.pascalName)}',
       icon: 'TableOutlined',
       component: '${n.pageComponentPath}',
     },`;
+    }
 
     content = content.replace(
       /    \{ path: '\/\*', redirect: '\/dashboard' \},?/,

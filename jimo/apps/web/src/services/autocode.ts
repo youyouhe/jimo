@@ -43,6 +43,8 @@ export interface AutoCodeDto {
   visibilityStrategy?: 'private' | 'department' | 'shared' | 'public';
   // Agent configuration (opt-in). Enables an accompanying agent for the entity.
   agentConfig?: { enabled: boolean; tools?: ('query' | 'create' | 'update' | 'delete' | 'search' | 'mock')[]; systemPrompt?: string };
+  // Page type: list=standard table+modal (default), document=list+dedicated detail page
+  pageType?: 'list' | 'document';
 }
 
 export interface TemplateMetadata {

@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import type { AiMessage } from './types';
 import { getProposeItems } from './types';
+import { getTables } from '../../../services/autocode';
 import type { AutoCodeDto } from '../../../services/autocode';
 import { streamAiChat } from './sse';
 import { loadAiConfig, isConfigured } from './key-config';
@@ -245,6 +246,17 @@ export function AiGeneratorPanel({ onGenerate, onGenerateBatch, onFillForm }: Pr
     onGenerate(dto);
   };
 
+  const handleRecreate = async (dto: AutoCodeDto) => {
+    const tables = await getTables();
+    if (tables.includes(dto.tableName)) {
+      // Table already exists — throw a sentinel so ProposeCard shows "已跳过"
+      const err: any = new Error('skipped');
+      err.skipped = true;
+      throw err;
+    }
+    onGenerate(dto);
+  };
+
   const handleConfirmAll = async (msg: AiMessage) => {
     const items = getProposeItems(msg);
     const pending = items.map((it, idx) => ({ idx, dto: it.dto })).filter((x) => items[x.idx].status === 'pending');
@@ -376,6 +388,7 @@ export function AiGeneratorPanel({ onGenerate, onGenerateBatch, onFillForm }: Pr
                         status={item.status}
                         onConfirm={() => handleConfirm(m.id, idx, item.dto)}
                         onEdit={() => handleEdit(m.id, item.dto)}
+                        onRecreate={() => handleRecreate(item.dto)}
                       />
                     ))}
                   </div>

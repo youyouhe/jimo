@@ -45,14 +45,19 @@ ${grandFieldLines.join('\n')}
 `);
     }
 
-    const childFieldLines = f.detailFields.map((df) => {
+    const childFieldLines = f.detailFields.flatMap((df) => {
       if (df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0) {
         const grandPascalType = toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}_${singularize(df.name)}`);
-        return `  ${df.name}: ${grandPascalType}[];`;
+        return [`  ${df.name}: ${grandPascalType}[];`];
       }
       const tsType = toTsType(df);
       const nullable = !df.required && df.type !== 'boolean' ? ' | null' : '';
-      return `  ${df.name}: ${tsType}${nullable};`;
+      const lines = [`  ${df.name}: ${tsType}${nullable};`];
+      // FK relation fields get a companion _display field from leftJoin
+      if (df.type === 'relation' && (df.relationType === 'many-to-one' || df.relationType === 'many-to-many')) {
+        lines.push(`  ${df.name}_display: string | null;`);
+      }
+      return lines;
     });
     childInterfaces.push(`
 export interface ${childPascalType} {
@@ -336,19 +341,48 @@ export async function submit${n.pascalSingular}Approval(id: string, record?: Rec
 `;
 }
 
-/**
- * Generate Umi 4 frontend page with ProTable + ModalForm.
- */
-export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<string, string | null> = new Map()): string {
-  const n = deriveNames(dto.tableName);
-  const listableFields = dto.fields.filter((f) => f.listable);
-  const creatableFields = dto.fields.filter((f) => f.creatable);
-  const editableFields = dto.fields.filter((f) => f.editable);
-  const searchableFields = dto.fields.filter((f) => f.searchable);
-  const relationFields = dto.fields.filter((f) => f.type === 'relation');
+/** Build the template string for one field inside a create/update DTO handler. */
+function buildDtoFieldTemplate(f: AutoCodeField): string {
+  if (f.type === 'relation' && f.relationType === 'one-to-many') {
+    const tsFields = (f.detailFields || []).filter((df: any) => df.type === 'timestamp' && df.name !== 'id');
+    const tsOverrides = tsFields.map((df: any) => `            ${df.name}: d.${df.name} && typeof d.${df.name} === 'object' ? d.${df.name}.toISOString() : d.${df.name},`).join('\n');
+    const grandchildNormalize = (f.detailFields || [])
+      .filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0)
+      .map(gf => `            ${gf.name}: (d.${gf.name} || []).map((g: any) => ({ ...g, id: g.id?.length < 36 ? undefined : g.id })),`)
+      .join('\n');
+    return `          ${f.name}: (values.${f.name} || []).map((d: any) => ({
+            ...d,
+            id: d.id?.length < 36 ? undefined : d.id,
+${grandchildNormalize ? grandchildNormalize + '\n' : ''}${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
+  }
+  if (f.type === 'boolean') return `          ${f.name}: values.${f.name} ?? false,`;
+  if (f.type === 'integer' || f.type === 'bigint') return `          ${f.name}: values.${f.name} ?? 0,`;
+  if (f.type === 'decimal') return `          ${f.name}: String(values.${f.name} ?? '0'),`;
+  if (f.type === 'relation') return `          ${f.name}: values.${f.name} || undefined,`;
+  if (f.type === 'image' || f.type === 'file') {
+    return `          ${f.name}: (() => {
+            const v = values.${f.name};
+            if (typeof v === 'string') return v;
+            if (Array.isArray(v) && v.length > 0) {
+              const item = v[0];
+              return item?.response?.url || item?.url || '';
+            }
+            return '';
+          })(),`;
+  }
+  if (f.type === 'timestamp') {
+    return `          ${f.name}: values.${f.name} && typeof values.${f.name} === 'object' ? values.${f.name}.toISOString() : values.${f.name} || undefined,`;
+  }
+  return `          ${f.name}: values.${f.name} || '',`;
+}
 
-  // ProColumns generation
-  const columnLines = listableFields.map((f) => {
+/** Build ProColumn definition strings for the ProTable. */
+function buildColumns(
+  listableFields: AutoCodeField[],
+  dto: AutoCodeDto,
+  relationDictTypes: Map<string, string | null>,
+): string[] {
+  return listableFields.map((f) => {
     const valueType = getValueType(f);
     if (f.type === 'boolean') {
       return `    {
@@ -450,9 +484,13 @@ export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<st
       ${sorterExpr}
     },`;
   });
+}
 
-  // Form fields for create/edit
-  // 'code' fields are auto-generated — skip in create form, show disabled in edit only
+/** Build form field JSX strings for create/edit ModalForm, including grandchild sub-components. */
+function buildFormFields(
+  creatableFields: AutoCodeField[],
+  dto: AutoCodeDto,
+): { formFields: string[]; grandchildSubComponents: string[] } {
   const grandchildSubComponents: string[] = [];
   const formFields = creatableFields.map((f) => {
     const component = getProFormComponent(f);
@@ -470,7 +508,6 @@ export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<st
     }
 
     if (f.type === 'relation') {
-      // One-to-many: render EditableProTable for detail rows
       if (f.relationType === 'one-to-many' && f.detailFields && f.detailFields.length > 0) {
         const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
         const childPascalType = isExisting
@@ -519,7 +556,6 @@ export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<st
           return `${df.name}: ${df.type === 'integer' || df.type === 'bigint' || df.type === 'decimal' ? '0' : df.type === 'timestamp' ? 'null' : "''"}`;
         }).concat(grandchildO2MFields.map(gf => `${gf.name}: []`)).join(', ');
 
-        // Grandchild columns: add extra sub-table columns for each grandchild one-to-many
         const grandchildColumnDefs = grandchildO2MFields.map((gf) => {
           const grandPascalType = toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}_${singularize(gf.name)}`);
           const grandCols = (gf.detailFields || []).filter(gdf => gdf.name !== 'id' && !(gdf.type === 'relation' && gdf.relationType === 'one-to-many'));
@@ -665,7 +701,6 @@ ${grandchildColumnDefs.join('\n')}
           </Form.Item>`;
       }
 
-      // Many-to-one or many-to-many: render single-select ProFormSelect
       const targetNames = deriveNames(f.relationTable!);
       const fetchFunctionName = `get${toPascalCase(singularize(f.relationTable!))}Options`;
       const displayField = f.relationDisplayField || 'name';
@@ -766,6 +801,7 @@ ${grandchildColumnDefs.join('\n')}
             label="${f.description || f.name}"
             placeholder="${f.description || f.name}"
             ${requiredRule}
+            ${disabledWhenEditing}
             fieldProps={{ rows: 3 }}
           />`;
     }
@@ -777,100 +813,124 @@ ${grandchildColumnDefs.join('\n')}
             ${disabledWhenEditing}
           />`;
   });
+  return { formFields, grandchildSubComponents };
+}
 
-  // Request params destructure (exclude many-to-many from query params in table)
-  const tableSearchableFields = searchableFields.filter((f) => !(f.type === 'relation' && (f.relationType === 'one-to-many')));
-  const requestParamKeys = tableSearchableFields.map((f) => f.name).join(', ');
-  const requestDestructure = tableSearchableFields.length > 0
-    ? `const { current: page, pageSize${requestParamKeys ? `, ${requestParamKeys}` : ''} } = params;`
-    : 'const { current: page, pageSize } = params;';
+/** Render form field list, wrapping multiple O2M fields in Tabs when needed. */
+function buildModalFormBody(formFields: string[], creatableFields: AutoCodeField[]): string {
+  const nonDetailFields = formFields.filter((_, i) => {
+    const f = creatableFields[i];
+    return !(f?.type === 'relation' && f?.relationType === 'one-to-many');
+  });
+  const detailFormFields = formFields.filter((_, i) => {
+    const f = creatableFields[i];
+    return f?.type === 'relation' && f?.relationType === 'one-to-many';
+  });
+  const detailFieldDefs = creatableFields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many');
+
+  if (detailFormFields.length <= 1) {
+    return formFields.join('\n\n');
+  }
+  const tabItems = detailFieldDefs.map((f, i) => `          {
+            key: '${f.name}',
+            label: '${f.description || f.name}',
+            forceRender: true,
+            children: (
+${detailFormFields[i]}
+            ),
+          }`).join(',\n');
+  return `${nonDetailFields.join('\n\n')}
+
+          <Tabs
+            items={[
+${tabItems}
+            ]}
+          />`;
+}
+
+/**
+ * Build the expandedRowRender JSX string for ProTable expandable rows.
+ * Returns a single <Table/> for one O2M field, or <Tabs/> for multiple.
+ */
+function buildExpandedRowRender(
+  oneToManyFields: AutoCodeField[],
+  dto: AutoCodeDto,
+): string {
+  if (oneToManyFields.length === 1) {
+    const f0 = oneToManyFields[0];
+    const f0DisplayCols = f0.detailFields!.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName) && !(df.type === 'relation' && df.relationType === 'one-to-many'));
+    const f0GrandFields = f0.detailFields!.filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0);
+    const grandExpandable = f0GrandFields.length > 0 ? `
+              expandable={{
+                rowExpandable: (r) => ${f0GrandFields.map(gf => `(r.${gf.name}?.length ?? 0) > 0`).join(' || ')},
+                expandedRowRender: (childRow) => (
+                  ${f0GrandFields.length === 1 ? `<Table size="small" rowKey="id" dataSource={childRow.${f0GrandFields[0].name} || []} pagination={false}
+                    columns={[${(f0GrandFields[0].detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]}
+                    style={{ margin: '0 24px' }} />` : `<Tabs style={{ margin: '0 24px' }} items={[${f0GrandFields.map(gf => `{ key: '${gf.name}', label: '${gf.description || gf.name}', children: <Table size="small" rowKey="id" dataSource={childRow.${gf.name} || []} pagination={false} columns={[${(gf.detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]} /> }`).join(', ')}]} />`}
+                ),
+              }}` : '';
+    return `<Table
+              size="small"
+              rowKey="id"
+              dataSource={record.${f0.name} || []}
+              pagination={false}${grandExpandable}
+              columns={[
+                ${f0DisplayCols.map(df => (df.type === 'relation' ? `{ title: '${df.description || df.name}', dataIndex: '${df.name}', render: (_: any, r: any) => r.${df.name}_display || r.${df.name} }` : `{ title: '${df.description || df.name}', dataIndex: '${df.name}' }`)).join(',\n                ')},
+              ]}
+              style={{ margin: '0 48px' }}
+            />`;
+  }
+  return `<Tabs
+              style={{ margin: '0 48px' }}
+              items={[
+                ${oneToManyFields.map(f => {
+                  const displayCols = f.detailFields!.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName) && !(df.type === 'relation' && df.relationType === 'one-to-many'));
+                  const grandFields = f.detailFields!.filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0);
+                  const grandExpandable2 = grandFields.length > 0 ? `
+                    expandable={{ rowExpandable: (r) => ${grandFields.map(gf => `(r.${gf.name}?.length ?? 0) > 0`).join(' || ')}, expandedRowRender: (cr) => (${grandFields.length === 1 ? `<Table size="small" rowKey="id" dataSource={cr.${grandFields[0].name} || []} pagination={false} columns={[${(grandFields[0].detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]} />` : `<Tabs items={[${grandFields.map(gf => `{ key: '${gf.name}', label: '${gf.description || gf.name}', children: <Table size="small" rowKey="id" dataSource={cr.${gf.name} || []} pagination={false} columns={[${(gf.detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]} /> }`).join(', ')}]} />`}) }}` : '';
+                  return `{
+                  key: '${f.name}',
+                  label: '${f.description || f.name}',
+                  children: (
+                    <Table
+                      size="small"
+                      rowKey="id"
+                      dataSource={record.${f.name} || []}
+                      pagination={false}${grandExpandable2}
+                      columns={[
+                        ${displayCols.map(df => (df.type === 'relation' ? `{ title: '${df.description || df.name}', dataIndex: '${df.name}', render: (_: any, r: any) => r.${df.name}_display || r.${df.name} }` : `{ title: '${df.description || df.name}', dataIndex: '${df.name}' }`)).join(',\n                        ')},
+                      ]}
+                    />
+                  ),
+                }`;
+                }).join(',\n                ')}
+              ]}
+            />`;
+}
+
+/**
+ * Generate Umi 4 frontend page with ProTable + ModalForm.
+ */
+export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<string, string | null> = new Map()): string {
+  const n = deriveNames(dto.tableName);
+  const listableFields = dto.fields.filter((f) => f.listable);
+  const creatableFields = dto.fields.filter((f) => f.creatable);
+  const editableFields = dto.fields.filter((f) => f.editable);
+  const searchableFields = dto.fields.filter((f) => f.searchable);
+  const relationFields = dto.fields.filter((f) => f.type === 'relation');
+
+  const columnLines = buildColumns(listableFields, dto, relationDictTypes);
+
+  const { formFields, grandchildSubComponents } = buildFormFields(creatableFields, dto);
+
+  // Exclude one-to-many relations from table search params (no search UI for sub-tables)
+  const tableSearchableFields = searchableFields.filter((f) => !(f.type === 'relation' && f.relationType === 'one-to-many'));
 
   // Handle submit: build DTO
   // 'code' fields are auto-generated server-side — exclude from create/update DTOs
-  const createDtoFields = creatableFields.filter((f) => f.type !== 'code').map((f) => {
-    if (f.type === 'relation' && f.relationType === 'one-to-many') {
-      const tsFields = (f.detailFields || []).filter((df: any) => df.type === 'timestamp' && df.name !== 'id');
-      const tsOverrides = tsFields.map((df: any) => `            ${df.name}: d.${df.name} && typeof d.${df.name} === 'object' ? d.${df.name}.toISOString() : d.${df.name},`).join('\n');
-      const grandchildNormalize = (f.detailFields || [])
-        .filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0)
-        .map(gf => `            ${gf.name}: (d.${gf.name} || []).map((g: any) => ({ ...g, id: g.id?.length < 36 ? undefined : g.id })),`)
-        .join('\n');
-      return `          ${f.name}: (values.${f.name} || []).map((d: any) => ({
-            ...d,
-            id: d.id?.length < 36 ? undefined : d.id,
-${grandchildNormalize ? grandchildNormalize + '\n' : ''}${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
-    }
-    if (f.type === 'boolean') {
-      return `          ${f.name}: values.${f.name} ?? false,`;
-    }
-    if (f.type === 'integer' || f.type === 'bigint') {
-      return `          ${f.name}: values.${f.name} ?? 0,`;
-    }
-    if (f.type === 'decimal') {
-      return `          ${f.name}: String(values.${f.name} ?? '0'),`;
-    }
-    if (f.type === 'relation') {
-      return `          ${f.name}: values.${f.name} || undefined,`;
-    }
-    if (f.type === 'image' || f.type === 'file') {
-      return `          ${f.name}: (() => {
-            const v = values.${f.name};
-            if (typeof v === 'string') return v;
-            if (Array.isArray(v) && v.length > 0) {
-              const item = v[0];
-              return item?.response?.url || item?.url || '';
-            }
-            return '';
-          })(),`;
-    }
-    if (f.type === 'timestamp') {
-      return `          ${f.name}: values.${f.name} && typeof values.${f.name} === 'object' ? values.${f.name}.toISOString() : values.${f.name} || undefined,`;
-    }
-    return `          ${f.name}: values.${f.name} || '',`;
-  });
-
+  const createDtoFields = creatableFields.filter((f) => f.type !== 'code').map(buildDtoFieldTemplate);
   // 'code' fields are never submitted in update DTO (they are immutable after creation)
-  const updateDtoFields = editableFields.filter((f) => f.type !== 'code').map((f) => {
-    if (f.type === 'relation' && f.relationType === 'one-to-many') {
-      const tsFields = (f.detailFields || []).filter((df: any) => df.type === 'timestamp' && df.name !== 'id');
-      const tsOverrides = tsFields.map((df: any) => `            ${df.name}: d.${df.name} && typeof d.${df.name} === 'object' ? d.${df.name}.toISOString() : d.${df.name},`).join('\n');
-      const grandchildNormalize = (f.detailFields || [])
-        .filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0)
-        .map(gf => `            ${gf.name}: (d.${gf.name} || []).map((g: any) => ({ ...g, id: g.id?.length < 36 ? undefined : g.id })),`)
-        .join('\n');
-      return `          ${f.name}: (values.${f.name} || []).map((d: any) => ({
-            ...d,
-            id: d.id?.length < 36 ? undefined : d.id,
-${grandchildNormalize ? grandchildNormalize + '\n' : ''}${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
-    }
-    if (f.type === 'boolean') {
-      return `          ${f.name}: values.${f.name} ?? false,`;
-    }
-    if (f.type === 'integer' || f.type === 'bigint') {
-      return `          ${f.name}: values.${f.name} ?? 0,`;
-    }
-    if (f.type === 'decimal') {
-      return `          ${f.name}: String(values.${f.name} ?? '0'),`;
-    }
-    if (f.type === 'relation') {
-      return `          ${f.name}: values.${f.name} || undefined,`;
-    }
-    if (f.type === 'image' || f.type === 'file') {
-      return `          ${f.name}: (() => {
-            const v = values.${f.name};
-            if (typeof v === 'string') return v;
-            if (Array.isArray(v) && v.length > 0) {
-              const item = v[0];
-              return item?.response?.url || item?.url || '';
-            }
-            return '';
-          })(),`;
-    }
-    if (f.type === 'timestamp') {
-      return `          ${f.name}: values.${f.name} && typeof values.${f.name} === 'object' ? values.${f.name}.toISOString() : values.${f.name} || undefined,`;
-    }
-    return `          ${f.name}: values.${f.name} || '',`;
-  });
+  const updateDtoFields = editableFields.filter((f) => f.type !== 'code').map(buildDtoFieldTemplate);
 
   const apiFunctions = [
     `get${n.pascalName}List`,
@@ -1010,6 +1070,7 @@ export default function ${n.pascalName}Page() {
   const [form] = Form.useForm();
 ${hasOneToMany ? `${dto.fields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many').map(f => `  const [${toCamelCase(f.name)}EditableKeys, set${toPascalCase(f.name)}EditableKeys] = useState<React.Key[]>([]);`).join('\n')}\n  const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([]);\n  const currentDataRef = useRef<${n.pascalSingular}[]>([]);\n` : ''}${dictFields.length > 0 ? dictFields.map(f => `  const [${toCamelCase(f.name)}Options, set${toPascalCase(f.name)}Options] = useState<Record<string, { text: string }>>({});`).join('\n') + '\n' : ''}${manyToOneDictFields.length > 0 ? manyToOneDictFields.map(({ field: f }) => `  const [${toCamelCase(f.name)}TypeMap, set${toPascalCase(f.name)}TypeMap] = useState<Record<string, string>>({});`).join('\n') + '\n' : ''}${tableSearchableFields.flatMap(f => (f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal') ? [`  const [search${toPascalCase(f.name)}Min, setSearch${toPascalCase(f.name)}Min] = useState('');`, `  const [search${toPascalCase(f.name)}Max, setSearch${toPascalCase(f.name)}Max] = useState('');`] : [`  const [search${toPascalCase(f.name)}, setSearch${toPascalCase(f.name)}] = useState('');`]).join('\n')}${tableSearchableFields.length > 0 ? `
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (debounceTimer.current) clearTimeout(debounceTimer.current); }, []);
   const makeDebounce = useCallback((setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
@@ -1199,55 +1260,7 @@ ${oneToManyFields.length > 0 ? `        expandable={{
           onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as string[]),
           rowExpandable: (record) => ${oneToManyFields.map(f => `(record.${f.name}?.length ?? 0) > 0`).join(' || ')},
           expandedRowRender: (record) => (
-            ${oneToManyFields.length === 1 ? (() => {
-              const f0 = oneToManyFields[0];
-              const f0DisplayCols = f0.detailFields!.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName) && !(df.type === 'relation' && df.relationType === 'one-to-many'));
-              const f0GrandFields = f0.detailFields!.filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0);
-              const grandExpandable = f0GrandFields.length > 0 ? `
-              expandable={{
-                rowExpandable: (r) => ${f0GrandFields.map(gf => `(r.${gf.name}?.length ?? 0) > 0`).join(' || ')},
-                expandedRowRender: (childRow) => (
-                  ${f0GrandFields.length === 1 ? `<Table size="small" rowKey="id" dataSource={childRow.${f0GrandFields[0].name} || []} pagination={false}
-                    columns={[${(f0GrandFields[0].detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]}
-                    style={{ margin: '0 24px' }} />` : `<Tabs style={{ margin: '0 24px' }} items={[${f0GrandFields.map(gf => `{ key: '${gf.name}', label: '${gf.description || gf.name}', children: <Table size="small" rowKey="id" dataSource={childRow.${gf.name} || []} pagination={false} columns={[${(gf.detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]} /> }`).join(', ')}]} />`}
-                ),
-              }}` : '';
-              return `<Table
-              size="small"
-              rowKey="id"
-              dataSource={record.${f0.name} || []}
-              pagination={false}${grandExpandable}
-              columns={[
-                ${f0DisplayCols.map(df => (df.type === 'relation' ? `{ title: '${df.description || df.name}', dataIndex: '${df.name}', render: (_: any, r: any) => r.${df.name}_display || r.${df.name} }` : `{ title: '${df.description || df.name}', dataIndex: '${df.name}' }`)).join(',\n                ')},
-              ]}
-              style={{ margin: '0 48px' }}
-            />`;
-            })() : `<Tabs
-              style={{ margin: '0 48px' }}
-              items={[
-                ${oneToManyFields.map(f => {
-                  const displayCols = f.detailFields!.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName) && !(df.type === 'relation' && df.relationType === 'one-to-many'));
-                  const grandFields = f.detailFields!.filter(df => df.type === 'relation' && df.relationType === 'one-to-many' && df.detailFields && df.detailFields.length > 0);
-                  const grandExpandable2 = grandFields.length > 0 ? `
-                    expandable={{ rowExpandable: (r) => ${grandFields.map(gf => `(r.${gf.name}?.length ?? 0) > 0`).join(' || ')}, expandedRowRender: (cr) => (${grandFields.length === 1 ? `<Table size="small" rowKey="id" dataSource={cr.${grandFields[0].name} || []} pagination={false} columns={[${(grandFields[0].detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]} />` : `<Tabs items={[${grandFields.map(gf => `{ key: '${gf.name}', label: '${gf.description || gf.name}', children: <Table size="small" rowKey="id" dataSource={cr.${gf.name} || []} pagination={false} columns={[${(gf.detailFields || []).filter(gdf => gdf.name !== 'id').map(gdf => `{ title: '${gdf.description || gdf.name}', dataIndex: '${gdf.name}' }`).join(', ')}]} /> }`).join(', ')}]} />`}) }}` : '';
-                  return `{
-                  key: '${f.name}',
-                  label: '${f.description || f.name}',
-                  children: (
-                    <Table
-                      size="small"
-                      rowKey="id"
-                      dataSource={record.${f.name} || []}
-                      pagination={false}${grandExpandable2}
-                      columns={[
-                        ${displayCols.map(df => (df.type === 'relation' ? `{ title: '${df.description || df.name}', dataIndex: '${df.name}', render: (_: any, r: any) => r.${df.name}_display || r.${df.name} }` : `{ title: '${df.description || df.name}', dataIndex: '${df.name}' }`)).join(',\n                        ')},
-                      ]}
-                    />
-                  ),
-                }`;
-                }).join(',\n                ')}
-              ]}
-            />`}
+            ${buildExpandedRowRender(oneToManyFields, dto)}
           ),
         }}` : ''}
         search={false}
@@ -1378,37 +1391,7 @@ ${hasOneToMany ? dto.fields.filter(f => f.type === 'relation' && f.relationType 
         onFinish={handleSubmit}
         modalProps={{ destroyOnClose: true }}
       >
-${(() => {
-  const nonDetailFields = formFields.filter((_, i) => {
-    const f = creatableFields[i];
-    return !(f?.type === 'relation' && f?.relationType === 'one-to-many');
-  });
-  const detailFormFields = formFields.filter((_, i) => {
-    const f = creatableFields[i];
-    return f?.type === 'relation' && f?.relationType === 'one-to-many';
-  });
-  const detailFieldDefs = creatableFields.filter(f => f.type === 'relation' && f.relationType === 'one-to-many');
-
-  if (detailFormFields.length <= 1) {
-    return formFields.join('\n\n');
-  }
-  // Multiple 1:N fields → wrap in Tabs
-  const tabItems = detailFieldDefs.map((f, i) => `          {
-            key: '${f.name}',
-            label: '${f.description || f.name}',
-            forceRender: true,
-            children: (
-${detailFormFields[i]}
-            ),
-          }`).join(',\n');
-  return `${nonDetailFields.join('\n\n')}
-
-          <Tabs
-            items={[
-${tabItems}
-            ]}
-          />`;
-})()}
+${buildModalFormBody(formFields, creatableFields)}
       </ModalForm>
 
       ${dto.approvalFlow?.enabled ? `<ReassignModal
@@ -1437,6 +1420,500 @@ ${tabItems}
         onClose={() => setAgentOpen(false)}
       />` : ''}
     </>
+  );
+}
+`;
+}
+
+/**
+ * Generate the list page for a document-type module.
+ * Shows a ProTable with a "查看" button per row that navigates to the detail page.
+ * No create modal — the toolbar "新建" button routes to /create instead.
+ */
+export function generateFrontendDocumentListPage(dto: AutoCodeDto, relationDictTypes: Map<string, string | null> = new Map()): string {
+  const n = deriveNames(dto.tableName);
+  const listableFields = dto.fields.filter((f) => f.listable && f.type !== 'relation' || (f.type === 'relation' && f.relationType !== 'one-to-many'));
+  const searchableFields = dto.fields.filter((f) => f.searchable);
+  const tableSearchableFields = searchableFields.filter((f) => !(f.type === 'relation' && f.relationType === 'one-to-many'));
+
+  const dictFields = dto.fields.filter((f) => f.type === 'dict');
+  const manyToOneDictFields = dto.fields
+    .filter((f) => f.type === 'relation' && (f.relationType === 'many-to-one' || f.relationType === 'many-to-many') && relationDictTypes.get(f.name))
+    .map((f) => ({ field: f, dictType: relationDictTypes.get(f.name) as string }));
+  const hasDictFields = dictFields.length > 0 || manyToOneDictFields.length > 0;
+
+  const columnLines = listableFields.map((f) => {
+    if (f.type === 'boolean') {
+      return `    { title: '${f.description || f.name}', dataIndex: '${f.name}', valueType: 'switch', width: 100, search: false },`;
+    }
+    if (f.type === 'image') {
+      return `    { title: '${f.description || f.name}', dataIndex: '${f.name}', width: 80, search: false, render: (_, record) => record.${f.name} ? <Image src={record.${f.name}} width={40} height={40} style={{ objectFit: 'cover', borderRadius: 4 }} /> : '-' },`;
+    }
+    if (f.type === 'dict') {
+      return `    { title: '${f.description || f.name}', dataIndex: '${f.name}', valueType: 'select', width: 120, search: false, valueEnum: ${toCamelCase(f.name)}Options },`;
+    }
+    if (f.type === 'relation' && (f.relationType === 'many-to-one' || f.relationType === 'many-to-many')) {
+      const m2oDictType = relationDictTypes.get(f.name);
+      const renderExpr = m2oDictType
+        ? `{ const code = record.${f.name}_display || record.${f.name}; return ${toCamelCase(f.name)}TypeMap[code ?? ''] ?? code; }`
+        : `record.${f.name}_display || record.${f.name}`;
+      return `    { title: '${f.description || f.name}', dataIndex: '${f.name}', width: 180, search: false, render: (_, record) => ${renderExpr} },`;
+    }
+    return `    { title: '${f.description || f.name}', dataIndex: '${f.name}', width: 180 },`;
+  });
+
+  const isNumericF = (f: AutoCodeField) => f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal';
+
+  const _descText = dto.description || n.pascalName;
+  const _parenIdx = _descText.indexOf('（');
+  const _parenAsciiIdx = _descText.indexOf('(');
+  const _splitIdx = _parenIdx > 0 ? _parenIdx : (_parenAsciiIdx > 0 ? _parenAsciiIdx : -1);
+  const headerShortName = _splitIdx > 0 ? _descText.slice(0, _splitIdx).trim() : _descText;
+
+  const antdImports = ['Button', 'message', 'Popconfirm', 'Space', 'Input'];
+  if (dto.fields.some((f) => f.type === 'image')) antdImports.push('Image');
+  if (hasDictFields) antdImports.push('Tag');
+
+  const iconImportsDL = ['PlusOutlined', 'SearchOutlined'];
+  if (dto.agentConfig?.enabled) iconImportsDL.push('RobotOutlined');
+
+  return `import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { history } from 'umi';
+import { ${antdImports.join(', ')} } from 'antd';
+import { ${iconImportsDL.join(', ')} } from '@ant-design/icons';
+import { ActionType, ProColumns, ProTable } from '@ant-design/pro-components';
+import {
+  get${n.pascalName}List, delete${n.pascalSingular}, batchDelete${n.pascalName},
+  type ${n.pascalSingular},
+} from '${n.serviceImportAlias}';
+import { getMyBtnPerms } from '@/services/authority-btn';${hasDictFields ? `\nimport { getDictDetailsByType } from '@/services/dictionary';` : ''}${dto.agentConfig?.enabled ? `\nimport EntityAgentPanel from '@/components/EntityAgentPanel';` : ''}
+
+export default function ${n.pascalName}Page() {
+  const actionRef = useRef<ActionType>(undefined);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
+  const [btnPerms, setBtnPerms] = useState<Set<string>>(new Set());${dto.agentConfig?.enabled ? `
+  const [agentOpen, setAgentOpen] = useState(false);` : ''}
+${dictFields.length > 0 ? dictFields.map(f => `  const [${toCamelCase(f.name)}Options, set${toPascalCase(f.name)}Options] = useState<Record<string, { text: string }>>({});`).join('\n') + '\n' : ''}${manyToOneDictFields.length > 0 ? manyToOneDictFields.map(({ field: f }) => `  const [${toCamelCase(f.name)}TypeMap, set${toPascalCase(f.name)}TypeMap] = useState<Record<string, string>>({});`).join('\n') + '\n' : ''}${tableSearchableFields.flatMap(f => isNumericF(f) ? [`  const [search${toPascalCase(f.name)}Min, setSearch${toPascalCase(f.name)}Min] = useState('');`, `  const [search${toPascalCase(f.name)}Max, setSearch${toPascalCase(f.name)}Max] = useState('');`] : [`  const [search${toPascalCase(f.name)}, setSearch${toPascalCase(f.name)}] = useState('');`]).join('\n')}${tableSearchableFields.length > 0 ? `
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (debounceTimer.current) clearTimeout(debounceTimer.current); }, []);
+  const makeDebounce = useCallback((setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => { setter(val); }, 400);
+  }, []);` : ''}
+${hasDictFields ? `
+  useEffect(() => {
+${dictFields.map(f => `    getDictDetailsByType('${f.dictType || ''}').then((list: any[]) => {
+      const map: Record<string, { text: string }> = {};
+      list.forEach((item: any) => { map[item.value] = { text: item.label }; });
+      set${toPascalCase(f.name)}Options(map);
+    }).catch(() => {});`).join('\n')}
+${manyToOneDictFields.map(({ field: f, dictType }) => `    getDictDetailsByType('${dictType}').then((list: any[]) => {
+      const m: Record<string, string> = {};
+      list.forEach((item: any) => { m[item.value] = item.label; });
+      set${toPascalCase(f.name)}TypeMap(m);
+    }).catch(() => {});`).join('\n')}
+  }, []);` : ''}
+
+  useEffect(() => {
+    getMyBtnPerms().then((perms) => {
+      const entry = perms['${n.pageComponentPath}'];
+      setBtnPerms(new Set(entry?.systemBtns ?? []));
+    }).catch(() => {});
+  }, []);
+
+  const handleBatchDelete = async () => {
+    try {
+      const result = await batchDelete${n.pascalName}(selectedRowKeys);
+      message.success(\`成功删除 \$\{result.count\} 条记录\`);
+      setSelectedRowKeys([]);
+      actionRef.current?.reload();
+    } catch (err: any) {
+      message.error(err.message || '批量删除失败');
+    }
+  };
+
+  const columns: ProColumns<${n.pascalSingular}>[] = [
+${columnLines.join('\n')}
+    {
+      title: '操作',
+      key: 'action',
+      width: 120,
+      search: false,
+      render: (_, record) => (
+        <Space>
+          {btnPerms.has('view') && (
+            <Button type="link" size="small" onClick={() => history.push(\`/lc/${n.kebabName}/\${record.id}\`)}>
+              查看
+            </Button>
+          )}
+          {btnPerms.has('edit') && (
+            <Button type="link" size="small" onClick={() => history.push(\`/lc/${n.kebabName}/\${record.id}\`)}>
+              编辑
+            </Button>
+          )}
+          {btnPerms.has('delete') && (
+            <Popconfirm
+              title="确认删除？"
+              description="删除后无法恢复。"
+              onConfirm={async () => {
+                try {
+                  await delete${n.pascalSingular}(record.id);
+                  message.success('删除成功');
+                  actionRef.current?.reload();
+                } catch (err: any) {
+                  message.error(err.message || '删除失败');
+                }
+              }}
+              okText="确认"
+              cancelText="取消"
+            >
+              <Button type="link" size="small" danger>删除</Button>
+            </Popconfirm>
+          )}
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <>
+      <ProTable<${n.pascalSingular}>
+        headerTitle="${headerShortName}"
+        actionRef={actionRef}
+        rowKey="id"
+        columns={columns}
+        search={false}
+        ${tableSearchableFields.length > 0 ? `params={{ ${tableSearchableFields.flatMap(f => isNumericF(f) ? [`search${toPascalCase(f.name)}Min`, `search${toPascalCase(f.name)}Max`] : [`search${toPascalCase(f.name)}`]).join(', ')} }}` : ''}
+        rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as string[]) }}
+        request={async (params) => {
+          const { current: page, pageSize } = params;
+          const result = await get${n.pascalName}List({ page, pageSize${tableSearchableFields.length > 0 ? `, ${tableSearchableFields.flatMap(f => isNumericF(f) ? [`${f.name}Min: search${toPascalCase(f.name)}Min || undefined`, `${f.name}Max: search${toPascalCase(f.name)}Max || undefined`] : [`${f.name}: search${toPascalCase(f.name)} || undefined`]).join(', ')}` : ''} });
+          return { data: result.list, total: result.total, success: true };
+        }}
+        toolBarRender={() => [
+          ${tableSearchableFields.length > 0 ? `<Space key="filters" wrap size={8}>
+            ${tableSearchableFields.flatMap(f => isNumericF(f) ? [`<Input key="search-${f.name}-min" placeholder="${f.description || f.name}最小值" allowClear style={{ width: 120 }} onChange={makeDebounce(setSearch${toPascalCase(f.name)}Min)} onClear={() => setSearch${toPascalCase(f.name)}Min('')} />`, `<Input key="search-${f.name}-max" placeholder="${f.description || f.name}最大值" allowClear style={{ width: 120 }} onChange={makeDebounce(setSearch${toPascalCase(f.name)}Max)} onClear={() => setSearch${toPascalCase(f.name)}Max('')} />`] : [`<Input key="search-${f.name}" placeholder="搜索${f.description || f.name}" prefix={<SearchOutlined />} allowClear style={{ width: 180 }} onChange={makeDebounce(setSearch${toPascalCase(f.name)})} onClear={() => setSearch${toPascalCase(f.name)}('')} />`]).join('\n            ')}
+          </Space>,` : ''}
+          btnPerms.has('add') && (
+            <Button key="create" type="primary" icon={<PlusOutlined />} onClick={() => history.push('/lc/${n.kebabName}/create')}>
+              新建
+            </Button>
+          ),
+          btnPerms.has('batchDelete') && selectedRowKeys.length > 0 && (
+            <Popconfirm
+              key="batch-delete"
+              title="确认批量删除？"
+              description={\`已选择 \$\{selectedRowKeys.length\} 条记录，删除后无法恢复。\`}
+              onConfirm={handleBatchDelete}
+              okText="确认"
+              cancelText="取消"
+            >
+              <Button danger>批量删除 ({selectedRowKeys.length})</Button>
+            </Popconfirm>
+          ),
+          ${dto.agentConfig?.enabled ? `btnPerms.has('agent') && (
+            <Button
+              key="agent"
+              icon={<RobotOutlined />}
+              onClick={() => setAgentOpen(true)}
+            >
+              AI 助手
+            </Button>
+          ),` : ''}
+        ].filter(Boolean)}
+      />
+      ${dto.agentConfig?.enabled ? `<EntityAgentPanel
+        open={agentOpen}
+        businessType="${n.tableName}"
+        onClose={() => setAgentOpen(false)}
+      />` : ''}
+    </>
+  );
+}
+`;
+}
+
+/**
+ * Generate the document detail page (detail.tsx).
+ * Layout: header form (non-O2M fields, 2-column grid) + one section per O2M field
+ * with an inline EditableProTable.  Toolbar: 保存草稿 / 提交审批 / 返回列表.
+ */
+export function generateFrontendDocumentPage(dto: AutoCodeDto, relationDictTypes: Map<string, string | null> = new Map()): string {
+  const n = deriveNames(dto.tableName);
+  const headerFields = dto.fields.filter((f) => f.creatable && !(f.type === 'relation' && f.relationType === 'one-to-many'));
+  const o2mFields = dto.fields.filter((f) => f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields && f.detailFields.length > 0);
+
+  const dictFields = dto.fields.filter((f) => f.type === 'dict');
+  const manyToOneDictFields = dto.fields
+    .filter((f) => f.type === 'relation' && (f.relationType === 'many-to-one' || f.relationType === 'many-to-many') && relationDictTypes.get(f.name))
+    .map((f) => ({ field: f, dictType: relationDictTypes.get(f.name) as string }));
+  const hasDictFields = dictFields.length > 0 || manyToOneDictFields.length > 0 ||
+    o2mFields.some(f => (f.detailFields || []).some(df => df.type === 'dict' && df.dictType));
+
+  const hasUploadFields = headerFields.some((f) => f.type === 'image' || f.type === 'file');
+  const hasTimestampFields = headerFields.some((f) => f.type === 'timestamp') ||
+    o2mFields.some(f => (f.detailFields || []).some(df => df.type === 'timestamp'));
+
+  const relationTables = new Set<string>();
+  headerFields.filter(f => f.type === 'relation' && f.relationTable).forEach(f => relationTables.add(f.relationTable!));
+  o2mFields.forEach(f => (f.detailFields || []).filter(df => df.type === 'relation' && df.relationTable && df.relationTable !== dto.tableName).forEach(df => relationTables.add(df.relationTable!)));
+
+  const apiFunctions = [
+    `get${n.pascalSingular}`,
+    `create${n.pascalSingular}`,
+    `update${n.pascalSingular}`,
+    ...[...relationTables].map(t => `get${toPascalCase(singularize(t))}Options`),
+    ...(dto.approvalFlow?.enabled ? [`submit${n.pascalSingular}Approval`] : []),
+  ];
+
+  const typeImports = [`Create${n.pascalSingular}Dto`, `Update${n.pascalSingular}Dto`, n.pascalSingular];
+  for (const f of o2mFields) {
+    const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
+    const childType = isExisting ? deriveNames(f.relationTable!).schemaType : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
+    typeImports.push(childType);
+  }
+
+  // Header form fields JSX
+  const headerFormItems = headerFields.map((f) => {
+    const requiredRule = f.required ? `rules={[{ required: true, message: '请${f.type === 'relation' ? '选择' : '输入'}${f.description || f.name}' }]}` : '';
+    const component = getProFormComponent(f);
+
+    if (f.type === 'code') {
+      return `            {isEditing && (
+              <ProFormText name="${f.name}" label="${f.description || f.name}" disabled />
+            )}`;
+    }
+    if (f.type === 'boolean') {
+      return `            <ProFormSwitch name="${f.name}" label="${f.description || f.name}" />`;
+    }
+    if (f.type === 'dict') {
+      return `            <ProFormSelect
+              name="${f.name}"
+              label="${f.description || f.name}"
+              ${requiredRule}
+              request={async () => { const list = await getDictDetailsByType('${f.dictType || ''}'); return list.map((d: any) => ({ label: d.label, value: d.value })); }}
+            />`;
+    }
+    if (f.type === 'relation' && f.relationType !== 'one-to-many') {
+      const fetchFn = `get${toPascalCase(singularize(f.relationTable!))}Options`;
+      const displayField = f.relationDisplayField || 'name';
+      return `            <ProFormSelect
+              name="${f.name}"
+              label="${f.description || f.name}"
+              ${requiredRule}
+              request={async () => { const res = await ${fetchFn}(); return res.map((item: any) => ({ label: item.${displayField}, value: item.id })); }}
+            />`;
+    }
+    if (f.type === 'timestamp') {
+      return `            <ProFormDateTimePicker name="${f.name}" label="${f.description || f.name}" ${requiredRule} />`;
+    }
+    if (f.type === 'image') {
+      return `            <Form.Item name="${f.name}" label="${f.description || f.name}" ${requiredRule} getValueFromEvent={(e) => Array.isArray(e) ? e : e?.fileList}>
+              <Upload listType="picture-card" accept="image/*" maxCount={1} customRequest={async ({ file, onSuccess, onError }) => { try { const r = await uploadFile(file as File); onSuccess(r); } catch (e) { onError(e); } }}>
+                <div><PlusOutlined /> Upload</div>
+              </Upload>
+            </Form.Item>`;
+    }
+    if (f.type === 'file') {
+      return `            <Form.Item name="${f.name}" label="${f.description || f.name}" ${requiredRule} getValueFromEvent={(e) => Array.isArray(e) ? e : e?.fileList}>
+              <Upload listType="text" maxCount={1} customRequest={async ({ file, onSuccess, onError }) => { try { const r = await uploadFile(file as File); onSuccess(r); } catch (e) { onError(e); } }}>
+                <Button icon={<UploadOutlined />}>选择文件</Button>
+              </Upload>
+            </Form.Item>`;
+    }
+    if (f.type === 'text') {
+      return `            <${component} name="${f.name}" label="${f.description || f.name}" placeholder="${f.description || f.name}" ${requiredRule} fieldProps={{ rows: 3 }} />`;
+    }
+    return `            <${component} name="${f.name}" label="${f.description || f.name}" placeholder="${f.description || f.name}" ${requiredRule} />`;
+  });
+
+  // O2M sections — each renders an EditableProTable card
+  const o2mSections = o2mFields.map((f) => {
+    const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
+    const childType = isExisting ? deriveNames(f.relationTable!).schemaType : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
+    const detailCols = (f.detailFields || []).filter(df =>
+      df.name !== 'id' &&
+      !(df.type === 'relation' && df.relationTable === dto.tableName) &&
+      !(df.type === 'relation' && df.relationType === 'one-to-many'),
+    );
+    const colDefs = detailCols.map((df) => {
+      if (df.type === 'relation' && df.relationTable) {
+        const relDisplay = df.relationDisplayField || 'name';
+        const relFetchFn = `get${toPascalCase(singularize(df.relationTable))}Options`;
+        return `          { title: '${df.description || df.name}', dataIndex: '${df.name}', valueType: 'select', render: (_: any, r: any) => r.${df.name}_display || r.${df.name}, formItemProps: { rules: [{ required: ${df.required} }] }, request: async () => { const res = await ${relFetchFn}(); return res.map((item: any) => ({ label: item.${relDisplay}, value: item.id })); }, fieldProps: { showSearch: true } },`;
+      }
+      if (df.type === 'dict' && df.dictType) {
+        return `          { title: '${df.description || df.name}', dataIndex: '${df.name}', valueType: 'select', formItemProps: { rules: [{ required: ${df.required} }] }, request: async () => { const list = await getDictDetailsByType('${df.dictType}'); return list.map((item: any) => ({ label: item.label, value: item.value })); } },`;
+      }
+      const vt = df.type === 'integer' || df.type === 'bigint' || df.type === 'decimal' ? 'digit' : df.type === 'timestamp' ? 'dateTime' : 'text';
+      return `          { title: '${df.description || df.name}', dataIndex: '${df.name}', valueType: '${vt}', formItemProps: { rules: [{ required: ${df.required} }] } },`;
+    });
+    const emptyRow = detailCols.map(df => {
+      if (df.type === 'relation') return `${df.name}: ''`;
+      return `${df.name}: ${df.type === 'integer' || df.type === 'bigint' || df.type === 'decimal' ? '0' : df.type === 'timestamp' ? 'null' : "''"}`;
+    }).join(', ');
+
+    return `        {/* ── ${f.description || f.name} ── */}
+        <Card title="${f.description || f.name}" style={{ marginBottom: 16 }} extra={
+          <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={() => {
+            const tempId = Date.now().toString() + '_' + Math.random().toString(36).slice(2, 8);
+            const newRow = { id: tempId, ${emptyRow} };
+            set${toPascalCase(f.name)}Rows((rows) => [...rows, newRow]);
+            set${toPascalCase(f.name)}Keys((keys) => [...keys, tempId]);
+          }}>添加行</Button>
+        }>
+          <EditableProTable<${childType}>
+            rowKey="id"
+            value={${toCamelCase(f.name)}Rows}
+            onChange={(data) => set${toPascalCase(f.name)}Rows(data as ${childType}[])}
+            recordCreatorProps={false}
+            editable={{
+              type: 'multiple',
+              editableKeys: ${toCamelCase(f.name)}Keys,
+              onChange: set${toPascalCase(f.name)}Keys,
+              onValuesChange: (_record, dataSource) => set${toPascalCase(f.name)}Rows(dataSource as ${childType}[]),
+              actionRender: (row, _cfg, _doms) => [
+                <a key="del" onClick={() => {
+                  set${toPascalCase(f.name)}Rows((rows) => rows.filter((r) => r.id !== row.id));
+                  set${toPascalCase(f.name)}Keys((keys) => keys.filter((k) => k !== row.id));
+                }} style={{ color: '#ff4d4f' }}>删除</a>,
+              ],
+            }}
+            columns={[
+${colDefs.join('\n')}
+              { title: '操作', valueType: 'option', width: 60 },
+            ]}
+          />
+        </Card>`;
+  });
+
+  // handleSubmit: build DTO
+  const headerDtoFields = headerFields.filter(f => f.type !== 'code').map(buildDtoFieldTemplate);
+  const o2mDtoFields = o2mFields.map(f => {
+    const tsFields = (f.detailFields || []).filter((df: any) => df.type === 'timestamp' && df.name !== 'id');
+    const tsOverrides = tsFields.map((df: any) => `            ${df.name}: d.${df.name} && typeof d.${df.name} === 'object' ? d.${df.name}.toISOString() : d.${df.name},`).join('\n');
+    return `          ${f.name}: ${toCamelCase(f.name)}Rows.map((d: any) => ({
+            ...d,
+            id: d.id?.length < 36 ? undefined : d.id,
+${tsOverrides ? tsOverrides + '\n' : ''}          })),`;
+  });
+
+  const _descText = dto.description || n.pascalName;
+  const _parenIdx = _descText.indexOf('（');
+  const _parenAsciiIdx = _descText.indexOf('(');
+  const _splitIdx = _parenIdx > 0 ? _parenIdx : (_parenAsciiIdx > 0 ? _parenAsciiIdx : -1);
+  const headerShortName = _splitIdx > 0 ? _descText.slice(0, _splitIdx).trim() : _descText;
+
+  const antdImports = ['Button', 'Card', 'Form', 'message', 'Space', 'Spin'];
+  if (hasUploadFields) antdImports.push('Upload');
+
+  const iconImports = ['PlusOutlined', 'ArrowLeftOutlined', 'SaveOutlined'];
+  if (hasUploadFields) iconImports.push('UploadOutlined');
+  if (dto.approvalFlow?.enabled) iconImports.push('CheckOutlined');
+
+  return `import React, { useState, useEffect } from 'react';
+import { history, useParams } from 'umi';
+${hasTimestampFields ? "import dayjs from 'dayjs';\n" : ''}import { ${antdImports.join(', ')} } from 'antd';
+import { ${iconImports.join(', ')} } from '@ant-design/icons';
+import { ProForm, ProFormText, ProFormTextArea, ProFormDigit, ProFormSwitch, ProFormSelect, ProFormDateTimePicker, EditableProTable } from '@ant-design/pro-components';
+import {
+  ${apiFunctions.join(',\n  ')},
+  type ${typeImports.join(',\n  type ')},
+} from '${n.serviceImportAlias}';${hasDictFields ? `\nimport { getDictDetailsByType } from '@/services/dictionary';` : ''}${hasUploadFields ? `\nimport { uploadFile } from '@/services/file';` : ''}
+
+export default function ${n.pascalName}DetailPage() {
+  const { id } = useParams<{ id: string }>();
+  const isEditing = !!id && id !== 'create';
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [form] = Form.useForm();
+${o2mFields.map(f => {
+  const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
+  const childType = isExisting ? deriveNames(f.relationTable!).schemaType : toPascalCase(`${singularize(dto.tableName)}_${singularize(f.name)}`);
+  return `  const [${toCamelCase(f.name)}Rows, set${toPascalCase(f.name)}Rows] = useState<${childType}[]>([]);
+  const [${toCamelCase(f.name)}Keys, set${toPascalCase(f.name)}Keys] = useState<React.Key[]>([]);`;
+}).join('\n')}
+
+  useEffect(() => {
+    if (!isEditing) return;
+    setLoading(true);
+    get${n.pascalSingular}(id!).then((record) => {
+      form.setFieldsValue({
+        ${headerFields.map(f => {
+          if (f.type === 'timestamp') return `${f.name}: record.${f.name} ? dayjs(record.${f.name}) : null,`;
+          if (f.type === 'image' || f.type === 'file') return `${f.name}: record.${f.name} ? [{ uid: '-1', name: 'file', url: record.${f.name}, status: 'done' }] : [],`;
+          return `${f.name}: record.${f.name},`;
+        }).join('\n        ')}
+      });
+${o2mFields.map(f => `      set${toPascalCase(f.name)}Rows(record.${f.name} || []);
+      set${toPascalCase(f.name)}Keys([]);`).join('\n')}
+    }).catch((err: any) => {
+      message.error(err.message || '加载失败');
+    }).finally(() => setLoading(false));
+  }, [id]);
+
+  const handleSave = async () => {
+    try {
+      const values = await form.validateFields();
+      setSubmitting(true);
+      if (isEditing) {
+        const dto: Update${n.pascalSingular}Dto = {
+${headerDtoFields.join('\n')}
+${o2mDtoFields.join('\n')}
+        };
+        await update${n.pascalSingular}(id!, dto);
+        message.success('保存成功');
+      } else {
+        const dto: Create${n.pascalSingular}Dto = {
+${headerDtoFields.join('\n')}
+${o2mDtoFields.join('\n')}
+        };
+        const created = await create${n.pascalSingular}(dto);
+        message.success('创建成功');
+        history.replace(\`/lc/${n.kebabName}/\${created.id}\`);
+      }
+    } catch (err: any) {
+      if (!err?.errorFields) message.error(err.message || '保存失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+${dto.approvalFlow?.enabled ? `
+  const handleSubmitApproval = async () => {
+    try {
+      await form.validateFields();
+      setSubmitting(true);
+      await handleSave();
+      await submit${n.pascalSingular}Approval(id!, form.getFieldsValue());
+      message.success('已提交审批');
+    } catch (err: any) {
+      if (!err?.errorFields) message.error(err.message || '提交审批失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };` : ''}
+
+  return (
+    <Spin spinning={loading}>
+      <Card
+        title={isEditing ? '编辑${headerShortName}' : '新建${headerShortName}'}
+        extra={
+          <Space>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => history.push('/lc/${n.kebabName}')}>返回列表</Button>
+            <Button type="primary" icon={<SaveOutlined />} loading={submitting} onClick={handleSave}>保存草稿</Button>
+            ${dto.approvalFlow?.enabled ? `<Button type="primary" icon={<CheckOutlined />} loading={submitting} onClick={handleSubmitApproval} style={{ background: '#52c41a', borderColor: '#52c41a' }}>提交审批</Button>` : ''}
+          </Space>
+        }
+        style={{ marginBottom: 16 }}
+      >
+        <ProForm form={form} submitter={false} layout="horizontal" grid labelCol={{ span: 6 }} colProps={{ span: 12 }}>
+${headerFormItems.join('\n\n')}
+        </ProForm>
+      </Card>
+
+${o2mSections.join('\n\n')}
+    </Spin>
   );
 }
 `;
