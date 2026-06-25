@@ -31,7 +31,11 @@ request.interceptors.response.use(
     const originalRequest = error.config;
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
-      const { refreshToken } = useUserStore.getState();
+      const { refreshToken, isLoggedIn } = useUserStore.getState();
+      // Already logged out — don't trigger another clearUser() + redirect cycle
+      if (!isLoggedIn) {
+        return Promise.reject(error);
+      }
       if (!refreshToken) {
         useUserStore.getState().clearUser();
         window.location.href = '/login';

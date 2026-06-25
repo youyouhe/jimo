@@ -124,6 +124,8 @@ export class CasbinService implements ICasbinService, OnModuleInit {
       await this.enforcer.addPolicy(role, '/api/v1/lc/*', '*');
       await this.enforcer.addPolicy(role, '/api/v1/approvals/*', '*');
       await this.enforcer.addPolicy(role, '/api/v1/ownership/*', '*');
+      // Auth operations (login, logout, refresh, me) — all methods
+      await this.enforcer.addPolicy(role, '/api/v1/auth/*', '*');
     }
 
     // ── admin: full CRUD everywhere ──

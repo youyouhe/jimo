@@ -48,15 +48,19 @@ import { history } from '@umijs/max';
 import WorkspaceTabs from '@/components/WorkspaceTabs';
 
 async function doLogout() {
+  // Navigate away FIRST so page components unmount before user state changes.
+  // Otherwise KeepAliveOutlet still renders DashboardPage which subscribes to
+  // useUserStore — and a selector like `userInfo?.roles ?? []` creating a new
+  // array on every render would trigger an infinite forceStoreRerender loop.
+  history.push('/login');
+  // Close all tabs so next user doesn't see previous user's pages
+  useTabsStore.getState().closeAll();
   try {
     await logoutApi();
   } catch {
     // swallow API errors — still clear local state
   }
   useUserStore.getState().clearUser();
-  // Clear persisted tabs so next user doesn't see previous user's pages
-  useTabsStore.getState().closeAll();
-  history.push('/login');
 }
 
 export const layout = ({ initialState }: { initialState: any }) => ({
