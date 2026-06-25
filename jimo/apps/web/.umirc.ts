@@ -97,28 +97,56 @@ export default defineConfig({
     // code-generation time.  patchClientRoutes filters them at runtime
     // against the DB menu tree for role-based access control.
     {
-      path: '/lc/suppliers',
-      name: '供应商表',
-      icon: 'TableOutlined',
-      component: './lc/suppliers/index',
-    },
-    {
-      path: '/lc/procurement-contracts',
-      name: '采购合同表',
-      icon: 'TableOutlined',
-      component: './lc/procurement-contracts/index',
-    },
-    {
       path: '/lc/accounts',
       name: '会计科目表',
       icon: 'TableOutlined',
       component: './lc/accounts/index',
     },
     {
+      path: '/lc/vouchers/create',
+      component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/vouchers/:id',
+      component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/vouchers/create',
+      component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/vouchers/:id',
+      component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/vouchers/create',
+      component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/vouchers/:id',
+      component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
       path: '/lc/vouchers',
-      name: '记账凭证表',
+      name: '凭证表',
       icon: 'TableOutlined',
       component: './lc/vouchers/index',
+    },
+    {
+      path: '/lc/vouchers/create',
+      component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/vouchers/:id',
+      component: 'lc/vouchers/detail',
+      layout: false,
     },
     { path: '/*', redirect: '/dashboard' },
   ],

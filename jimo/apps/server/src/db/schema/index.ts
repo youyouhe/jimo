@@ -25,7 +25,5 @@ export * from './sys-departments.js';
 export * from './cleanup-jobs.js';
 export * from './business-approvals.js';
 export * from './sys-approval-flows.js';
-export * from './suppliers.js';
-export * from './procurement-contracts.js';
 export * from './accounts.js';
 export * from './vouchers.js';

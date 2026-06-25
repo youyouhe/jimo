@@ -1,12 +1,12 @@
-import { IsNotEmpty, IsOptional, IsString, IsArray, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsUUID, IsArray, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateVoucherDto {
-  @ApiProperty({ description: '凭证号', maxLength: 50 })
+  @ApiProperty({ description: '凭证号', maxLength: 30 })
   @IsNotEmpty()
   @IsString()
-  @MaxLength(50)
-  voucher_no: string;
+  @MaxLength(30)
+  voucher_number: string;
 
   @ApiProperty({ description: '凭证日期' })
   @IsNotEmpty()
@@ -18,19 +18,19 @@ export class CreateVoucherDto {
   @IsString()
   summary: string;
 
-  @ApiProperty({ description: '制单人', maxLength: 50 })
-  @IsNotEmpty()
-  @IsString()
-  @MaxLength(50)
-  prepared_by: string;
-
   @ApiProperty({ description: '凭证状态' })
   @IsNotEmpty()
   @IsString()
   status: string;
 
+  @ApiPropertyOptional({ description: '附件', maxLength: 512 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(512)
+  attachment?: string | undefined;
+
   @ApiPropertyOptional({ description: '凭证分录', type: [Object] })
   @IsOptional()
   @IsArray()
-  voucher_items?: any[];
+  items?: any[];
 }

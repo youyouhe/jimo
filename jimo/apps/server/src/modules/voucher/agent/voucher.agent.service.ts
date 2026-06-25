@@ -39,13 +39,13 @@ export class VoucherAgentService {
       parameters: {
         type: 'object',
         properties: {
-        voucher_no: { type: 'string', description: '凭证号' },
+        voucher_number: { type: 'string', description: '凭证号' },
         voucher_date: { type: 'string', description: '凭证日期' },
         summary: { type: 'string', description: '凭证摘要' },
-        prepared_by: { type: 'string', description: '制单人' },
         status: { type: 'string', description: '凭证状态' },
+        attachment: { type: 'string', description: '附件' },
         },
-        required: ['voucher_no', 'voucher_date', 'summary', 'prepared_by', 'status'],
+        required: ['voucher_number', 'voucher_date', 'summary', 'status'],
       },
       execute: async (args: any) => {
         return this.voucherService.create(args, userId);
@@ -58,9 +58,11 @@ export class VoucherAgentService {
         type: 'object',
         properties: {
           id: { type: 'string', description: 'Record UUID' },
+        voucher_number: { type: 'string', description: '凭证号' },
         voucher_date: { type: 'string', description: '凭证日期' },
         summary: { type: 'string', description: '凭证摘要' },
         status: { type: 'string', description: '凭证状态' },
+        attachment: { type: 'string', description: '附件' },
         },
         required: ['id'],
       },
@@ -89,10 +91,9 @@ export class VoucherAgentService {
         properties: {
         page: { type: 'number', description: 'Page number (1-based)' },
         pageSize: { type: 'number', description: 'Items per page' },
-        voucher_no: { type: 'string', description: '凭证号' },
+        voucher_number: { type: 'string', description: '凭证号' },
         voucher_date: { type: 'string', description: '凭证日期' },
         summary: { type: 'string', description: '凭证摘要' },
-        prepared_by: { type: 'string', description: '制单人' },
         status: { type: 'string', description: '凭证状态' },
         },
       },

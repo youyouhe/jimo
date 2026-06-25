@@ -37,13 +37,11 @@ import { WarehousAgentModule } from './modules/warehous/agent/warehous.agent.mod
 import { MaterialAgentModule } from './modules/material/agent/material.agent.module';
 import { StockInOrderAgentModule } from './modules/stock-in-order/agent/stock-in-order.agent.module';
 import { SupplierAgentModule } from './modules/supplier/agent/supplier.agent.module';
-import { SupplierModule } from './modules/supplier/supplier.module';
-import { ProcurementContractModule } from './modules/procurement-contract/procurement-contract.module';
 import { ProcurementContractAgentModule } from './modules/procurement-contract/agent/procurement-contract.agent.module';
-import { AccountModule } from './modules/account/account.module';
 import { AccountAgentModule } from './modules/account/agent/account.agent.module';
-import { VoucherModule } from './modules/voucher/voucher.module';
 import { VoucherAgentModule } from './modules/voucher/agent/voucher.agent.module';
+import { AccountModule } from './modules/account/account.module';
+import { VoucherModule } from './modules/voucher/voucher.module';
 
 @Module({
   imports: [
@@ -61,10 +59,7 @@ import { VoucherAgentModule } from './modules/voucher/agent/voucher.agent.module
     DictionaryModule,
     DictionaryDetailModule,
     OperationRecordModule,
-    VoucherModule,
-    AccountModule,
-    ProcurementContractModule,
-    SupplierModule,    ApprovalModule,
+    VoucherModule,    AccountModule,    ApprovalModule,
     BpmSyncModule,
     OwnershipModule,
     DepartmentModule,

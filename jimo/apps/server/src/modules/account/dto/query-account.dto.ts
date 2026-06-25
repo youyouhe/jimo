@@ -17,4 +17,9 @@ export class QueryAccountDto extends PaginationDto {
   @IsOptional()
   @IsString()
   account_type?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  balance_direction?: string;
 }

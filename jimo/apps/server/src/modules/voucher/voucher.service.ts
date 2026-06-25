@@ -8,7 +8,7 @@ import { eq, and, isNull, like, sql, count, inArray, gte, lte, desc } from 'driz
 import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import { OwnershipHelper } from '../../common/ownership/ownership.helper';
 import { vouchers, Vouchers } from '../../db/schema/vouchers';
-import { voucherVoucherItem } from '../../db/schema/vouchers';
+import { voucherItem } from '../../db/schema/vouchers';
 import { accounts } from '../../db/schema/accounts';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
@@ -24,24 +24,21 @@ export class VoucherService {
   ) {}
 
   async findAll(query: QueryVoucherDto, userId?: string, isAdmin: boolean = false): Promise<PaginatedData<Vouchers>> {
-    const { page, pageSize, voucher_no, voucher_date, summary, prepared_by, status } = query;
+    const { page, pageSize, voucher_number, voucher_date, summary, status } = query;
     const offset = (page - 1) * pageSize;
 
     const conditions: SQL[] = [isNull(vouchers.deletedAt)];
     const _ownership = this.ownershipHelper.visibleCondition(vouchers.ownerId, vouchers.sharedWith, userId, isAdmin, 'private');
     if (_ownership) conditions.push(_ownership);
 
-    if (voucher_no) {
-      conditions.push(like(vouchers.voucher_no, `%${voucher_no}%`));
+    if (voucher_number) {
+      conditions.push(like(vouchers.voucher_number, `%${voucher_number}%`));
     }
     if (voucher_date) {
       conditions.push(eq(vouchers.voucher_date, new Date(voucher_date)));
     }
     if (summary) {
       conditions.push(like(vouchers.summary, `%${summary}%`));
-    }
-    if (prepared_by) {
-      conditions.push(like(vouchers.prepared_by, `%${prepared_by}%`));
     }
     if (status) {
       conditions.push(eq(vouchers.status, status));
@@ -68,28 +65,29 @@ export class VoucherService {
     // Batch-attach child detail rows
     if (rows.length > 0) {
       const masterIds = rows.map((r) => r.id);
-      const voucher_itemsRows = await this.db
+      const itemsRows = await this.db
         .select({
-          id: voucherVoucherItem.id,
-          voucher_id: voucherVoucherItem.voucher_id,
-          account: voucherVoucherItem.account,
-          summary: voucherVoucherItem.summary,
-          debit_amount: voucherVoucherItem.debit_amount,
-          credit_amount: voucherVoucherItem.credit_amount,
-          account_display: accounts.name,
+          id: voucherItem.id,
+          voucher_id: voucherItem.voucher_id,
+          account_id: voucherItem.account_id,
+          debit_amount: voucherItem.debit_amount,
+          credit_amount: voucherItem.credit_amount,
+          summary: voucherItem.summary,
+          sort_order: voucherItem.sort_order,
+          account_id_display: accounts.name,
         })
-        .from(voucherVoucherItem)
-            .leftJoin(accounts, eq(voucherVoucherItem.account, accounts.id))
-        .where(and(inArray(voucherVoucherItem.voucher_id, masterIds), isNull(voucherVoucherItem.deletedAt)));
-      const voucher_itemsByMaster = new Map<string, any[]>();
-      for (const row of voucher_itemsRows) {
+        .from(voucherItem)
+            .leftJoin(accounts, eq(voucherItem.account_id, accounts.id))
+        .where(and(inArray(voucherItem.voucher_id, masterIds), isNull(voucherItem.deletedAt)));
+      const itemsByMaster = new Map<string, any[]>();
+      for (const row of itemsRows) {
         if (row.voucher_id == null) continue;
-        const arr = voucher_itemsByMaster.get(row.voucher_id) || [];
+        const arr = itemsByMaster.get(row.voucher_id) || [];
         arr.push(row);
-        voucher_itemsByMaster.set(row.voucher_id, arr);
+        itemsByMaster.set(row.voucher_id, arr);
       }
       for (const row of rows) {
-        (row as any).voucher_items = voucher_itemsByMaster.get(row.id) || [];
+        (row as any).items = itemsByMaster.get(row.id) || [];
       }
     }
 
@@ -112,22 +110,22 @@ export class VoucherService {
         message: `Voucher with id ${id} not found`,
       });
     }
-    (rows[0] as any).voucher_items = await this.getVoucherItems(id);
+    (rows[0] as any).items = await this.getItems(id);
     return rows[0]!;
   }
 
   async create(dto: CreateVoucherDto, userId?: string): Promise<Vouchers> {
-    // Check unique: voucher_no
-    const existingByVoucherNo = await this.db
+    // Check unique: voucher_number
+    const existingByVoucherNumber = await this.db
       .select()
       .from(vouchers)
-      .where(and(eq(vouchers.voucher_no, dto.voucher_no), isNull(vouchers.deletedAt)))
+      .where(and(eq(vouchers.voucher_number, dto.voucher_number), isNull(vouchers.deletedAt)))
       .limit(1);
 
-    if (existingByVoucherNo.length > 0) {
+    if (existingByVoucherNumber.length > 0) {
       throw new ConflictException({
         code: ApiErrorCode.PARAM_ERROR,
-        message: `VoucherNo '${dto.voucher_no}' is already taken`,
+        message: `VoucherNumber '${dto.voucher_number}' is already taken`,
       });
     }
 
@@ -136,22 +134,23 @@ export class VoucherService {
         .insert(vouchers)
         .values({
           ownerId: userId,
-          voucher_no: dto.voucher_no,
+          voucher_number: dto.voucher_number,
           voucher_date: dto.voucher_date ? new Date(dto.voucher_date) : new Date(),
           summary: dto.summary,
-          prepared_by: dto.prepared_by,
           status: dto.status,
+          attachment: dto.attachment,
         })
         .returning();
       const created = rows[0]!;
-      if (dto.voucher_items && (dto.voucher_items as any[]).length > 0) {
-        await tx.insert(voucherVoucherItem).values(
-          (dto.voucher_items as any[]).map((d: any) => ({
+      if (dto.items && (dto.items as any[]).length > 0) {
+        await tx.insert(voucherItem).values(
+          (dto.items as any[]).map((d: any) => ({
             voucher_id: created.id,
-            account: d.account,
-            summary: d.summary,
+            account_id: d.account_id,
             debit_amount: String(d.debit_amount),
             credit_amount: String(d.credit_amount),
+            summary: d.summary,
+            sort_order: d.sort_order,
           })),
         );
       }
@@ -163,11 +162,27 @@ export class VoucherService {
   async update(id: string, dto: UpdateVoucherDto, userId?: string, isAdmin: boolean = false): Promise<Vouchers> {
     const existing = await this.findOne(id, userId, isAdmin);
 
+    if (dto.voucher_number && dto.voucher_number !== existing.voucher_number) {
+      const voucher_numberConflict = await this.db
+        .select()
+        .from(vouchers)
+        .where(and(eq(vouchers.voucher_number, dto.voucher_number), isNull(vouchers.deletedAt)))
+        .limit(1);
+
+      if (voucher_numberConflict.length > 0) {
+        throw new ConflictException({
+          code: ApiErrorCode.PARAM_ERROR,
+          message: `VoucherNumber '${dto.voucher_number}' is already taken`,
+        });
+      }
+    }
 
     type VoucherUpdateFields = {
+      voucher_number?: string;
       voucher_date?: Date;
       summary?: string;
       status?: string;
+      attachment?: string;
       updatedAt?: Date;
     };
 
@@ -175,9 +190,11 @@ export class VoucherService {
       updatedAt: new Date(),
     };
 
+    if (dto.voucher_number !== undefined) updateData.voucher_number = dto.voucher_number;
     if (dto.voucher_date !== undefined) updateData.voucher_date = dto.voucher_date ? new Date(dto.voucher_date) : undefined;
     if (dto.summary !== undefined) updateData.summary = dto.summary;
     if (dto.status !== undefined) updateData.status = dto.status;
+    if (dto.attachment !== undefined) updateData.attachment = dto.attachment;
 
     const rows = await this.db
       .update(vouchers)
@@ -189,8 +206,8 @@ export class VoucherService {
       )
       .returning();
 
-    if (dto.voucher_items !== undefined) {
-      await this.updateVoucherItems(id, dto.voucher_items as any[]);
+    if (dto.items !== undefined) {
+      await this.updateItems(id, dto.items as any[]);
     }
     return rows[0]!;
   }
@@ -198,7 +215,7 @@ export class VoucherService {
   async remove(id: string, userId?: string, isAdmin: boolean = false): Promise<void> {
     await this.findOne(id, userId, isAdmin);
 
-    await this.removeVoucherItems(id);
+    await this.removeItems(id);
 
     await this.db
       .update(vouchers)
@@ -214,7 +231,7 @@ export class VoucherService {
     // Remove child detail rows for each id
     for (const id of ids) {
       try {
-        await this.removeVoucherItems(id);
+        await this.removeItems(id);
       } catch {
         // Record may not exist, ignore
       }
@@ -233,39 +250,42 @@ export class VoucherService {
     return { count: rows.length };
   }
 
-  async getVoucherItems(voucher_id: string): Promise<any[]> {
+  async getItems(voucher_id: string): Promise<any[]> {
     const rows = await this.db
       .select({
-      id: voucherVoucherItem.id,
-      voucher_id: voucherVoucherItem.voucher_id,
-      account: voucherVoucherItem.account,
-      summary: voucherVoucherItem.summary,
-      debit_amount: voucherVoucherItem.debit_amount,
-      credit_amount: voucherVoucherItem.credit_amount,
-      account_display: accounts.name,
+      id: voucherItem.id,
+      voucher_id: voucherItem.voucher_id,
+      account_id: voucherItem.account_id,
+      debit_amount: voucherItem.debit_amount,
+      credit_amount: voucherItem.credit_amount,
+      summary: voucherItem.summary,
+      sort_order: voucherItem.sort_order,
+      
+      account_id_display: accounts.name,
     })
-      .from(voucherVoucherItem)
-        .leftJoin(accounts, eq(voucherVoucherItem.account, accounts.id))
-      .where(and(eq(voucherVoucherItem.voucher_id, voucher_id), isNull(voucherVoucherItem.deletedAt)));
+      .from(voucherItem)
+        .leftJoin(accounts, eq(voucherItem.account_id, accounts.id))
+      .where(and(eq(voucherItem.voucher_id, voucher_id), isNull(voucherItem.deletedAt)));
 
     return rows;
   }
 
-  async createVoucherItems(voucher_id: string, details: any[]): Promise<void> {
+  async createItems(voucher_id: string, details: any[]): Promise<void> {
     if (details.length === 0) return;
     const values = details.map((d) => ({
       voucher_id,
-      account: d.account,
-      summary: d.summary,
+      account_id: d.account_id,
       debit_amount: String(d.debit_amount),
       credit_amount: String(d.credit_amount),
+      summary: d.summary,
+      sort_order: d.sort_order,
     }));
-    const inserted = await this.db.insert(voucherVoucherItem).values(values).returning();
+    const inserted = await this.db.insert(voucherItem).values(values).returning();
 
   }
 
-  async updateVoucherItems(voucher_id: string, details: any[]): Promise<void> {
-    const existing = await this.getVoucherItems(voucher_id);
+  async updateItems(voucher_id: string, details: any[]): Promise<void> {
+    const existing = await this.getItems(voucher_id);
     const existingIds = new Set(existing.map((r) => r.id));
     const incomingIds = new Set(details.filter((d) => d.id).map((d) => d.id));
 
@@ -274,39 +294,40 @@ export class VoucherService {
     if (toDelete.length > 0) {
 
       await this.db
-        .update(voucherVoucherItem)
+        .update(voucherItem)
         .set({ deletedAt: sql`NOW()` })
-        .where(and(inArray(voucherVoucherItem.id, toDelete.map((r) => r.id)), isNull(voucherVoucherItem.deletedAt)));
+        .where(and(inArray(voucherItem.id, toDelete.map((r) => r.id)), isNull(voucherItem.deletedAt)));
     }
 
     // Update existing rows
     for (const d of details.filter((d) => d.id && existingIds.has(d.id))) {
       await this.db
-        .update(voucherVoucherItem)
+        .update(voucherItem)
         .set({
-          account: d.account,
-          summary: d.summary,
+          account_id: d.account_id,
           debit_amount: String(d.debit_amount),
           credit_amount: String(d.credit_amount),
+          summary: d.summary,
+          sort_order: d.sort_order,
           updatedAt: sql`NOW()`,
         })
-        .where(eq(voucherVoucherItem.id, d.id));
+        .where(eq(voucherItem.id, d.id));
 
     }
 
     // Insert new rows (no id or temp id)
     const newRows = details.filter((d) => !d.id);
     if (newRows.length > 0) {
-      await this.createVoucherItems(voucher_id, newRows);
+      await this.createItems(voucher_id, newRows);
     }
   }
 
-  async removeVoucherItems(voucher_id: string): Promise<void> {
+  async removeItems(voucher_id: string): Promise<void> {
 
     await this.db
-      .update(voucherVoucherItem)
+      .update(voucherItem)
       .set({ deletedAt: sql`NOW()` })
-      .where(and(eq(voucherVoucherItem.voucher_id, voucher_id), isNull(voucherVoucherItem.deletedAt)));
+      .where(and(eq(voucherItem.voucher_id, voucher_id), isNull(voucherItem.deletedAt)));
   }
 
 }

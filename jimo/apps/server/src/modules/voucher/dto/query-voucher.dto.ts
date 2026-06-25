@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsUUID, IsArray } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { PaginationDto } from '../../../common/dto/pagination.dto';
 
@@ -6,7 +6,7 @@ export class QueryVoucherDto extends PaginationDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  voucher_no?: string;
+  voucher_number?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -21,15 +21,5 @@ export class QueryVoucherDto extends PaginationDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  prepared_by?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
   status?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsUUID()
-  voucher_items?: string;
 }

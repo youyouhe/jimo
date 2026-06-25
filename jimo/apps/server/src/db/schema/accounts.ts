@@ -19,9 +19,9 @@ export const accounts = pgTable(
     name: varchar('name', { length: 100 }).notNull(),
     account_type: varchar('account_type', { length: 64 }).notNull(),
     balance_direction: varchar('balance_direction', { length: 64 }).notNull(),
-    parent_account: uuid('parent_account'),
-    is_active: boolean('is_active').notNull(),
-    remark: text('remark').default(''),
+    parent_id: uuid('parent_id'),
+    description: text('description').default(''),
+    is_enabled: boolean('is_enabled').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
@@ -33,6 +33,9 @@ export const accounts = pgTable(
   (t) => [
     uniqueIndex('idx_accounts_code_active')
       .on(t.code)
+      .where(sql`${t.deletedAt} IS NULL`),
+    uniqueIndex('idx_accounts_name_active')
+      .on(t.name)
       .where(sql`${t.deletedAt} IS NULL`),
   ],
 );
