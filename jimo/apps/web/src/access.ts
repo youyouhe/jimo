@@ -11,5 +11,6 @@ export default function access(initialState: InitialState | undefined) {
     isViewer: has('viewer') || has('editor') || has('admin') || has('super_admin'),
     canManageRoles: has('admin') || has('super_admin'),
     canManageMenus: has('admin') || has('super_admin'),
+    canManageBpm: has('admin') || has('super_admin'),
   };
 }

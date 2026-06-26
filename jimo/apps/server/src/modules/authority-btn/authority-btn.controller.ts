@@ -42,7 +42,7 @@ export class AuthorityBtnController {
   @ApiResponse({ status: 200, description: 'Returns button permissions map for the current user' })
   async getMyBtnPerms(
     @CurrentUser() user: JwtPayload,
-  ): Promise<ApiResp<Record<string, string[]>>> {
+  ): Promise<ApiResp<Record<string, BtnPermsEntry>>> {
     const data = await this.authorityBtnService.getMyBtnPerms(user.sub, user.roles ?? []);
     return { code: 0, msg: 'success', data };
   }

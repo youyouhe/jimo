@@ -57,6 +57,9 @@ export default defineConfig({
         { path: '/tools/autocode-history', name: '生成历史', icon: 'HistoryOutlined', component: './autocode/history' },
         { path: '/tools/autocode-packages', name: '模板包', icon: 'AppstoreOutlined', component: './autocode/packages' },
         { path: '/tools/export-templates', name: '导出模板', icon: 'ExportOutlined', component: './export-templates/index' },
+        { path: '/tools/bpm-designer', name: 'BPM设计器', icon: 'ApartmentOutlined', component: './bpm/designer/index' },
+        { path: '/tools/bpm-manager', name: 'BPM流程管理', icon: 'BranchesOutlined', component: './bpm/manager/index' },
+        { path: '/tools/bpm-rules', name: 'BPM审批规则', icon: 'RuleOutlined', component: './bpm/rules' },
         { path: '/tools/versions', name: '版本管理', icon: 'BranchesOutlined', component: './versions/index' },
         { path: '/tools/authority-btns', name: '按钮权限', icon: 'BlockOutlined', component: './authority-btns/index' },
         { path: '/tools/api-tokens', name: 'API令牌', icon: 'KeyOutlined', component: './api-tokens/index' },
@@ -133,6 +136,26 @@ export default defineConfig({
       layout: false,
     },
     {
+      path: '/lc/vouchers/create',
+      component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/vouchers/:id',
+      component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/vouchers/create',
+      component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/vouchers/:id',
+      component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
       path: '/lc/vouchers',
       name: '凭证表',
       icon: 'TableOutlined',
@@ -146,6 +169,234 @@ export default defineConfig({
     {
       path: '/lc/vouchers/:id',
       component: 'lc/vouchers/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/materials/create',
+      component: 'lc/materials/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/materials/:id',
+      component: 'lc/materials/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/materials',
+      name: '物料表',
+      icon: 'TableOutlined',
+      component: './lc/materials/index',
+    },
+    {
+      path: '/lc/materials/create',
+      component: 'lc/materials/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/materials/:id',
+      component: 'lc/materials/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/regions/create',
+      component: 'lc/regions/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/regions/:id',
+      component: 'lc/regions/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/regions',
+      name: '地区表',
+      icon: 'TableOutlined',
+      component: './lc/regions/index',
+    },
+    {
+      path: '/lc/regions/create',
+      component: 'lc/regions/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/regions/:id',
+      component: 'lc/regions/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/suppliers',
+      name: '供应商表',
+      icon: 'TableOutlined',
+      component: './lc/suppliers/index',
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/create',
+      component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/purchase-orders/:id',
+      component: 'lc/purchase-orders/detail',
       layout: false,
     },
     { path: '/*', redirect: '/dashboard' },

@@ -2,12 +2,16 @@ package com.example.bpm.controller;
 
 import com.example.bpm.auth.AuthInterceptor;
 import com.example.bpm.auth.Result;
+import com.example.bpm.repository.RuleRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /**
  * Dictionary + form definition management controller.
@@ -17,10 +21,18 @@ import java.util.*;
 @RequestMapping("/api/dict")
 public class DictController {
 
+    private static final Set<String> VALID_STRATEGIES = Set.of(
+            "SELF_DEPT_LEAD", "PARENT_DEPT_LEAD", "FIXED_DEPT_LEAD", "BY_TITLE", "BY_USER_ID");
+    private static final Pattern RULE_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_]+$");
+
     private final JdbcTemplate db;
     private final ObjectMapper json = new ObjectMapper();
+    private final RuleRepository ruleRepo;
 
-    public DictController(JdbcTemplate db) { this.db = db; }
+    public DictController(JdbcTemplate db, RuleRepository ruleRepo) {
+        this.db = db;
+        this.ruleRepo = ruleRepo;
+    }
 
     // ====================== Field Dictionary ======================
 
@@ -177,6 +189,102 @@ public class DictController {
         } catch (Exception e) {
             return Result.fail(e.getMessage());
         }
+    }
+
+    // ====================== Resolution Rules CRUD ======================
+
+    /** List all resolution rules (summary — no config payload) */
+    @GetMapping("/rules")
+    public Result<?> listRules(HttpServletRequest request) {
+        AuthInterceptor.requirePermission(request, "form:view");
+        return Result.ok(ruleRepo.listRules());
+    }
+
+    /** Get full detail of a single rule including parsed config */
+    @GetMapping("/rules/{ruleName}")
+    public ResponseEntity<Result<?>> getRule(@PathVariable String ruleName, HttpServletRequest request) {
+        AuthInterceptor.requirePermission(request, "form:view");
+        Map<String, Object> rule = ruleRepo.findRuleDetail(ruleName);
+        if (rule == null) return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Result.fail(404, "Rule not found: " + ruleName));
+        return ResponseEntity.ok(Result.ok(rule));
+    }
+
+    /** Create a new resolution rule */
+    @PostMapping("/rules")
+    public ResponseEntity<Result<?>> createRule(@RequestBody Map<String, Object> body, HttpServletRequest request) {
+        AuthInterceptor.requirePermission(request, "form:design");
+        String ruleName = (String) body.get("ruleName");
+        String label    = (String) body.get("label");
+        String strategy = (String) body.get("strategy");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> config = body.get("config") instanceof Map
+                ? (Map<String, Object>) body.get("config") : Map.of();
+
+        Result<?> validation = validateRuleInput(ruleName, label, strategy, config, true);
+        if (validation != null) return ResponseEntity.badRequest().body(validation);
+
+        if (ruleRepo.ruleExists(ruleName)) return ResponseEntity.badRequest()
+                .body(Result.fail("Rule already exists: " + ruleName));
+
+        ruleRepo.createRule(ruleName, label, strategy, config);
+        return ResponseEntity.ok(Result.ok(Map.of("ruleName", ruleName, "message", "Rule created")));
+    }
+
+    /** Update label, strategy, and config of an existing rule */
+    @PutMapping("/rules/{ruleName}")
+    public ResponseEntity<Result<?>> updateRule(@PathVariable String ruleName,
+                                                @RequestBody Map<String, Object> body,
+                                                HttpServletRequest request) {
+        AuthInterceptor.requirePermission(request, "form:design");
+        String label    = (String) body.get("label");
+        String strategy = (String) body.get("strategy");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> config = body.get("config") instanceof Map
+                ? (Map<String, Object>) body.get("config") : Map.of();
+
+        Result<?> validation = validateRuleInput(ruleName, label, strategy, config, false);
+        if (validation != null) return ResponseEntity.badRequest().body(validation);
+
+        if (!ruleRepo.ruleExists(ruleName)) return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Result.fail(404, "Rule not found: " + ruleName));
+
+        ruleRepo.updateRule(ruleName, label, strategy, config);
+        return ResponseEntity.ok(Result.ok(Map.of("ruleName", ruleName, "message", "Rule updated")));
+    }
+
+    /** Delete a rule; returns 404 if it does not exist */
+    @DeleteMapping("/rules/{ruleName}")
+    public ResponseEntity<Result<?>> deleteRule(@PathVariable String ruleName, HttpServletRequest request) {
+        AuthInterceptor.requirePermission(request, "form:design");
+        if (!ruleRepo.ruleExists(ruleName)) return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Result.fail(404, "Rule not found: " + ruleName));
+        ruleRepo.deleteRule(ruleName);
+        return ResponseEntity.ok(Result.ok(Map.of("ruleName", ruleName, "message", "Rule deleted")));
+    }
+
+    /**
+     * Shared validation for create and update.
+     * Returns a failure Result if invalid, null if valid.
+     * @param checkRuleName when true, also validates ruleName format (create path)
+     */
+    private Result<?> validateRuleInput(String ruleName, String label, String strategy,
+                                        Map<String, Object> config, boolean checkRuleName) {
+        if (checkRuleName) {
+            if (ruleName == null || ruleName.isBlank())
+                return Result.fail("ruleName must not be empty");
+            if (!RULE_NAME_PATTERN.matcher(ruleName).matches())
+                return Result.fail("ruleName must contain only alphanumeric characters and underscores");
+        }
+        if (label == null || label.isBlank())
+            return Result.fail("label must not be empty");
+        if (strategy == null || !VALID_STRATEGIES.contains(strategy))
+            return Result.fail("strategy must be one of: " + String.join(", ", VALID_STRATEGIES));
+        if ("FIXED_DEPT_LEAD".equals(strategy) && !config.containsKey("deptId"))
+            return Result.fail("config.deptId is required for FIXED_DEPT_LEAD strategy");
+        if ("BY_TITLE".equals(strategy) && !config.containsKey("title"))
+            return Result.fail("config.title is required for BY_TITLE strategy");
+        return null;
     }
 
     // ---- helpers ----

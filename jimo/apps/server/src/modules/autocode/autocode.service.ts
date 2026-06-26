@@ -10,7 +10,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { promises as fs, existsSync } from 'node:fs';
 import * as path from 'node:path';
-import { eq, and, isNull, desc, sql, count, inArray, ilike } from 'drizzle-orm';
+import { eq, and, isNull, desc, sql, count, inArray, ilike, or } from 'drizzle-orm';
 import { isReservedTableName } from './reserved-names';
 import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import {
@@ -436,10 +436,7 @@ export class AutocodeService {
         const singularMain = singularize(dto.tableName);
         const singularField = singularize(f.name);
         const childTable = isExisting ? `lc_${f.relationTable}` : `lc_${singularMain}_${singularField}`;
-        // FK column must match the generator's naming: toCamelCase(singularMain)_id
-        // (e.g. material_orders -> materialOrder_id, not snake_case material_order_id)
-        const camelMain = singularMain.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-        const fkColumn = isExisting ? (f.relationFkColumn || `${camelMain}_id`) : `${camelMain}_id`;
+        const fkColumn = isExisting ? (f.relationFkColumn || `${singularMain}_id`) : `${singularMain}_id`;
         // Child business columns: detailFields minus system cols and the self-referential FK.
         const childFields = (f.detailFields || []).filter(
           (df) => isBusinessColumn(df.name) && !(df.type === 'relation' && df.relationTable === dto.tableName),
@@ -501,8 +498,7 @@ export class AutocodeService {
 
             const singularGrand = singularize(gf.name);
             const grandTable = `lc_${singularMain}_${singularField}_${singularGrand}`;
-            const grandFkRaw = `${singularMain}_${singularField}`;
-            const grandFkColumn = grandFkRaw.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()) + '_id';
+            const grandFkColumn = `${singularMain}_${singularField}_id`;
             const grandFields = gf.detailFields.filter(
               (gdf) => isBusinessColumn(gdf.name) && !(gdf.type === 'relation' && gdf.relationType === 'one-to-many'),
             );
@@ -726,15 +722,18 @@ export class AutocodeService {
         ? `lc_${f.relationTable}`
         : `lc_${singularMain}_${singularField}`;
       const fkMap: Record<string, string> = {};
+      // Parent FK: the column in the sub-table that points back to the master table.
+      // Stored explicitly so the entity agent never has to guess the column name.
+      const isExistingSubTable = !!(f.relationExistingTable && f.relationTable);
+      const parentFkCol = isExistingSubTable ? (f.relationFkColumn || `${singularMain}_id`) : `${singularMain}_id`;
+      fkMap[parentFkCol] = `lc_${dto.tableName}`;
       for (const df of f.detailFields) {
         if (df.type === 'relation' && (df.relationType === 'many-to-one' || df.relationType === 'many-to-many') && df.relationTable) {
           // e.g. account_id → lc_accounts
           fkMap[df.name] = `lc_${df.relationTable}`;
         }
       }
-      if (Object.keys(fkMap).length > 0) {
-        subTableFkMap[subLcTable] = fkMap;
-      }
+      subTableFkMap[subLcTable] = fkMap;
     }
 
     return {
@@ -815,6 +814,62 @@ export class AutocodeService {
   // =========================================================================
   // Async delete with progress tracking
   // =========================================================================
+
+  /**
+   * Enqueue entry-point file modifications (app.module.ts, schema/index.ts, .umirc.ts)
+   * to the cleanup-worker process. The worker runs outside NestJS and is immune to
+   * nest --watch restarts triggered by app.module.ts writes. NestJS marks Step 7 as
+   * 'running' then returns immediately; the worker writes 'completed' status when done.
+   */
+  private async enqueueEntrypointJob(
+    jobId: string,
+    dto: AutoCodeDto,
+    hasPointFields: boolean,
+  ): Promise<void> {
+    // Cancel any stale cleanup jobs for this table name. A previous delete may
+    // have enqueued a cleanup job that hasn't been processed yet. If the worker
+    // picks it up after the new table is created, it will DROP the fresh table.
+    try {
+      await this.db.execute(sql`
+        UPDATE sys_cleanup_jobs
+        SET status = 'failed', finished_at = NOW(), error = 'Superseded by regenerate'
+        WHERE table_name = ${dto.tableName}
+          AND job_type = 'cleanup'
+          AND status IN ('pending', 'running')
+      `);
+    } catch { /* best-effort */ }
+
+    const n = deriveNames(dto.tableName);
+    const payload = {
+      jobId,
+      tableName: dto.tableName,
+      description: dto.description,
+      generateWeb: dto.generateWeb ?? true,
+      hasPointFields,
+      agentEnabled: dto.agentConfig?.enabled ?? false,
+      pageType: dto.pageType ?? 'list',
+      kebabName: n.kebabName,
+      kebabSingular: n.kebabSingular,
+      pascalSingular: n.pascalSingular,
+      routePath: n.routePath,
+      pageDir: n.pageDir,
+      pageComponentPath: n.pageComponentPath,
+      pageMapComponentPath: n.pageMapComponentPath,
+    };
+
+    await this.db.execute(sql`
+      INSERT INTO sys_cleanup_jobs (id, table_name, status, job_type, payload)
+      VALUES (
+        gen_random_uuid(),
+        ${dto.tableName},
+        'pending',
+        'entrypoints',
+        ${JSON.stringify(payload)}::jsonb
+      )
+    `);
+
+    this.logger.log(`[AutocodeService] Enqueued entrypoints job for '${dto.tableName}' (jobId=${jobId})`);
+  }
 
   /**
    * Start async deletion with progress tracking.
@@ -1272,6 +1327,12 @@ export class AutocodeService {
         description: dto.description || '',
         fields: dto.fields,
         generateWeb: dto.generateWeb ?? true,
+        pageType: dto.pageType ?? (latest as any).pageType ?? 'list',
+        approvalFlow: dto.approvalFlow ?? (latest.hasApprovalFlow ? { enabled: true } : undefined),
+        agentConfig: dto.agentConfig ?? (latest.hasAgent ? { enabled: true } : undefined),
+        visibilityStrategy: dto.visibilityStrategy ?? (latest.visibilityStrategy as 'private' | 'department' | 'shared' | 'public' | undefined) ?? 'private',
+        packageId: dto.packageId,
+        force: dto.force,
       };
 
       // Step 1: Generate code in memory
@@ -1338,8 +1399,8 @@ export class AutocodeService {
         : '';
       try {
         const updateTemplates: Record<string, any> = { ...files };
-        if (dto.agentConfig?.enabled) {
-          updateTemplates.__agent = this.buildAgentConfigMetadata(dto);
+        if (autoCodeDto.agentConfig?.enabled) {
+          updateTemplates.__agent = this.buildAgentConfigMetadata(autoCodeDto);
         }
         await this.db.insert(sysAutoCodeHistories).values({
           packageName: updatePackageName,
@@ -1360,29 +1421,9 @@ export class AutocodeService {
       }
       await updateStep(3, 'completed');
 
-      // Step 5: Update entry points
+      // Step 5: Enqueue entry-point file modifications to cleanup-worker.
       await updateStep(4, 'running');
-      await this.updateAppModule(autoCodeDto, projectRoot);
-      if (dto.generateWeb) {
-        await this.updateUmiRoutes(autoCodeDto, projectRoot);
-      }
-      await updateStep(4, 'completed');
-
-      await this.writeJobStatus(jobId, {
-        jobId,
-        status: 'completed',
-        steps: AutocodeService.UPDATE_STEPS.map((s) => ({
-          key: s.key,
-          label: s.label,
-          status: 'completed' as const,
-        })),
-        progress: 100,
-        currentStepLabel: '模块更新完成',
-        result: { createdFiles, changeLog, version: oldVersion + 1 },
-        completedAt: new Date().toISOString(),
-      });
-
-      setTimeout(() => this.deleteJobFile(jobId), 5 * 60 * 1000);
+      await this.enqueueEntrypointJob(jobId, autoCodeDto, false);
     } catch (err: any) {
       const errorMsg = err?.message || 'Unknown error during update';
       this.logger.error(` Update job ${jobId} FAILED:`, errorMsg);
@@ -1616,32 +1657,11 @@ export class AutocodeService {
       }
       await updateStep(5, 'completed');
 
-      // Step 7: Update remaining entry points (LAST — triggers nest --watch restart)
+      // Step 7: Enqueue entry-point file modifications to cleanup-worker.
+      // Worker runs outside NestJS and is immune to nest --watch restarts.
+      // This prevents EADDRINUSE port conflicts when app.module.ts is modified.
       await updateStep(6, 'running');
-      await this.updateAppModule(dto, projectRoot);
-      if (dto.generateWeb) {
-        await this.updateUmiRoutes(dto, projectRoot);
-        if (asyncHasPointFields) {
-          await this.updateUmiRoutesMap(dto, projectRoot);
-        }
-      }
-      await updateStep(6, 'completed');
-
-      await this.writeJobStatus(jobId, {
-        jobId,
-        status: 'completed',
-        steps: AutocodeService.GENERATE_STEPS.map((s) => ({
-          key: s.key,
-          label: s.label,
-          status: 'completed' as const,
-        })),
-        progress: 100,
-        currentStepLabel: '代码生成完成',
-        result: { createdFiles },
-        completedAt: new Date().toISOString(),
-      });
-
-      setTimeout(() => this.deleteJobFile(jobId), 5 * 60 * 1000);
+      await this.enqueueEntrypointJob(jobId, dto, asyncHasPointFields);
     } catch (err: any) {
       const errorMsg = err?.message || 'Unknown error during generation';
       this.logger.error(` Generate job ${jobId} FAILED:`, errorMsg);
@@ -2657,7 +2677,7 @@ export class AutocodeService {
       if (f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields?.length) {
         const singularMain = singularize(n.tableName.replace(/^lc_/, ''));
         const childTable = `lc_${singularMain}_${singularize(f.name)}`;
-        const fkCol = `${singularMain.replace(/_([a-z])/g, (_, c) => c.toUpperCase())}_id`;
+        const fkCol = `${singularMain}_id`;
         const childSql = buildCreateTableSql(childTable, f.detailFields, fkCol, n.tableName);
         await this.db.execute(sql.raw(childSql));
 
@@ -2667,8 +2687,7 @@ export class AutocodeService {
             const singularChild = singularize(f.name);
             const singularGrand = singularize(gf.name);
             const grandTable = `lc_${singularMain}_${singularChild}_${singularGrand}`;
-            const grandFkColRaw = `${singularMain}_${singularChild}`;
-            const grandFkCol = grandFkColRaw.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()) + '_id';
+            const grandFkCol = `${singularMain}_${singularChild}_id`;
             const grandSql = buildCreateTableSql(grandTable, gf.detailFields, grandFkCol, childTable);
             await this.db.execute(sql.raw(grandSql));
           }
@@ -3065,7 +3084,7 @@ export class AutocodeService {
       const res = await this.db.execute(
         sql`SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ${lcTable} ORDER BY ordinal_position`,
       );
-      actual = (res.rows ?? []).map((r: any) => String(r.column_name));
+      actual = Array.from(res as any[]).map((r: any) => String(r.column_name));
     } catch (e: any) {
       // 读取失败不阻塞生成(避免环境问题误伤),仅告警
       this.logger.warn(`[AutocodeService] verifyPhysicalSchema: 读取 ${lcTable} 列失败,跳过校验: ${e?.message}`);

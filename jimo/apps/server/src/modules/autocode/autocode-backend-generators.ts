@@ -126,7 +126,7 @@ export function generateSchema(dto: AutoCodeDto): string {
     const childTableName = `${singularMain}_${singularField}`;
     const childSchemaVar = toCamelCase(childTableName);
     const childPascalType = toPascalCase(childTableName);
-    const fkColName = `${toCamelCase(singularMain)}_id`;
+    const fkColName = `${singularMain}_id`;
 
     const childFieldLines = ["    id: uuid('id').defaultRandom().primaryKey(),"];
     for (const df of field.detailFields) {
@@ -165,7 +165,7 @@ export type New${childPascalType} = typeof ${childSchemaVar}.$inferInsert;
       const grandTableName = `${singularMain}_${singularChild}_${singularGrand}`;
       const grandSchemaVar = toCamelCase(grandTableName);
       const grandPascalType = toPascalCase(grandTableName);
-      const grandFkColName = `${toCamelCase(`${singularMain}_${singularChild}`)}_id`;
+      const grandFkColName = `${singularMain}_${singularChild}_id`;
 
       const grandFieldLines = ["    id: uuid('id').defaultRandom().primaryKey(),"];
       for (const gdf of gf.detailFields) {
@@ -239,7 +239,7 @@ export function generateCreateDto(dto: AutoCodeDto): string {
     }
 
     const typeDecl = isOptionalFK ? `${dtoType} | null` : f.required ? dtoType : `${dtoType} | undefined`;
-    return `${swagger}\n${validators}\n  ${f.name}${f.required ? '' : '?'}: ${typeDecl};`;
+    return `${swagger}\n${validators}\n  ${f.name}${f.required ? '!' : '?'}: ${typeDecl};`;
   });
 
   const needsNumber = creatableFields.some((f) => f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal');
@@ -473,7 +473,7 @@ export function generateService(dto: AutoCodeDto): string {
     } else {
       const singularField = singularize(field.name);
       childSchemaVar = toCamelCase(`${singularMain}_${singularField}`);
-      fkColName = `${toCamelCase(singularMain)}_id`;
+      fkColName = `${singularMain}_id`;
       childImports += `import { ${childSchemaVar} } from '../../db/schema/${n.kebabName}';\n`;
     }
     const detailCols = field.detailFields.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName) && !(df.type === 'relation' && df.relationType === 'one-to-many'));
@@ -500,7 +500,7 @@ export function generateService(dto: AutoCodeDto): string {
       const singularGrand = singularize(gf.name);
       const grandTableName = `${singularMain}_${singularChild}_${singularGrand}`;
       const grandSchemaVar2 = toCamelCase(grandTableName);
-      const grandFkCol = `${toCamelCase(`${singularMain}_${singularChild}`)}_id`;
+      const grandFkCol = `${singularMain}_${singularChild}_id`;
       const grandMethodName = toPascalCase(`${field.name}_${gf.name}`);
       return { grandSchemaVar2, grandFkCol, grandMethodName, gf };
     });
@@ -605,7 +605,7 @@ ${grandchildAttach.map(({ grandMethodName }) => `      await this.remove${grandM
       const singularGrand = singularize(gf.name);
       const grandTableName = `${singularMain}_${singularChild}_${singularGrand}`;
       const grandSchemaVar = toCamelCase(grandTableName);
-      const grandFkColName = `${toCamelCase(`${singularMain}_${singularChild}`)}_id`;
+      const grandFkColName = `${singularMain}_${singularChild}_id`;
 
       childImports += `import { ${grandSchemaVar} } from '../../db/schema/${n.kebabName}';\n`;
 
@@ -683,7 +683,7 @@ ${oneToManyFields.map((field) => {
     : toCamelCase(`${singularMain}_${singularize(field.name)}`);
   const fkColName = isExisting
     ? field.relationFkColumn!
-    : `${toCamelCase(singularMain)}_id`;
+    : `${singularMain}_id`;
       const detailCols = (field.detailFields || []).filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName));
       const childBatchRelFields2 = (field.detailFields || []).filter(df => df.name !== 'id' && df.type === 'relation' && df.relationTable && df.relationTable !== dto.tableName);
       let childBatchRelSelect2 = '';
@@ -705,7 +705,7 @@ ${oneToManyFields.map((field) => {
           const singularChild2 = singularize(field.name);
           const singularGrand2 = singularize(gf.name);
           const grandSchemaVar2 = toCamelCase(`${singularMain2}_${singularChild2}_${singularGrand2}`);
-          const grandFkCol2 = toCamelCase(`${singularMain2}_${singularChild2}`) + '_id';
+          const grandFkCol2 = `${singularMain2}_${singularChild2}_id`;
           return `      if (${field.name}Rows.length > 0) {
         const ${field.name}ChildIds = ${field.name}Rows.map((r: any) => r.id);
         const ${gf.name}Rows2 = await this.db.select().from(${grandSchemaVar2}).where(and(inArray(${grandSchemaVar2}.${grandFkCol2}, ${field.name}ChildIds), isNull(${grandSchemaVar2}.deletedAt)));
@@ -877,7 +877,7 @@ ${oneToManyFields.map((field) => {
     : toCamelCase(`${singularMain}_${singularize(field.name)}`);
   const fkColName = isExisting
     ? field.relationFkColumn!
-    : `${toCamelCase(singularMain)}_id`;
+    : `${singularMain}_id`;
   const detailCols = (field.detailFields || []).filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName));
   return `      if (dto.${field.name} && (dto.${field.name} as any[]).length > 0) {
         await tx.insert(${childSchemaVar}).values(

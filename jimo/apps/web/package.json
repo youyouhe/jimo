@@ -14,6 +14,8 @@
     "@ant-design/pro-components": "^2.8.10",
     "@dagrejs/dagre": "^1.1.4",
     "@jimo/shared": "workspace:*",
+    "@logicflow/core": "^2.2.3",
+    "@logicflow/extension": "^2.2.3",
     "@umijs/max": "^4.6.59",
     "@xyflow/react": "^12.3.5",
     "antd": "^5.29.3",

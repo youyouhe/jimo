@@ -27,5 +27,8 @@
     "patchedDependencies": {
       "drizzle-kit@0.31.10": "patches/drizzle-kit@0.31.10.patch"
     }
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.9.3"
   }
 }

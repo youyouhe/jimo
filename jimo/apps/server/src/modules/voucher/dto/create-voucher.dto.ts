@@ -1,35 +1,36 @@
-import { IsNotEmpty, IsOptional, IsString, IsUUID, IsArray, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsNumber, IsUUID, IsArray, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateVoucherDto {
-  @ApiProperty({ description: '凭证号', maxLength: 30 })
+  @ApiProperty({ description: '凭证号（唯一标识，如 J-2024-0001）', maxLength: 50 })
   @IsNotEmpty()
   @IsString()
-  @MaxLength(30)
-  voucher_number: string;
+  @MaxLength(50)
+  voucher_number!: string;
 
-  @ApiProperty({ description: '凭证日期' })
+  @ApiProperty({ description: '凭证日期（业务发生日期）' })
   @IsNotEmpty()
   @IsString()
-  voucher_date: string;
+  voucher_date!: string;
 
-  @ApiProperty({ description: '凭证摘要' })
+  @ApiProperty({ description: '摘要（凭证业务概述）' })
   @IsNotEmpty()
   @IsString()
-  summary: string;
+  summary!: string;
 
-  @ApiProperty({ description: '凭证状态' })
+  @ApiProperty({ description: '凭证状态（草稿/已审核/已过账/作废）' })
   @IsNotEmpty()
   @IsString()
-  status: string;
+  status!: string;
 
-  @ApiPropertyOptional({ description: '附件', maxLength: 512 })
+  @ApiPropertyOptional({ description: '附单据数' })
   @IsOptional()
-  @IsString()
-  @MaxLength(512)
-  attachment?: string | undefined;
+  @IsNumber()
+  @Type(() => Number)
+  attachment_count?: number | undefined;
 
-  @ApiPropertyOptional({ description: '凭证分录', type: [Object] })
+  @ApiPropertyOptional({ description: '凭证明细行', type: [Object] })
   @IsOptional()
   @IsArray()
   items?: any[];

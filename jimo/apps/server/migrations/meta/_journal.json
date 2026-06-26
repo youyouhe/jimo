@@ -57,6 +57,20 @@
       "when": 1782260000000,
       "tag": "0007_add_btn_config_to_menus",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1782235000000,
+      "tag": "0008_add_job_type_to_cleanup_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1782351000000,
+      "tag": "0009_add_bpm_process_tables",
+      "breakpoints": true
     }
   ]
 }

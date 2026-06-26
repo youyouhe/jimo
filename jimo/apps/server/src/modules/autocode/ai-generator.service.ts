@@ -118,6 +118,19 @@ export class AiGeneratorService {
       const pkgList = pkgRows.map((p) => `\`${p.id}\`（${p.name}）`).join('、') || '（暂无）';
       const tableList = entityRows.map((e) => `\`${e.tableName}\``).join('、') || '（暂无）';
 
+      // 将当前代码生成器 options 注入状态消息，让 AI 感知外部约束、避免字段冲突
+      // 注意：这些配置由前端表单强制应用，agent 无需在 propose_entity 里设置它们，
+      // 只需在设计字段时避免与这些配置产生冲突。
+      const ctx = dto.context;
+      const optionsBlock = ctx ? `
+
+### 当前代码生成器外部配置（⚠️ propose_entity 前必须读取此区块 — 由前端表单统一应用，你无需在 propose_entity 里设置这些值，但设计字段时必须基于此避免冲突）
+- **审批流**：${ctx.approvalEnabled
+  ? `已启用（链：${ctx.approvalChain || 'deptHead'}）— **绝不能**在业务表字段里出现 status / approval_* / approve_* 等审批状态字段，否则生成器报错。审批状态由平台 business_approvals + BPM 全权托管。`
+  : '未启用'}
+- **页面类型**：${ctx.pageType === 'document' ? 'document（单据页）' : 'list（标准列表）'}
+- **数据可见性**：${ctx.visibilityStrategy ?? 'private'}` : '';
+
       // 将状态注入为对话开头的 user/assistant 消息对，模型注意力最高
       const stateMessage: CoreMessage = {
         role: 'user',
@@ -130,11 +143,11 @@ ${tableList}
 ${dictList}
 
 ### 现有 Package（✅ 优先匹配这些 id。用户没明确要求建 package 时一律不要 create_package，表可留空 packageId 落入未分类）
-${pkgList}`,
+${pkgList}${optionsBlock}`,
       };
       const stateAck: CoreMessage = {
         role: 'assistant',
-        content: '已收到系统状态，我会在本次对话中：① 不重复提议已存在的表；② 优先复用现有字典和 Package；③ 需要时用 list_tables/list_dicts/list_packages 实时查询最新状态；④ 用户没明确要求时不创建 Package，绝不为单张表硬建同名 Package，表可留空 packageId。',
+        content: `已收到系统状态，我会在本次对话中：① 不重复提议已存在的表；② 优先复用现有字典和 Package；③ 需要时用 list_tables/list_dicts/list_packages 实时查询最新状态；④ 用户没明确要求时不创建 Package，绝不为单张表硬建同名 Package，表可留空 packageId。${ctx?.approvalEnabled ? '⑤ 审批流已启用，设计字段时绝不出现 status/approval_*/approve_* 等审批状态字段，这些由平台托管。' : ''}`,
       };
 
       const userMessages = dto.messages.map((m) => ({
@@ -149,7 +162,19 @@ ${pkgList}`,
       // passed back" errors when the user is using a reasoning model (DeepSeek-R1,
       // QwQ, etc.) via a custom base URL: the @ai-sdk/openai adapter doesn't
       // preserve these non-standard fields when building multi-step message history.
-      const strippedFetch: typeof fetch = async (url, options) => {
+
+      // Intercept non-2xx responses so ai-sdk doesn't hang on error streams.
+      const checkResp = async (resp: globalThis.Response): Promise<globalThis.Response> => {
+        if (!resp.ok) {
+          const body = await resp.text().catch(() => '');
+          const err: any = new Error(`AI API 错误 ${resp.status}: ${body.slice(0, 200)}`);
+          err.name = 'AiApiError';
+          throw err;
+        }
+        return resp;
+      };
+
+      const strippedFetch = async (url: string | URL | Request, options?: RequestInit): Promise<globalThis.Response> => {
         if (options?.body && typeof options.body === 'string') {
           try {
             const body = JSON.parse(options.body);
@@ -177,17 +202,6 @@ ${pkgList}`,
         return checkResp(await fetch(url as string, options as RequestInit));
       };
 
-      // Intercept non-2xx responses so ai-sdk doesn't hang on error streams.
-      const checkResp = async (resp: Response): Promise<Response> => {
-        if (!resp.ok) {
-          const body = await resp.text().catch(() => '');
-          const err: any = new Error(`AI API 错误 ${resp.status}: ${body.slice(0, 200)}`);
-          err.name = 'AiApiError';
-          throw err;
-        }
-        return resp;
-      };
-
       const openaiProvider = createOpenAI({
         baseURL: baseUrl.replace(/\/+$/, ''),
         apiKey: aiKey,
@@ -197,16 +211,23 @@ ${pkgList}`,
 
       this.logger.log(`[AiGenerator] AI baseURL: ${baseUrl.replace(/\/+$/, '')}`);
 
-      // Dynamically load entity agent tools when businessType is provided
+      // Dynamically load entity agent tools when businessType is provided.
+      // If businessType is given but no agent config exists, abort immediately with a clear error
+      // instead of silently falling back to autocode mode — the user is on an entity page, not the
+      // code-generator page, so degrading to a code-generator would be deeply confusing.
       let entityTools: Record<string, any> = {};
       let entitySystemPrompt = '';
       if (dto.businessType) {
         const loaded = await this.loadEntityAgentTools(dto.businessType, userId);
         entityTools = loaded.tools;
         entitySystemPrompt = loaded.systemPrompt;
-        if (Object.keys(entityTools).length > 0) {
-          this.logger.log(`[AiGenerator] Loaded ${Object.keys(entityTools).length} entity agent tools for '${dto.businessType}'`);
+        if (Object.keys(entityTools).length === 0) {
+          write({ kind: 'error', message: `实体「${dto.businessType}」未找到 Agent 配置。请先在代码生成器中重新生成该实体并勾选「启用实体 Agent」。` });
+          write({ kind: 'done' });
+          res.end();
+          return;
         }
+        this.logger.log(`[AiGenerator] Loaded ${Object.keys(entityTools).length} entity agent tools for '${dto.businessType}'`);
       }
 
       // ── Retry loop (autocode mode only: detect propose_entity hallucination) ──
@@ -923,7 +944,7 @@ ${pkgList}`,
             properties: { id: { type: 'string', description: 'Record UUID' } },
             required: ['id'],
           }),
-          execute: async (args: { id: string }) => {
+          execute: async (args: any) => {
             const res = await this.db.execute(
               sql`SELECT * FROM ${tbl} WHERE id = ${args.id} AND deleted_at IS NULL ${visFragment} LIMIT 1`,
             );
@@ -999,7 +1020,7 @@ ${pkgList}`,
             properties: { id: { type: 'string', description: 'Record UUID' } },
             required: ['id'],
           }),
-          execute: async (args: { id: string }) => {
+          execute: async (args: any) => {
             await this.db.execute(
               sql`UPDATE ${tbl} SET deleted_at = NOW() WHERE id = ${args.id} AND owner_id = ${userId ?? ''} AND deleted_at IS NULL`,
             );
@@ -1080,7 +1101,7 @@ ${pkgList}`,
             type: 'object',
             properties: { count: { type: 'number', description: 'Number of mock rows (1-100)' } },
           }),
-          execute: async (args: { count?: number }) => {
+          execute: async (args: any) => {
             const result = await this.autocodeService.generateMockForTable(tableName, args.count ?? 10, userId);
             return { ok: true, inserted: result.inserted, ownerSet: !!userId };
           },
@@ -1100,6 +1121,125 @@ ${pkgList}`,
       );
       const subTables = Array.from(subTableRows as any[]).map((r: any) => String(r.table_name));
 
+      // Shared visited set for the DFS — prevents re-registering and breaks cycles.
+      const visited = new Set<string>();
+
+      // Heuristic: resolve a FK column name to a physical lc_ table name.
+      const resolveRefTable = async (fkColName: string): Promise<string | null> => {
+        const baseName = fkColName.replace(/_id$/, '');
+        const candidates = [`lc_${baseName}s`, `lc_${baseName}`, `lc_${fkColName}s`, `lc_${fkColName}`];
+        for (const candidate of candidates) {
+          const exists = await this.db.execute(
+            sql`SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=${candidate} LIMIT 1`
+          );
+          if (Array.from(exists as any).length > 0) return candidate;
+        }
+        return null;
+      };
+
+      /**
+       * DFS: register read-only search+query tools for refLcTable, then recurse
+       * into its own FK columns up to maxDepth levels deep.
+       *
+       * visited  — shared across the whole loadEntityAgentTools call; prevents
+       *            re-registering the same table and breaks FK cycles (A→B→A).
+       * depth    — current recursion depth (caller starts at 1).
+       * maxDepth — hard cap (default 3); beyond this FK chains are truncated.
+       */
+      const registerRefTableTools = async (
+        fkColName: string,
+        refLcTable: string,
+        depth: number,
+        maxDepth = 3,
+      ): Promise<void> => {
+        if (visited.has(refLcTable) || depth > maxDepth) return;
+        visited.add(refLcTable);
+
+        const refToolName = refLcTable.replace(/^lc_/, '');
+        const searchKey = `search_${refToolName}`;
+        const queryKey = `query_${refToolName}`;
+        const refTbl = sql.identifier(refLcTable);
+
+        // Discover text columns for keyword search
+        const refColRows = await this.db.execute(
+          sql`SELECT column_name FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = ${refLcTable}
+                AND data_type IN ('character varying', 'text')
+              ORDER BY ordinal_position`
+        );
+        const TEXT_SEARCH_CANDIDATES = new Set(['name', 'code', 'title', 'label', 'description']);
+        const refTextCols = Array.from(refColRows as any[])
+          .map((r: any) => String(r.column_name))
+          .filter((c) => TEXT_SEARCH_CANDIDATES.has(c));
+
+        tools[searchKey] = tool({
+          description: `【查询列表】查询 ${refLcTable} 的记录，每条含 "id"。外键字段 "${fkColName}" 必须引用此表某条记录的 id —— 先调本工具取得有效 id，再传给写入工具，不可凭空填写 UUID。`,
+          parameters: jsonSchema({
+            type: 'object',
+            properties: {
+              keyword: { type: 'string', description: '按名称/编码/标题模糊过滤（可选）' },
+              pageSize: { type: 'number', description: '返回条数，默认 50，最大 200' },
+            },
+          }),
+          execute: async (args: any) => {
+            const pageSize = Math.min(args.pageSize ?? 50, 200);
+            const kw = args.keyword ? `%${args.keyword}%` : null;
+            let listRes: any;
+            if (kw && refTextCols.length > 0) {
+              const conditions = refTextCols
+                .map((col) => sql`${sql.identifier(col)} ILIKE ${kw}`)
+                .reduce((acc, cur) => sql`${acc} OR ${cur}`);
+              listRes = await this.db.execute(
+                sql`SELECT * FROM ${refTbl} WHERE deleted_at IS NULL AND (${conditions}) ORDER BY created_at ASC LIMIT ${pageSize}`
+              );
+            } else {
+              listRes = await this.db.execute(
+                sql`SELECT * FROM ${refTbl} WHERE deleted_at IS NULL ORDER BY created_at ASC LIMIT ${pageSize}`
+              );
+            }
+            const SKIP = new Set(['owner_id', 'shared_with', 'created_at', 'updated_at', 'deleted_at']);
+            const rows = Array.from(listRes as any).map((r: any) =>
+              Object.fromEntries(Object.entries(r).filter(([k]) => !SKIP.has(k)))
+            );
+            return { note: `"${fkColName}" 必须引用以下某条记录的 "id"`, total: rows.length, list: rows };
+          },
+        });
+        tools[queryKey] = tool({
+          description: `【精确查询】按 UUID 获取单条 ${refToolName} 记录。`,
+          parameters: jsonSchema({
+            type: 'object',
+            properties: { id: { type: 'string', description: 'Record UUID' } },
+            required: ['id'],
+          }),
+          execute: async (args: any) => {
+            const res = await this.db.execute(
+              sql`SELECT * FROM ${refTbl} WHERE id = ${args.id} AND deleted_at IS NULL LIMIT 1`
+            );
+            const r = Array.from(res as any);
+            return r[0] ?? null;
+          },
+        });
+        this.logger.log(`[EntityTool] DFS depth=${depth} registered search/query for ${refLcTable} (via FK: ${fkColName})`);
+
+        // Recurse: discover FK columns on refLcTable itself
+        if (depth < maxDepth) {
+          const nextFkRows = await this.db.execute(
+            sql`SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = ${refLcTable}
+                  AND data_type = 'uuid' AND column_name LIKE '%_id'
+                  AND column_name NOT IN ('id', 'owner_id')
+                ORDER BY ordinal_position`
+          );
+          for (const row of Array.from(nextFkRows as any[])) {
+            const nextFkCol = String((row as any).column_name);
+            const nextRefTable = await resolveRefTable(nextFkCol);
+            if (nextRefTable && !visited.has(nextRefTable)) {
+              await registerRefTableTools(nextFkCol, nextRefTable, depth + 1, maxDepth);
+            }
+          }
+        }
+      };
+
       for (const subLcTable of subTables) {
         // Derive a readable tool-name prefix: strip the lc_ and master prefix
         const subToolName = subLcTable.replace(/^lc_/, '');
@@ -1115,8 +1255,19 @@ ${pkgList}`,
         const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at', 'deleted_at', 'owner_id', 'shared_with']);
         const dataCols = allCols.filter((c: any) => !SYSTEM_COLS.has(c.column_name));
 
-        // FK column: any uuid column that ends with _id (e.g. voucher_id)
-        const fkCol = dataCols.find((c: any) => c.column_name.endsWith('_id') && c.data_type === 'uuid');
+        // FK column detection: use explicit metadata first (stored in subTableFkMap at generation time),
+        // then fall back to name-based heuristics for tables generated before the explicit map was added.
+        const subTableFkMap: Record<string, Record<string, string>> = agentCfg.subTableFkMap ?? {};
+        const explicitFkMap: Record<string, string> = subTableFkMap[subLcTable] ?? {};
+        const masterLcTable = `lc_${tableName}`;
+        // Parent FK = the entry in explicitFkMap whose value points to the master table itself.
+        const parentFkColName = Object.entries(explicitFkMap).find(([, ref]) => ref === masterLcTable)?.[0];
+        const masterSingular = tableName.replace(/s$/, '');
+        const expectedFkSnake = `${masterSingular}_id`;
+        const expectedFkCamel = `${masterSingular.replace(/_([a-z])/g, (_, c) => c.toUpperCase())}_id`;
+        const fkCol = dataCols.find((c: any) => c.column_name === (parentFkColName ?? expectedFkSnake) && c.data_type === 'uuid')
+          ?? dataCols.find((c: any) => c.column_name === expectedFkCamel && c.data_type === 'uuid')
+          ?? dataCols.find((c: any) => c.column_name.endsWith('_id') && c.data_type === 'uuid' && !visited.has(`lc_${c.column_name.replace(/_id$/, '')}`));
         const userCols = dataCols.filter((c: any) => c !== fkCol);
 
         const subTbl = sql.identifier(subLcTable);
@@ -1167,7 +1318,8 @@ ${pkgList}`,
             description: `【写入】在子表 ${subLcTable} 中新建一条记录。${fkCol ? `"${fkCol.column_name}" 是父表外键，必须传入 search_${tableName} 返回的某条主键 id。` : ''}其余 uuid 类型字段同理，均须先查询对应表取得主键后再传入，不可凭空填写。`,
             parameters: jsonSchema({ type: 'object', properties: props, required }),
             execute: async (args: any) => {
-              const allInsertCols = [...(fkCol ? [fkCol.column_name] : []), ...userCols.map((c: any) => c.column_name)];
+              const allInsertCols = [...(fkCol ? [fkCol.column_name] : []), ...userCols.map((c: any) => c.column_name)]
+                .filter((n) => args[n] !== undefined);
               const colIdents = allInsertCols.map((n) => sql.identifier(n));
               const vals = allInsertCols.map((n) => sql`${args[n] ?? null}`);
               const res = await this.db.execute(
@@ -1177,16 +1329,22 @@ ${pkgList}`,
             },
           });
 
+          // props for update excludes the parent FK column (voucher_id) — immutable after creation
+          const updateProps = Object.fromEntries(
+            Object.entries(props).filter(([k]) => !fkCol || k !== fkCol.column_name)
+          );
           tools[`update_${subToolName}`] = tool({
-            description: `【写入】按 id 更新子表 ${subLcTable} 中的一条记录。需先用 search_${subToolName} 获取目标行 id。`,
+            description: `【写入】按 id 更新子表 ${subLcTable} 中的一条记录。需先用 search_${subToolName} 获取目标行 id。父外键（${fkCol?.column_name ?? 'parent_id'}）不可修改。`,
             parameters: jsonSchema({
               type: 'object',
-              properties: { id: { type: 'string' }, ...props },
+              properties: { id: { type: 'string' }, ...updateProps },
               required: ['id'],
             }),
             execute: async (args: any) => {
+              // Never update the parent FK column
+              const fkColName = fkCol?.column_name;
               const setPairs = userCols
-                .filter((c: any) => args[c.column_name] !== undefined)
+                .filter((c: any) => c.column_name !== fkColName && args[c.column_name] !== undefined)
                 .map((c: any) => sql`${sql.identifier(c.column_name)} = ${args[c.column_name]}`);
               if (setPairs.length === 0) return { updated: false };
               const res = await this.db.execute(
@@ -1203,7 +1361,7 @@ ${pkgList}`,
               properties: { id: { type: 'string', description: 'Row UUID' } },
               required: ['id'],
             }),
-            execute: async (args: { id: string }) => {
+            execute: async (args: any) => {
               await this.db.execute(
                 sql`UPDATE ${subTbl} SET deleted_at = NOW() WHERE id = ${args.id} AND deleted_at IS NULL`
               );
@@ -1212,82 +1370,40 @@ ${pkgList}`,
           });
         }
 
-        // Register read-only tools (search + query) for each FK-referenced table.
-        // Priority: explicit subTableFkMap from __agent metadata (exact, naming-agnostic).
-        // Fallback: heuristic strip-_id + guess table name (handles old history records).
-        const subTableFkMap: Record<string, Record<string, string>> = agentCfg.subTableFkMap ?? {};
-        const explicitFkMap: Record<string, string> = subTableFkMap[subLcTable] ?? {};
+        // Register ref tools for FK-referenced tables in the sub-table (DFS from depth=1).
+        // explicitFkMap already contains all FKs including the parent FK — skip the parent table
+        // itself (masterLcTable) since it has its own master-level tools already registered.
 
-        const registerRefTableTools = async (fkColName: string, refLcTable: string) => {
-          const refToolName = refLcTable.replace(/^lc_/, '');
-          const searchKey = `search_${refToolName}`;
-          const queryKey = `query_${refToolName}`;
-          if (tools[searchKey]) return; // already registered
-          const refTbl = sql.identifier(refLcTable);
-          tools[searchKey] = tool({
-            description: `【查询列表】查询 ${refLcTable} 的记录，每条含 "id"。外键字段 "${fkColName}" 必须引用此表某条记录的 id —— 先调本工具取得有效 id，再传给子表写入工具，不可凭空填写 UUID。`,
-            parameters: jsonSchema({
-              type: 'object',
-              properties: {
-                keyword: { type: 'string', description: '按名称/编码/标题模糊过滤（可选）' },
-                pageSize: { type: 'number', description: '返回条数，默认 50，最大 200' },
-              },
-            }),
-            execute: async (args: any) => {
-              const pageSize = Math.min(args.pageSize ?? 50, 200);
-              const kw = args.keyword ? `%${args.keyword}%` : null;
-              const listRes = await this.db.execute(
-                kw
-                  ? sql`SELECT * FROM ${refTbl} WHERE deleted_at IS NULL AND (name ILIKE ${kw} OR code ILIKE ${kw} OR title ILIKE ${kw}) ORDER BY created_at ASC LIMIT ${pageSize}`
-                  : sql`SELECT * FROM ${refTbl} WHERE deleted_at IS NULL ORDER BY created_at ASC LIMIT ${pageSize}`
-              );
-              const SKIP = new Set(['owner_id', 'shared_with', 'created_at', 'updated_at', 'deleted_at']);
-              const rows = Array.from(listRes as any).map((r: any) =>
-                Object.fromEntries(Object.entries(r).filter(([k]) => !SKIP.has(k)))
-              );
-              return { note: `"${fkColName}" 必须引用以下某条记录的 "id"`, total: rows.length, list: rows };
-            },
-          });
-          tools[queryKey] = tool({
-            description: `【精确查询】按 UUID 获取单条 ${refToolName} 记录。`,
-            parameters: jsonSchema({
-              type: 'object',
-              properties: { id: { type: 'string', description: 'Record UUID' } },
-              required: ['id'],
-            }),
-            execute: async (args: { id: string }) => {
-              const res = await this.db.execute(
-                sql`SELECT * FROM ${refTbl} WHERE id = ${args.id} AND deleted_at IS NULL LIMIT 1`
-              );
-              const r = Array.from(res as any);
-              return r[0] ?? null;
-            },
-          });
-          this.logger.log(`[EntityTool] registered search/query tools for ${refLcTable} (FK: ${fkColName} in ${subLcTable})`);
-        };
-
-        // 1) Explicit FK map (from __agent metadata — exact, naming-agnostic)
-        for (const [fkCol, refTable] of Object.entries(explicitFkMap)) {
-          await registerRefTableTools(fkCol, refTable);
+        // 1) Explicit FK map entries (skip the parent table itself — it has its own master tools)
+        for (const [col, refTable] of Object.entries(explicitFkMap)) {
+          if (refTable === masterLcTable) continue;
+          await registerRefTableTools(col, refTable, 1);
         }
 
-        // 2) Fallback heuristic for uuid columns not covered by explicit map
+        // 2) Heuristic for uuid _id columns not covered by explicit map
         const nonFkUuidCols = userCols.filter((c: any) => c.data_type === 'uuid' && !explicitFkMap[c.column_name]);
         for (const uuidCol of nonFkUuidCols) {
-          const baseName = uuidCol.column_name.replace(/_id$/, '');
-          const candidates = [`lc_${baseName}s`, `lc_${baseName}`, `lc_${uuidCol.column_name}s`, `lc_${uuidCol.column_name}`];
-          for (const candidate of candidates) {
-            const exists = await this.db.execute(
-              sql`SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=${candidate} LIMIT 1`
-            );
-            if (Array.from(exists as any).length > 0) {
-              await registerRefTableTools(uuidCol.column_name, candidate);
-              break;
-            }
-          }
+          const refTable = await resolveRefTable(uuidCol.column_name);
+          if (refTable) await registerRefTableTools(uuidCol.column_name, refTable, 1);
         }
 
         this.logger.log(`[EntityTool] loaded sub-table tools for ${subLcTable} (${Object.keys(tools).filter(k => k.includes(subToolName)).length} tools)`);
+      }
+
+      // Register ref tools for FK columns on the master table itself (many-to-one, DFS from depth=1).
+      // e.g. purchase_orders.supplier_id → lc_suppliers, then recursively supplier's own FKs.
+      const masterColRows = await this.db.execute(
+        sql`SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = ${lcTable}
+              AND data_type = 'uuid' AND column_name LIKE '%_id'
+              AND column_name NOT IN ('id', 'owner_id')
+            ORDER BY ordinal_position`
+      );
+      const masterFkCols = Array.from(masterColRows as any[]).map((r: any) => String(r.column_name));
+      const masterExplicitFkMap: Record<string, string> = (agentCfg.subTableFkMap ?? {})[lcTable] ?? {};
+      for (const fkColName of masterFkCols) {
+        const refTable = masterExplicitFkMap[fkColName] ?? await resolveRefTable(fkColName);
+        if (refTable) await registerRefTableTools(fkColName, refTable, 1);
       }
 
       // Build entity-specific system prompt.

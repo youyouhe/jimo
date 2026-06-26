@@ -131,6 +131,11 @@ export class CasbinService implements ICasbinService, OnModuleInit {
     // ── admin: full CRUD everywhere ──
     await this.enforcer.addPolicy(RoleCode.ADMIN, '/api/v1/*', '*');
 
+    // ── editor: full CRUD on BPM endpoints ──
+    await this.enforcer.addPolicy(RoleCode.EDITOR, '/api/v1/bpm/*', '*');
+    await this.enforcer.addPolicy(RoleCode.EDITOR, '/api/v1/bpm-rules', '*');
+    await this.enforcer.addPolicy(RoleCode.EDITOR, '/api/v1/bpm-rules/*', '*');
+
     // Role inheritance: super_admin inherits all admin policies
     await this.enforcer.addRoleForUser(RoleCode.SUPER_ADMIN, RoleCode.ADMIN);
   }

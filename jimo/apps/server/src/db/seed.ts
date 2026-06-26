@@ -23,7 +23,6 @@ async function seedAdmin(db: ReturnType<typeof createDb>): Promise<void> {
     passwordHash,
     nickname: '超级管理员',
     email: 'admin@example.com',
-    role: RoleCode.SUPER_ADMIN,
     status: 1,
   });
 
@@ -371,6 +370,42 @@ async function seedMenus(db: ReturnType<typeof createDb>): Promise<void> {
       menuType: 2,
       permission: 'system:export-template:list',
     },
+    // ── Tools > BPM Designer ──
+    {
+      name: 'BPM设计器',
+      path: '/tools/bpm-designer',
+      component: './bpm/designer/index',
+      icon: 'ApartmentOutlined',
+      parentId: null,
+      sort: 35,
+      isVisible: 1,
+      menuType: 2,
+      permission: 'bpm:designer:list',
+    },
+    // ── Tools > BPM Manager ──
+    {
+      name: 'BPM流程管理',
+      path: '/tools/bpm-manager',
+      component: './bpm/manager/index',
+      icon: 'BranchesOutlined',
+      parentId: null,
+      sort: 38,
+      isVisible: 1,
+      menuType: 2,
+      permission: 'bpm:manager:list',
+    },
+    // ── Tools > BPM Resolution Rules ──
+    {
+      name: 'BPM审批规则',
+      path: '/tools/bpm-rules',
+      component: './bpm/rules/index',
+      icon: 'RuleOutlined',
+      parentId: null,
+      sort: 41,
+      isVisible: 1,
+      menuType: 2,
+      permission: 'bpm:rules:list',
+    },
     // ── Tools > Versions ──
     {
       name: '版本管理',
@@ -524,6 +559,9 @@ async function seedMenus(db: ReturnType<typeof createDb>): Promise<void> {
     '生成历史': '系统工具',
     '模板包': '系统工具',
     '导出模板': '系统工具',
+    'BPM设计器': '系统工具',
+    'BPM流程管理': '系统工具',
+    'BPM审批规则': '系统工具',
     '版本管理': '系统工具',
     '按钮权限': '系统工具',
     'API令牌': '系统工具',

@@ -27,3 +27,8 @@ export * from './business-approvals.js';
 export * from './sys-approval-flows.js';
 export * from './accounts.js';
 export * from './vouchers.js';
+export * from './materials.js';
+export * from './regions.js';
+export * from './suppliers.js';
+export * from './bpm-process-definitions.js';
+export * from './bpm-process-versions.js';

@@ -31,6 +31,7 @@ import { AuthzGuard } from './common/guards/authz.guard';
 import { DepartmentModule } from './modules/department/department.module';
 import { ApprovalModule } from './modules/approval/approval.module';
 import { BpmSyncModule } from './modules/bpm-sync/bpm-sync.module';
+import { BpmModule } from './modules/bpm/bpm.module';
 import { OwnershipModule } from './common/ownership/ownership.module';
 import { ContractAgentModule } from './modules/contract/agent/contract.agent.module';
 import { WarehousAgentModule } from './modules/warehous/agent/warehous.agent.module';
@@ -42,6 +43,12 @@ import { AccountAgentModule } from './modules/account/agent/account.agent.module
 import { VoucherAgentModule } from './modules/voucher/agent/voucher.agent.module';
 import { AccountModule } from './modules/account/account.module';
 import { VoucherModule } from './modules/voucher/voucher.module';
+import { MaterialModule } from './modules/material/material.module';
+import { PurchaseOrderAgentModule } from './modules/purchase-order/agent/purchase-order.agent.module';
+import { RegionModule } from './modules/region/region.module';
+import { RegionAgentModule } from './modules/region/agent/region.agent.module';
+import { SupplierModule } from './modules/supplier/supplier.module';
+import { BpmRulesModule } from './modules/bpm-rules/bpm-rules.module';
 
 @Module({
   imports: [
@@ -58,9 +65,11 @@ import { VoucherModule } from './modules/voucher/voucher.module';
     MinioModule,
     DictionaryModule,
     DictionaryDetailModule,
-    OperationRecordModule,
-    VoucherModule,    AccountModule,    ApprovalModule,
+    OperationRecordModule,    SupplierModule,
+    RegionModule,    MaterialModule,    VoucherModule,    AccountModule,    ApprovalModule,
     BpmSyncModule,
+    BpmModule,
+    BpmRulesModule,
     OwnershipModule,
     DepartmentModule,
     ApiModule,
