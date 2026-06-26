@@ -28,7 +28,7 @@ if (process.env.NODE_ENV === 'development') {
   };
 }
 import { Dropdown } from 'antd';
-import { LogoutOutlined, AppstoreOutlined, TableOutlined, FolderOutlined } from '@ant-design/icons';
+import { LogoutOutlined, AppstoreOutlined, TableOutlined, FolderOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
 
 const ICON_MAP: Record<string, React.ReactElement> = {
   AppstoreOutlined: React.createElement(AppstoreOutlined),
@@ -46,6 +46,123 @@ import { getAccessibleMenus, type MenuItem } from '@/services/menu';
 import { logout as logoutApi } from '@/services/auth';
 import { history } from '@umijs/max';
 import WorkspaceTabs from '@/components/WorkspaceTabs';
+
+const HEADER_HIDDEN_KEY = 'jimo_header_hidden';
+
+function initHeaderState() {
+  if (localStorage.getItem(HEADER_HIDDEN_KEY) === '1') {
+    document.body.classList.add('jimo-header-hidden');
+  }
+}
+
+// Apply on load immediately (before React mounts)
+if (typeof window !== 'undefined') {
+  initHeaderState();
+  // Inject global CSS for header hide
+  const style = document.createElement('style');
+  style.textContent = `
+    .jimo-header-hidden .ant-pro-layout-header,
+    .jimo-header-hidden header.ant-layout-header {
+      display: none !important;
+    }
+    .jimo-header-hidden .ant-pro-layout .ant-layout {
+      padding-top: 0 !important;
+    }
+    .jimo-header-hidden .ant-pro-layout-content {
+      margin-top: 0 !important;
+    }
+
+    /* Lock the page to the viewport so window-level scroll never happens.
+       Content pages scroll inside the WorkspaceTabs content area instead. */
+    html, body, #root {
+      height: 100%;
+      overflow: hidden;
+    }
+    .ant-pro-layout,
+    .ant-pro-layout > .ant-layout {
+      height: 100% !important;
+      overflow: hidden !important;
+    }
+    .ant-pro-layout-content,
+    .ant-layout-content {
+      overflow: hidden !important;
+      height: 100% !important;
+      min-height: 0 !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function toggleHeader() {
+  const hidden = document.body.classList.toggle('jimo-header-hidden');
+  localStorage.setItem(HEADER_HIDDEN_KEY, hidden ? '1' : '0');
+  window.dispatchEvent(new Event('resize'));
+  // Sync the standalone restore button visibility
+  setTimeout(() => syncRestoreButton(), 0);
+}
+
+// Standalone restore button — mounted directly to document.body via a portal div
+// so it stays visible even when the header (and its actionsRender) is hidden.
+function mountRestoreButton() {
+  let el = document.getElementById('jimo-header-restore');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'jimo-header-restore';
+    el.style.cssText = `
+      position: fixed; top: 0; left: 50%; transform: translateX(-50%);
+      z-index: 9999; display: none;
+    `;
+    el.innerHTML = `<button title="显示顶部栏" style="
+      width:48px;height:16px;border:1px solid #d9d9d9;border-top:none;
+      border-radius:0 0 8px 8px;background:#fff;cursor:pointer;
+      display:flex;align-items:center;justify-content:center;padding:0;
+      box-shadow:0 2px 6px rgba(0,0,0,0.15);font-size:8px;color:#666;
+    ">▼</button>`;
+    el.querySelector('button')!.addEventListener('click', () => {
+      toggleHeader();
+      syncRestoreButton();
+    });
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function syncRestoreButton() {
+  const el = mountRestoreButton();
+  el.style.display = document.body.classList.contains('jimo-header-hidden') ? 'block' : 'none';
+}
+
+// Init restore button after DOM ready
+if (typeof window !== 'undefined') {
+  const run = () => { mountRestoreButton(); syncRestoreButton(); };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run);
+  } else {
+    run();
+  }
+}
+
+function HeaderToggleButton() {
+  return React.createElement(
+    'button',
+    {
+      onClick: () => { toggleHeader(); },
+      title: '隐藏顶部栏',
+      style: {
+        border: '1px solid #d9d9d9',
+        borderRadius: 4,
+        background: 'transparent',
+        cursor: 'pointer',
+        padding: '2px 6px',
+        display: 'flex',
+        alignItems: 'center',
+        fontSize: 12,
+        color: '#666',
+      },
+    },
+    React.createElement(UpOutlined, { style: { fontSize: 10 } }),
+  );
+}
 
 async function doLogout() {
   // Navigate away FIRST so page components unmount before user state changes.
@@ -101,6 +218,7 @@ export const layout = ({ initialState }: { initialState: any }) => ({
     },
   },
   rightContentRender: false,
+  actionsRender: () => [React.createElement(HeaderToggleButton, { key: 'header-toggle' })],
   // Take over the content area: render the multi-tab workspace (tab strip +
   // KeepAlive page cache) instead of Umi's default `<Outlet/>`. Navigation still
   // flows through Umi (history/location); pages are rendered from the route

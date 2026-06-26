@@ -99,9 +99,22 @@ export default function BpmDesignerPage() {
   }, [definitionIdParam]);
 
   return (
+    <>
+    {/* Force Tabs internal elements to pass height down correctly */}
+    <style>{`
+      .bpm-right-tabs > .ant-tabs-content-holder {
+        flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+      }
+      .bpm-right-tabs > .ant-tabs-content-holder > .ant-tabs-content {
+        flex: 1; min-height: 0; height: 100%; overflow: hidden;
+      }
+      .bpm-right-tabs .ant-tabs-tabpane {
+        height: 100%; overflow: hidden;
+      }
+    `}</style>
     <div
       style={{
-        height: 'calc(100vh - 56px)', // Account for Ant Design Pro header
+        height: '100%',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -118,6 +131,7 @@ export default function BpmDesignerPage() {
       <div
         style={{
           flex: 1,
+          minHeight: 0,
           display: 'flex',
           overflow: 'hidden',
           position: 'relative',
@@ -224,8 +238,9 @@ export default function BpmDesignerPage() {
           <Tabs
             defaultActiveKey="properties"
             size="small"
-            style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%' }}
+            style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
             tabBarStyle={{ marginBottom: 0, padding: '0 8px', flexShrink: 0 }}
+            className="bpm-right-tabs"
             items={[
               {
                 key: 'properties',
@@ -250,8 +265,8 @@ export default function BpmDesignerPage() {
                   </span>
                 ),
                 children: (
-                  <div style={{ height: '100%', overflow: 'hidden' }}>
-                    <AgentChat lf={lf} definitionId={definitionId} />
+                  <div style={{ height: '100%', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                    <AgentChat lf={lf} canvasRef={canvasRef} definitionId={definitionId} />
                   </div>
                 ),
               },
@@ -260,5 +275,6 @@ export default function BpmDesignerPage() {
         </div>
       </div>
     </div>
+    </>
   );
 }
