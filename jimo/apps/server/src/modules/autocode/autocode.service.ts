@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs, existsSync } from 'node:fs';
 import * as path from 'node:path';
 import { eq, and, isNull, desc, sql, count, inArray, ilike, or } from 'drizzle-orm';
-import { isReservedTableName } from './reserved-names';
+import { isReservedTableName, RESERVED_TABLE_NAMES, addToReservedNames } from './reserved-names';
 import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import {
   sysAutoCodeHistories,
@@ -825,6 +825,7 @@ export class AutocodeService {
     jobId: string,
     dto: AutoCodeDto,
     hasPointFields: boolean,
+    createdFiles: string[] = [],
   ): Promise<void> {
     // Cancel any stale cleanup jobs for this table name. A previous delete may
     // have enqueued a cleanup job that hasn't been processed yet. If the worker
@@ -855,6 +856,7 @@ export class AutocodeService {
       pageDir: n.pageDir,
       pageComponentPath: n.pageComponentPath,
       pageMapComponentPath: n.pageMapComponentPath,
+      createdFiles,
     };
 
     await this.db.execute(sql`
@@ -1661,7 +1663,7 @@ export class AutocodeService {
       // Worker runs outside NestJS and is immune to nest --watch restarts.
       // This prevents EADDRINUSE port conflicts when app.module.ts is modified.
       await updateStep(6, 'running');
-      await this.enqueueEntrypointJob(jobId, dto, asyncHasPointFields);
+      await this.enqueueEntrypointJob(jobId, dto, asyncHasPointFields, createdFiles);
     } catch (err: any) {
       const errorMsg = err?.message || 'Unknown error during generation';
       this.logger.error(` Generate job ${jobId} FAILED:`, errorMsg);
@@ -2864,6 +2866,32 @@ export class AutocodeService {
       }
     }
 
+    // Tree endpoint permission for self-referential tables (GET /lc/{name}/tree)
+    const hasSelfRef = dto.fields.some(
+      (f) => f.type === 'relation' && f.relationType === 'many-to-one' && f.relationTable === dto.tableName,
+    );
+    if (hasSelfRef) {
+      const treePath = `${apiPrefix}/${n.kebabName}/tree`;
+      const treePermission = `lc:${n.kebabName}:query`;
+      const existingTreeApi = await this.db
+        .select({ id: sysApis.id })
+        .from(sysApis)
+        .where(and(eq(sysApis.method, 'GET'), eq(sysApis.path, treePath), isNull(sysApis.deletedAt)))
+        .limit(1);
+      if (existingTreeApi.length === 0) {
+        await this.db.insert(sysApis).values({
+          method: 'GET',
+          path: treePath,
+          permission: treePermission,
+          description: `查询${extractMenuName(dto.description, n.pascalName)}树形结构`,
+          apiGroup,
+        });
+      }
+      for (const role of adminRoles) {
+        await this.casbin.addPolicy(role.code, treePath, 'GET');
+      }
+    }
+
     // Agent button permission for entity-agent-enabled tables
     if (dto.agentConfig?.enabled) {
       const AGENT_PERMISSION = 'autocode:ai-chat';
@@ -3501,5 +3529,63 @@ export class AutocodeService {
     content = content.replace(agentModulePattern, '');
 
     await fs.writeFile(modulePath, content, 'utf-8');
+  }
+
+  // =========================================================================
+  // Reserved names management
+  // =========================================================================
+
+  /**
+   * Return current reserved list + scan pages/ directory for names that are
+   * present on disk but missing from the reserved set.
+   */
+  async getReservedNames(): Promise<{
+    reserved: string[];
+    pagesOnDisk: string[];
+    missing: string[];
+  }> {
+    const projectRoot = this.resolveProjectRoot();
+    const pagesDir = path.join(projectRoot, 'release/jimo/apps/web/src/pages');
+
+    let entries: string[] = [];
+    try {
+      const dirents = await fs.readdir(pagesDir, { withFileTypes: true });
+      entries = dirents
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)
+        // skip lc/ (business modules) and hidden dirs
+        .filter((n) => !n.startsWith('.') && n !== 'lc');
+    } catch {
+      // pages dir unreadable — return what we have
+    }
+
+    const reserved = Array.from(RESERVED_TABLE_NAMES).sort();
+    const missing = entries.filter((n) => !RESERVED_TABLE_NAMES.has(n)).sort();
+
+    return { reserved, pagesOnDisk: entries.sort(), missing };
+  }
+
+  /**
+   * Append the given names to the RESERVED set literal in reserved-names.ts.
+   * Only names not already reserved are written.
+   */
+  async addReservedNames(names: string[]): Promise<{ added: string[] }> {
+    const projectRoot = this.resolveProjectRoot();
+    const reservedFile = path.join(
+      projectRoot,
+      'release/jimo/apps/server/src/modules/autocode/reserved-names.ts',
+    );
+
+    const toAdd = names.filter((n) => n && !RESERVED_TABLE_NAMES.has(n));
+    if (toAdd.length === 0) return { added: [] };
+
+    let content = await fs.readFile(reservedFile, 'utf-8');
+    // Insert before the closing ]); of the RESERVED Set literal
+    const insertLine = toAdd.map((n) => `  '${n}',`).join('\n');
+    content = content.replace(/^(\]);/m, `${insertLine}\n$1`);
+    await fs.writeFile(reservedFile, content, 'utf-8');
+    addToReservedNames(toAdd);
+
+    return { added: toAdd };
   }
 }

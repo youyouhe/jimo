@@ -64,6 +64,7 @@ export default defineConfig({
         { path: '/tools/authority-btns', name: '按钮权限', icon: 'BlockOutlined', component: './authority-btns/index' },
         { path: '/tools/api-tokens', name: 'API令牌', icon: 'KeyOutlined', component: './api-tokens/index' },
         { path: '/tools/encoding-rules', name: '编码规则管理', icon: 'BarcodeOutlined', component: './encoding-rules/index' },
+        { path: '/tools/reserved-names', name: '保留名管理', icon: 'SafetyOutlined', component: './autocode/reserved-names' },
       ],
     },
     // ── Monitoring (directory) ──
@@ -397,6 +398,58 @@ export default defineConfig({
     {
       path: '/lc/purchase-orders/:id',
       component: 'lc/purchase-orders/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/chart-of-accounts/create',
+      component: 'lc/chart-of-accounts/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/chart-of-accounts/:id',
+      component: 'lc/chart-of-accounts/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/chart-of-accounts',
+      name: '会计科目表',
+      icon: 'TableOutlined',
+      component: './lc/chart-of-accounts/index',
+    },
+    {
+      path: '/lc/chart-of-accounts/create',
+      component: 'lc/chart-of-accounts/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/chart-of-accounts/:id',
+      component: 'lc/chart-of-accounts/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/org-units/create',
+      component: 'lc/org-units/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/org-units/:id',
+      component: 'lc/org-units/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/org-units',
+      name: '组织单元表',
+      icon: 'TableOutlined',
+      component: './lc/org-units/index',
+    },
+    {
+      path: '/lc/org-units/create',
+      component: 'lc/org-units/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/org-units/:id',
+      component: 'lc/org-units/detail',
       layout: false,
     },
     { path: '/*', redirect: '/dashboard' },

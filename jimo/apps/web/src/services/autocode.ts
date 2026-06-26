@@ -475,3 +475,19 @@ export async function updateAutoCodePackage(id: string, dto: UpdateAutoCodePacka
 export async function deleteAutoCodePackage(id: string): Promise<void> {
   return request.delete(`/autocode/packages/${id}`);
 }
+
+// ── Reserved names ──
+
+export interface ReservedNamesResult {
+  reserved: string[];
+  pagesOnDisk: string[];
+  missing: string[];
+}
+
+export async function getReservedNames(): Promise<ReservedNamesResult> {
+  return request.get('/autocode/reserved-names');
+}
+
+export async function syncReservedNames(names: string[]): Promise<{ added: string[] }> {
+  return request.post('/autocode/reserved-names/sync', { names });
+}

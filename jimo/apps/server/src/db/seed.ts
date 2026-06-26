@@ -454,6 +454,18 @@ async function seedMenus(db: ReturnType<typeof createDb>): Promise<void> {
       menuType: 2,
       permission: 'tools:encoding-rule:list',
     },
+    // ── Tools > Reserved Names ──
+    {
+      name: '保留名管理',
+      path: '/tools/reserved-names',
+      component: './autocode/reserved-names',
+      icon: 'SafetyOutlined',
+      parentId: null,
+      sort: 80,
+      isVisible: 1,
+      menuType: 2,
+      permission: 'tools:reserved-names:list',
+    },
     // ── Monitoring (directory) ──
     {
       name: '系统监控',
@@ -566,6 +578,7 @@ async function seedMenus(db: ReturnType<typeof createDb>): Promise<void> {
     '按钮权限': '系统工具',
     'API令牌': '系统工具',
     '编码规则管理': '系统工具',
+    '保留名管理': '系统工具',
     // Monitoring children
     '操作日志': '系统监控',
     '登录日志': '系统监控',

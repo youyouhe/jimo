@@ -11,7 +11,7 @@ import { toKebabCase } from './autocode-field-utils';
  * 维护规则:新增系统页面(src/pages/<name>/,对应非 /lc/ 前缀的路由)时,
  * 把其目录名(kebab)加入此清单。
  */
-const RESERVED: ReadonlySet<string> = new Set([
+const RESERVED: Set<string> = new Set([
   'dashboard', 'login', 'users', 'roles', 'menus', 'apis', 'parameters',
   'dictionary', 'jwt-blacklist', 'system', 'init', 'departments', 'files',
   'autocode', 'export-templates', 'versions', 'authority-btns', 'api-tokens',
@@ -20,6 +20,11 @@ const RESERVED: ReadonlySet<string> = new Set([
 ]);
 
 export const RESERVED_TABLE_NAMES: ReadonlySet<string> = RESERVED;
+
+/** Add names to the live in-memory set (call after updating the file on disk). */
+export function addToReservedNames(names: string[]): void {
+  for (const n of names) RESERVED.add(n);
+}
 
 /** 判断表名是否为系统保留(内部转 kebab 后比对,兼容 snake/kebab 输入)。 */
 export function isReservedTableName(name: string): boolean {

@@ -339,4 +339,25 @@ export class AutocodeController {
     await this.autocodeService.deletePackage(id);
     return { code: 0, msg: 'success', data: null };
   }
+
+  // ── Reserved names ──
+
+  @Get('reserved-names')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Get reserved table names and pages-on-disk diff' })
+  @ApiResponse({ status: 200, description: 'Returns reserved list, pages on disk, and missing entries' })
+  async getReservedNames(): Promise<ApiResp<{ reserved: string[]; pagesOnDisk: string[]; missing: string[] }>> {
+    const data = await this.autocodeService.getReservedNames();
+    return { code: 0, msg: 'success', data };
+  }
+
+  @Post('reserved-names/sync')
+  @HttpCode(HttpStatus.OK)
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Append missing names to reserved-names.ts' })
+  @ApiResponse({ status: 200, description: 'Returns list of names actually added' })
+  async syncReservedNames(@Body() body: { names: string[] }): Promise<ApiResp<{ added: string[] }>> {
+    const data = await this.autocodeService.addReservedNames(body.names ?? []);
+    return { code: 0, msg: 'success', data };
+  }
 }
