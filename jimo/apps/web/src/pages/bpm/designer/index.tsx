@@ -1,17 +1,19 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useSearchParams } from '@umijs/max';
-import { Layout, Button, Tooltip } from 'antd';
+import { Layout, Button, Tooltip, Tabs } from 'antd';
 import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   SettingOutlined,
   SettingFilled,
+  RobotOutlined,
 } from '@ant-design/icons';
 import DesignerCanvas from './DesignerCanvas';
 import type { DesignerCanvasHandle } from './DesignerCanvas';
 import DesignerToolbar from './DesignerToolbar';
 import NodePanel from './NodePanel';
 import PropertyPanel from './PropertyPanel';
+import AgentChat from './AgentChat';
 import { useBpmDesignerStore } from '@/stores/bpm-designer';
 import { getProcess } from '@/services/bpm';
 import type LogicFlow from '@logicflow/core';
@@ -206,7 +208,7 @@ export default function BpmDesignerPage() {
           />
         </Tooltip>
 
-        {/* Right Panel: Property Editor */}
+        {/* Right Panel: Property Editor + AI Agent */}
         <div
           style={{
             width: rightCollapsed ? 0 : RIGHT_PANEL_WIDTH,
@@ -215,9 +217,46 @@ export default function BpmDesignerPage() {
             overflow: 'hidden',
             background: '#fff',
             borderLeft: rightCollapsed ? 'none' : '1px solid #f0f0f0',
+            display: 'flex',
+            flexDirection: 'column',
           }}
         >
-          <PropertyPanel />
+          <Tabs
+            defaultActiveKey="properties"
+            size="small"
+            style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%' }}
+            tabBarStyle={{ marginBottom: 0, padding: '0 8px', flexShrink: 0 }}
+            items={[
+              {
+                key: 'properties',
+                label: (
+                  <span>
+                    <SettingOutlined />
+                    {' '}属性
+                  </span>
+                ),
+                children: (
+                  <div style={{ height: '100%', overflowY: 'auto' }}>
+                    <PropertyPanel />
+                  </div>
+                ),
+              },
+              {
+                key: 'agent',
+                label: (
+                  <span>
+                    <RobotOutlined />
+                    {' '}AI助手
+                  </span>
+                ),
+                children: (
+                  <div style={{ height: '100%', overflow: 'hidden' }}>
+                    <AgentChat lf={lf} definitionId={definitionId} />
+                  </div>
+                ),
+              },
+            ]}
+          />
         </div>
       </div>
     </div>
