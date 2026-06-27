@@ -125,14 +125,26 @@ export default function BpmPreviewModal({ open, onClose, definitionId }: BpmPrev
         patchColor('bpmn:intermediateThrowEvent',  '#e6f4ff', '#1677ff');
 
         // ── Step 4: apply graph ────────────────────────────────
-        // Use lf.render() directly (same as DesignerCanvas init) to avoid
-        // the viewport churn caused by clearData + per-node addNode.
-        lf.render(graph as any);
+        // Initialise with empty canvas first (required by LogicFlow),
+        // then apply the graph data so nodes render correctly.
+        lf.render({ nodes: [], edges: [] } as any);
 
         if (!cancelled) {
+          // Defer graph application — lets React commit the canvas DOM first
           setTimeout(() => {
-            try { lf.fitView(); } catch { /* ignore */ }
-          }, 200);
+            if (cancelled) return;
+            try {
+              lf.clearData();
+              for (const n of graph.nodes) {
+                try { lf.addNode(n as any); } catch { /* skip */ }
+              }
+              for (const e of graph.edges) {
+                try { lf.addEdge(e as any); } catch { /* skip */ }
+              }
+              // Fit after addNode batch, then again after phase change re-render
+              setTimeout(() => { try { lf.fitView(); } catch { /* ignore */ } }, 150);
+            } catch { /* ignore */ }
+          }, 100);
           setPhase('ready');
         }
       } catch (err: any) {
