@@ -162,7 +162,12 @@ export default function BpmPreviewModal({ open, onClose, definitionId }: BpmPrev
   const handleZoomIn  = () => { lfRef.current?.zoom(true); };
   const handleZoomOut = () => { lfRef.current?.zoom(false); };
   const handleZoomFit = () => {
-    try { (lfRef.current as any)?.fitView?.(); } catch { /* ignore */ }
+    const lf = lfRef.current;
+    if (!lf) return;
+    try {
+      lf.resetZoom();
+      (lf as any).fitView?.();
+    } catch { /* ignore */ }
   };
 
   return (
