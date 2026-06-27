@@ -125,28 +125,29 @@ export default function BpmPreviewModal({ open, onClose, definitionId }: BpmPrev
         patchColor('bpmn:intermediateThrowEvent',  '#e6f4ff', '#1677ff');
 
         // ── Step 4: apply graph ────────────────────────────────
-        // Initialise with empty canvas first (required by LogicFlow),
-        // then apply the graph data so nodes render correctly.
+        // Init canvas empty, then transition to ready phase first so the
+        // loading overlay is unmounted and the zoom toolbar is mounted —
+        // giving the LogicFlow container its final stable bounding box.
+        // Only then apply the graph and fit the view.
         lf.render({ nodes: [], edges: [] } as any);
 
-        if (!cancelled) {
-          // Defer graph application — lets React commit the canvas DOM first
-          setTimeout(() => {
-            if (cancelled) return;
-            try {
-              lf.clearData();
-              for (const n of graph.nodes) {
-                try { lf.addNode(n as any); } catch { /* skip */ }
-              }
-              for (const e of graph.edges) {
-                try { lf.addEdge(e as any); } catch { /* skip */ }
-              }
-              // Fit after addNode batch, then again after phase change re-render
-              setTimeout(() => { try { lf.fitView(); } catch { /* ignore */ } }, 150);
-            } catch { /* ignore */ }
-          }, 100);
-          setPhase('ready');
-        }
+        setPhase('ready');
+
+        // Wait for React to flush the phase change (unmount spinner, mount toolbar)
+        setTimeout(() => {
+          if (cancelled) return;
+          try {
+            lf.clearData();
+            for (const n of graph.nodes) {
+              try { lf.addNode(n as any); } catch { /* skip */ }
+            }
+            for (const e of graph.edges) {
+              try { lf.addEdge(e as any); } catch { /* skip */ }
+            }
+            // Fit after nodes settle
+            setTimeout(() => { try { lf.fitView(); } catch { /* ignore */ } }, 150);
+          } catch { /* ignore */ }
+        }, 250);
       } catch (err: any) {
         if (!cancelled) {
           setErrorMsg(err?.message || 'Failed to load process');
@@ -185,20 +186,22 @@ export default function BpmPreviewModal({ open, onClose, definitionId }: BpmPrev
       destroyOnClose
       styles={{ body: { padding: 0 } }}
     >
-      {phase === 'ready' && (
-        <div style={{
-          position: 'absolute', top: 8, right: 56, zIndex: 10,
-          background: '#fff', borderRadius: 4, boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
-        }}>
-          <Space size={0}>
-            <Button type="text" size="small" icon={<ZoomInOutlined />}  onClick={handleZoomIn} />
-            <Button type="text" size="small" icon={<ZoomOutOutlined />} onClick={handleZoomOut} />
-            <Button type="text" size="small" icon={<ExpandOutlined />} onClick={handleZoomFit} />
-          </Space>
-        </div>
-      )}
+      <div style={{ height: 520, position: 'relative', background: '#f5f5f5', overflow: 'hidden' }}>
+        {/* Zoom toolbar — kept inside the fixed-height div so DOM changes
+            don't affect the LogicFlow container's bounding box */}
+        {phase === 'ready' && (
+          <div style={{
+            position: 'absolute', top: 6, right: 6, zIndex: 10,
+            background: '#fff', borderRadius: 4, boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
+          }}>
+            <Space size={0}>
+              <Button type="text" size="small" icon={<ZoomInOutlined />}  onClick={handleZoomIn} />
+              <Button type="text" size="small" icon={<ZoomOutOutlined />} onClick={handleZoomOut} />
+              <Button type="text" size="small" icon={<ExpandOutlined />} onClick={handleZoomFit} />
+            </Space>
+          </div>
+        )}
 
-      <div style={{ height: 500, position: 'relative', background: '#f5f5f5', overflow: 'hidden' }}>
         {phase === 'loading' && (
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
