@@ -125,19 +125,13 @@ export default function BpmPreviewModal({ open, onClose, definitionId }: BpmPrev
         patchColor('bpmn:intermediateThrowEvent',  '#e6f4ff', '#1677ff');
 
         // ── Step 4: apply graph ────────────────────────────────
-        lf.render({ nodes: [], edges: [] } as any);
-        lf.clearData();
-        for (const n of graph.nodes) {
-          try { lf.addNode(n as any); } catch { /* skip malformed node */ }
-        }
-        for (const e of graph.edges) {
-          try { lf.addEdge(e as any); } catch { /* skip malformed edge */ }
-        }
+        // Use lf.render() directly (same as DesignerCanvas init) to avoid
+        // the viewport churn caused by clearData + per-node addNode.
+        lf.render(graph as any);
 
         if (!cancelled) {
-          // Fit view after render settles
           setTimeout(() => {
-            try { (lf as any).fitView?.(); } catch { /* ignore */ }
+            try { lf.fitView(); } catch { /* ignore */ }
           }, 200);
           setPhase('ready');
         }
