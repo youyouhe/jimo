@@ -177,7 +177,7 @@ export default function BpmPreviewModal({ open, onClose, definitionId }: BpmPrev
     >
       {phase === 'ready' && (
         <div style={{
-          position: 'absolute', top: 8, right: 28, zIndex: 10,
+          position: 'absolute', top: 8, right: 56, zIndex: 10,
           background: '#fff', borderRadius: 4, boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
         }}>
           <Space size={0}>
