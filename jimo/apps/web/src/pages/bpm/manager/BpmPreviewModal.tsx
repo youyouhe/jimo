@@ -158,16 +158,15 @@ export default function BpmPreviewModal({ open, onClose, definitionId }: BpmPrev
     };
   }, [open, definitionId]);
 
-  // ── Zoom controls ────────────────────────────────────────────
+  // ── Zoom controls (same pattern as DesignerCanvas / DesignerToolbar) ──
   const handleZoomIn  = () => { lfRef.current?.zoom(true); };
   const handleZoomOut = () => { lfRef.current?.zoom(false); };
   const handleZoomFit = () => {
     const lf = lfRef.current;
     if (!lf) return;
-    try {
-      lf.resetZoom();
-      (lf as any).fitView?.();
-    } catch { /* ignore */ }
+    lf.resetZoom();
+    // setTimeout required — fitView needs the zoom reset to settle first
+    setTimeout(() => { try { lf.fitView(); } catch { /* ignore */ } }, 80);
   };
 
   return (
