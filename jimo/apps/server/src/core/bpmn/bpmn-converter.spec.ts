@@ -67,7 +67,7 @@ describe('BpmnConverterService', () => {
 
       const startNode = result.nodes.find((n) => n.id === 'start');
       expectDefined(startNode);
-      expect(startNode.type).toBe('start-event');
+      expect(startNode.type).toBe('bpmn:startEvent');
       expect(startNode.text.value).toBe('Start');
     });
 
@@ -90,7 +90,7 @@ describe('BpmnConverterService', () => {
       const result = await service.bpmnXmlToLfJson(xml);
       const task = result.nodes.find((n) => n.id === 'task1');
       expectDefined(task);
-      expect(task.type).toBe('user-task');
+      expect(task.type).toBe('bpmn:userTask');
       expect(task.properties.assignee).toBe('${initiator}');
     });
 
@@ -166,7 +166,7 @@ describe('BpmnConverterService', () => {
       const result = await service.bpmnXmlToLfJson(xml);
       const task = result.nodes.find((n) => n.id === 'script1');
       expectDefined(task);
-      expect(task.type).toBe('script-task');
+      expect(task.type).toBe('bpmn:scriptTask');
       expect(task.properties.scriptFormat).toBe('groovy');
       expect(task.properties.script).toBe('def x = 1 + 1');
     });
@@ -197,7 +197,7 @@ describe('BpmnConverterService', () => {
 
       const gwNode = result.nodes.find((n) => n.id === 'gw');
       expectDefined(gwNode);
-      expect(gwNode.type).toBe('exclusive-gateway');
+      expect(gwNode.type).toBe('bpmn:exclusiveGateway');
 
       const f2 = result.edges.find((e) => e.id === 'f2');
       expectDefined(f2);
@@ -226,8 +226,8 @@ describe('BpmnConverterService', () => {
       ].join('\n');
 
       const result = await service.bpmnXmlToLfJson(xml);
-      expect(result.nodes.some((n) => n.type === 'exclusive-gateway' && n.id === 'gw1')).toBe(true);
-      expect(result.nodes.some((n) => n.type === 'parallel-gateway' && n.id === 'gw2')).toBe(true);
+      expect(result.nodes.some((n) => n.type === 'bpmn:exclusiveGateway' && n.id === 'gw1')).toBe(true);
+      expect(result.nodes.some((n) => n.type === 'bpmn:parallelGateway' && n.id === 'gw2')).toBe(true);
     });
 
     it('throws on invalid XML', async () => {
@@ -249,8 +249,8 @@ describe('BpmnConverterService', () => {
     it('generates valid BPMN XML for a start-to-end flow', async () => {
       const graph: LfGraphData = {
         nodes: [
-          { id: 'start', type: 'start-event', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
-          { id: 'end', type: 'end-event', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'End' } },
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'End' } },
         ],
         edges: [
           { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'end', properties: {} },
@@ -272,9 +272,9 @@ describe('BpmnConverterService', () => {
     it('generates userTask with assignee', async () => {
       const graph: LfGraphData = {
         nodes: [
-          { id: 'start', type: 'start-event', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
-          { id: 'approve', type: 'user-task', x: 100, y: 200, properties: { assignee: '${initiator}' }, text: { x: 100, y: 260, value: 'Approve' } },
-          { id: 'end', type: 'end-event', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'End' } },
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
+          { id: 'approve', type: 'bpmn:userTask', x: 100, y: 200, properties: { assignee: '${initiator}' }, text: { x: 100, y: 260, value: 'Approve' } },
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'End' } },
         ],
         edges: [
           { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'approve', properties: {} },
@@ -290,11 +290,11 @@ describe('BpmnConverterService', () => {
     it('generates userTask with taskListener in extensionElements', async () => {
       const graph: LfGraphData = {
         nodes: [
-          { id: 'start', type: 'start-event', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
-          { id: 'task', type: 'user-task', x: 100, y: 200,
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
+          { id: 'task', type: 'bpmn:userTask', x: 100, y: 200,
             properties: { taskListener: [{ event: 'create', delegateExpression: '${reviewListener}' }] },
             text: { x: 100, y: 260, value: 'Review' } },
-          { id: 'end', type: 'end-event', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'End' } },
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'End' } },
         ],
         edges: [
           { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'task', properties: {} },
@@ -311,11 +311,11 @@ describe('BpmnConverterService', () => {
     it('generates scriptTask with CDATA', async () => {
       const graph: LfGraphData = {
         nodes: [
-          { id: 'start', type: 'start-event', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
-          { id: 'script', type: 'script-task', x: 100, y: 200,
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
+          { id: 'script', type: 'bpmn:scriptTask', x: 100, y: 200,
             properties: { scriptFormat: 'groovy', script: 'println "hello"' },
             text: { x: 100, y: 260, value: 'Logic' } },
-          { id: 'end', type: 'end-event', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'End' } },
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'End' } },
         ],
         edges: [
           { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'script', properties: {} },
@@ -331,10 +331,10 @@ describe('BpmnConverterService', () => {
     it('generates exclusiveGateway with conditional sequenceFlows', async () => {
       const graph: LfGraphData = {
         nodes: [
-          { id: 'start', type: 'start-event', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
-          { id: 'gw', type: 'exclusive-gateway', x: 100, y: 200, properties: {}, text: { x: 100, y: 260, value: 'Decision' } },
-          { id: 'end1', type: 'end-event', x: 60, y: 350, properties: {}, text: { x: 60, y: 390, value: 'Approved' } },
-          { id: 'end2', type: 'end-event', x: 160, y: 350, properties: {}, text: { x: 160, y: 390, value: 'Rejected' } },
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
+          { id: 'gw', type: 'bpmn:exclusiveGateway', x: 100, y: 200, properties: {}, text: { x: 100, y: 260, value: 'Decision' } },
+          { id: 'end1', type: 'bpmn:endEvent', x: 60, y: 350, properties: {}, text: { x: 60, y: 390, value: 'Approved' } },
+          { id: 'end2', type: 'bpmn:endEvent', x: 160, y: 350, properties: {}, text: { x: 160, y: 390, value: 'Rejected' } },
         ],
         edges: [
           { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'gw', properties: {} },
@@ -355,9 +355,9 @@ describe('BpmnConverterService', () => {
     it('escapes XML special characters in names', async () => {
       const graph: LfGraphData = {
         nodes: [
-          { id: 'start', type: 'start-event', x: 100, y: 80, properties: {},
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {},
             text: { x: 100, y: 120, value: 'A & B < C > D' } },
-          { id: 'end', type: 'end-event', x: 400, y: 80, properties: {},
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 80, properties: {},
             text: { x: 400, y: 120, value: 'End' } },
         ],
         edges: [
@@ -383,8 +383,8 @@ describe('BpmnConverterService', () => {
     it('validates generated XML is parseable', async () => {
       const graph: LfGraphData = {
         nodes: [
-          { id: 'start', type: 'start-event', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'S' } },
-          { id: 'end', type: 'end-event', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'E' } },
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'S' } },
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'E' } },
         ],
         edges: [
           { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'end', properties: {} },
@@ -463,7 +463,7 @@ describe('BpmnConverterService', () => {
     it('preserves assignee through round-trip', async () => {
       const xml = loadTemplate('contract-approval.bpmn20.xml');
       const lf = await service.bpmnXmlToLfJson(xml);
-      const userTask = lf.nodes.find((n) => n.type === 'user-task' && n.properties.assignee);
+      const userTask = lf.nodes.find((n) => n.type === 'bpmn:userTask' && n.properties.assignee);
       expectDefined(userTask, 'Expected userTask with assignee');
       const regenerated = await service.lfJsonToBpmnXml(lf, 'contractApproval', 'Contract Approval');
       expect(regenerated).toContain('flowable:assignee=');
@@ -482,7 +482,7 @@ describe('BpmnConverterService', () => {
     it('preserves scriptTask script through round-trip', async () => {
       const xml = loadTemplate('generic-approval.bpmn20.xml');
       const lf = await service.bpmnXmlToLfJson(xml);
-      const scriptTask = lf.nodes.find((n) => n.type === 'script-task');
+      const scriptTask = lf.nodes.find((n) => n.type === 'bpmn:scriptTask');
       expectDefined(scriptTask, 'Expected scriptTask');
       expect(scriptTask.properties.scriptFormat).toBeDefined();
       expect(scriptTask.properties.script).toBeDefined();
@@ -553,7 +553,7 @@ describe('BpmnConverterService', () => {
     it('handles LF graph with no edges', async () => {
       const graph: LfGraphData = {
         nodes: [
-          { id: 'n1', type: 'start-event', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'X' } },
+          { id: 'n1', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'X' } },
         ],
         edges: [],
       };
@@ -566,16 +566,16 @@ describe('BpmnConverterService', () => {
     it('handles process with many userTasks (chain template)', async () => {
       const xml = loadTemplate('contract-approval-chain.bpmn20.xml');
       const lf = await service.bpmnXmlToLfJson(xml);
-      const userTasks = lf.nodes.filter((n) => n.type === 'user-task');
+      const userTasks = lf.nodes.filter((n) => n.type === 'bpmn:userTask');
       expect(userTasks.length).toBeGreaterThanOrEqual(4);
     });
 
     it('skips unknown LF node types gracefully', async () => {
       const graph: LfGraphData = {
         nodes: [
-          { id: 'n1', type: 'start-event', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'S' } },
+          { id: 'n1', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'S' } },
           { id: 'n2', type: 'unknown-custom-type', x: 200, y: 80, properties: {}, text: { x: 200, y: 120, value: 'X' } },
-          { id: 'n3', type: 'end-event', x: 100, y: 200, properties: {}, text: { x: 100, y: 240, value: 'E' } },
+          { id: 'n3', type: 'bpmn:endEvent', x: 100, y: 200, properties: {}, text: { x: 100, y: 240, value: 'E' } },
         ],
         edges: [
           { id: 'f1', type: 'sequence-flow', sourceNodeId: 'n1', targetNodeId: 'n3', properties: {} },
@@ -591,8 +591,8 @@ describe('BpmnConverterService', () => {
     it('generates valid XML schema-compatible namespace declarations', async () => {
       const graph: LfGraphData = {
         nodes: [
-          { id: 'start', type: 'start-event', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'S' } },
-          { id: 'end', type: 'end-event', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'E' } },
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'S' } },
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'E' } },
         ],
         edges: [
           { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'end', properties: {} },
@@ -608,6 +608,511 @@ describe('BpmnConverterService', () => {
       expect(xml).toContain('xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"');
       expect(xml).toContain('xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"');
       expect(xml).toContain('targetNamespace="http://flowable.org/bpmn"');
+    });
+  });
+
+  // ════════════════════════════════════════════
+  // New element types
+  // ════════════════════════════════════════════
+
+  describe('new element types', () => {
+    // ── import: intermediateCatchEvent ──
+    it('parses intermediateCatchEvent with timerEventDefinition (duration)', async () => {
+      const xml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"',
+        '  targetNamespace="http://flowable.org/bpmn">',
+        '  <process id="test" name="Test" isExecutable="true">',
+        '    <startEvent id="start" name="Start"/>',
+        '    <intermediateCatchEvent id="timer1" name="Wait 1 Hour">',
+        '      <timerEventDefinition>',
+        '        <timeDuration>PT1H</timeDuration>',
+        '      </timerEventDefinition>',
+        '    </intermediateCatchEvent>',
+        '    <endEvent id="end" name="End"/>',
+        '    <sequenceFlow id="f1" sourceRef="start" targetRef="timer1"/>',
+        '    <sequenceFlow id="f2" sourceRef="timer1" targetRef="end"/>',
+        '  </process>',
+        '</definitions>',
+      ].join('\n');
+
+      const result = await service.bpmnXmlToLfJson(xml);
+      expect(result.nodes).toHaveLength(3);
+
+      const timer = result.nodes.find((n) => n.id === 'timer1');
+      expectDefined(timer);
+      expect(timer.type).toBe('bpmn:intermediateCatchEvent');
+      expect(timer.properties.definitionType).toBe('bpmn:timerEventDefinition');
+      expect(timer.properties.timerType).toBe('duration');
+      expect(timer.properties.timerValue).toBe('PT1H');
+    });
+
+    it('parses intermediateCatchEvent with timerEventDefinition (cycle)', async () => {
+      const xml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"',
+        '  targetNamespace="http://flowable.org/bpmn">',
+        '  <process id="test" name="Test" isExecutable="true">',
+        '    <startEvent id="start" name="Start"/>',
+        '    <intermediateCatchEvent id="timerRepeat" name="Repeat">',
+        '      <timerEventDefinition>',
+        '        <timeCycle>R3/PT10M</timeCycle>',
+        '      </timerEventDefinition>',
+        '    </intermediateCatchEvent>',
+        '    <endEvent id="end" name="End"/>',
+        '    <sequenceFlow id="f1" sourceRef="start" targetRef="timerRepeat"/>',
+        '    <sequenceFlow id="f2" sourceRef="timerRepeat" targetRef="end"/>',
+        '  </process>',
+        '</definitions>',
+      ].join('\n');
+
+      const result = await service.bpmnXmlToLfJson(xml);
+      const timer = result.nodes.find((n) => n.id === 'timerRepeat');
+      expectDefined(timer);
+      expect(timer.properties.timerType).toBe('cycle');
+      expect(timer.properties.timerValue).toBe('R3/PT10M');
+    });
+
+    it('parses intermediateCatchEvent with messageEventDefinition', async () => {
+      const xml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"',
+        '  targetNamespace="http://flowable.org/bpmn">',
+        '  <process id="test" name="Test" isExecutable="true">',
+        '    <startEvent id="start" name="Start"/>',
+        '    <intermediateCatchEvent id="msg1" name="Wait Message">',
+        '      <messageEventDefinition messageRef="orderMessage"/>',
+        '    </intermediateCatchEvent>',
+        '    <endEvent id="end" name="End"/>',
+        '    <sequenceFlow id="f1" sourceRef="start" targetRef="msg1"/>',
+        '    <sequenceFlow id="f2" sourceRef="msg1" targetRef="end"/>',
+        '  </process>',
+        '</definitions>',
+      ].join('\n');
+
+      const result = await service.bpmnXmlToLfJson(xml);
+      const msg = result.nodes.find((n) => n.id === 'msg1');
+      expectDefined(msg);
+      expect(msg.type).toBe('bpmn:intermediateCatchEvent');
+      expect(msg.properties.definitionType).toBe('bpmn:messageEventDefinition');
+      expect(msg.properties.messageRef).toBe('orderMessage');
+    });
+
+    // ── import: boundaryEvent ──
+    it('parses boundaryEvent with timerEventDefinition', async () => {
+      const xml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"',
+        '  targetNamespace="http://flowable.org/bpmn">',
+        '  <process id="test" name="Test" isExecutable="true">',
+        '    <startEvent id="start" name="Start"/>',
+        '    <userTask id="task1" name="Review"/>',
+        '    <boundaryEvent id="timeout" name="Timeout" attachedToRef="task1" cancelActivity="true">',
+        '      <timerEventDefinition>',
+        '        <timeDuration>PT48H</timeDuration>',
+        '      </timerEventDefinition>',
+        '    </boundaryEvent>',
+        '    <endEvent id="end1" name="Done"/>',
+        '    <endEvent id="end2" name="Timeout"/>',
+        '    <sequenceFlow id="f1" sourceRef="start" targetRef="task1"/>',
+        '    <sequenceFlow id="f2" sourceRef="task1" targetRef="end1"/>',
+        '    <sequenceFlow id="f3" sourceRef="timeout" targetRef="end2"/>',
+        '  </process>',
+        '</definitions>',
+      ].join('\n');
+
+      const result = await service.bpmnXmlToLfJson(xml);
+      const boundary = result.nodes.find((n) => n.id === 'timeout');
+      expectDefined(boundary);
+      expect(boundary.type).toBe('bpmn:boundaryEvent');
+      expect(boundary.properties.attachedToRef).toBe('task1');
+      expect(boundary.properties.cancelActivity).toBe(true);
+      expect(boundary.properties.definitionType).toBe('bpmn:timerEventDefinition');
+      expect(boundary.properties.timerType).toBe('duration');
+      expect(boundary.properties.timerValue).toBe('PT48H');
+    });
+
+    it('parses boundaryEvent with errorEventDefinition', async () => {
+      const xml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"',
+        '  targetNamespace="http://flowable.org/bpmn">',
+        '  <process id="test" name="Test" isExecutable="true">',
+        '    <startEvent id="start" name="Start"/>',
+        '    <serviceTask id="svc1" name="Call API"/>',
+        '    <boundaryEvent id="errBound" name="API Error" attachedToRef="svc1">',
+        '      <errorEventDefinition errorRef="apiError"/>',
+        '    </boundaryEvent>',
+        '    <endEvent id="end1" name="OK"/>',
+        '    <endEvent id="end2" name="Error"/>',
+        '    <sequenceFlow id="f1" sourceRef="start" targetRef="svc1"/>',
+        '    <sequenceFlow id="f2" sourceRef="svc1" targetRef="end1"/>',
+        '    <sequenceFlow id="f3" sourceRef="errBound" targetRef="end2"/>',
+        '  </process>',
+        '</definitions>',
+      ].join('\n');
+
+      const result = await service.bpmnXmlToLfJson(xml);
+      const errNode = result.nodes.find((n) => n.id === 'errBound');
+      expectDefined(errNode);
+      expect(errNode.type).toBe('bpmn:boundaryEvent');
+      expect(errNode.properties.attachedToRef).toBe('svc1');
+      expect(errNode.properties.definitionType).toBe('bpmn:errorEventDefinition');
+      expect(errNode.properties.errorRef).toBe('apiError');
+    });
+
+    // ── import: callActivity ──
+    it('parses callActivity with calledElement', async () => {
+      const xml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"',
+        '  targetNamespace="http://flowable.org/bpmn">',
+        '  <process id="test" name="Test" isExecutable="true">',
+        '    <startEvent id="start" name="Start"/>',
+        '    <callActivity id="call1" name="Call Sub" calledElement="subApproval"/>',
+        '    <endEvent id="end" name="End"/>',
+        '    <sequenceFlow id="f1" sourceRef="start" targetRef="call1"/>',
+        '    <sequenceFlow id="f2" sourceRef="call1" targetRef="end"/>',
+        '  </process>',
+        '</definitions>',
+      ].join('\n');
+
+      const result = await service.bpmnXmlToLfJson(xml);
+      const callNode = result.nodes.find((n) => n.id === 'call1');
+      expectDefined(callNode);
+      expect(callNode.type).toBe('bpmn:callActivity');
+      expect(callNode.properties.calledElement).toBe('subApproval');
+    });
+
+    // ── import: manualTask ──
+    it('parses manualTask', async () => {
+      const xml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"',
+        '  targetNamespace="http://flowable.org/bpmn">',
+        '  <process id="test" name="Test" isExecutable="true">',
+        '    <startEvent id="start" name="Start"/>',
+        '    <manualTask id="m1" name="Manual Step"/>',
+        '    <endEvent id="end" name="End"/>',
+        '    <sequenceFlow id="f1" sourceRef="start" targetRef="m1"/>',
+        '    <sequenceFlow id="f2" sourceRef="m1" targetRef="end"/>',
+        '  </process>',
+        '</definitions>',
+      ].join('\n');
+
+      const result = await service.bpmnXmlToLfJson(xml);
+      const manualNode = result.nodes.find((n) => n.id === 'm1');
+      expectDefined(manualNode);
+      expect(manualNode.type).toBe('bpmn:manualTask');
+      expect(manualNode.text.value).toBe('Manual Step');
+    });
+
+    // ── import: subProcess with inner elements ──
+    it('parses subProcess with inner flow elements', async () => {
+      const xml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"',
+        '  targetNamespace="http://flowable.org/bpmn">',
+        '  <process id="test" name="Test" isExecutable="true">',
+        '    <startEvent id="start" name="Start"/>',
+        '    <subProcess id="sub1" name="Sub Process">',
+        '      <startEvent id="subStart" name="Inner Start"/>',
+        '      <userTask id="subTask" name="Inner Task"/>',
+        '      <endEvent id="subEnd" name="Inner End"/>',
+        '      <sequenceFlow id="sf1" sourceRef="subStart" targetRef="subTask"/>',
+        '      <sequenceFlow id="sf2" sourceRef="subTask" targetRef="subEnd"/>',
+        '    </subProcess>',
+        '    <endEvent id="end" name="End"/>',
+        '    <sequenceFlow id="f1" sourceRef="start" targetRef="sub1"/>',
+        '    <sequenceFlow id="f2" sourceRef="sub1" targetRef="end"/>',
+        '  </process>',
+        '</definitions>',
+      ].join('\n');
+
+      const result = await service.bpmnXmlToLfJson(xml);
+      const sub = result.nodes.find((n) => n.id === 'sub1');
+      expectDefined(sub);
+      expect(sub.type).toBe('bpmn:subProcess');
+      expect(sub.text.value).toBe('Sub Process');
+
+      // Inner elements stored as children — not flattened into top-level
+      const children = sub.properties.children as any;
+      expectDefined(children);
+      expect(children.nodes).toHaveLength(3);
+      expect(children.edges).toHaveLength(2);
+    });
+
+    // ── export: intermediateCatchEvent from LF JSON ──
+    it('exports intermediateCatchEvent with timer definition', async () => {
+      const graph: LfGraphData = {
+        nodes: [
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
+          { id: 'timer1', type: 'bpmn:intermediateCatchEvent', x: 100, y: 200,
+            properties: { definitionType: 'bpmn:timerEventDefinition', timerType: 'duration', timerValue: 'PT1H' },
+            text: { x: 100, y: 240, value: 'Wait 1h' } },
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 200, properties: {}, text: { x: 400, y: 240, value: 'End' } },
+        ],
+        edges: [
+          { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'timer1', properties: {} },
+          { id: 'f2', type: 'sequence-flow', sourceNodeId: 'timer1', targetNodeId: 'end', properties: {} },
+        ],
+      };
+
+      const xml = await service.lfJsonToBpmnXml(graph, 'timerTest', 'Timer Test');
+      expect(xml).toContain('intermediateCatchEvent');
+      expect(xml).toContain('timerEventDefinition');
+      expect(xml).toContain('<timeDuration>PT1H</timeDuration>');
+
+      // Verify parseable
+      const { XMLParser } = require('fast-xml-parser');
+      const doc = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' }).parse(xml);
+      expect(doc.definitions).toBeDefined();
+    });
+
+    // ── export: boundaryEvent from LF JSON ──
+    it('exports boundaryEvent with error definition', async () => {
+      const graph: LfGraphData = {
+        nodes: [
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
+          { id: 'svc1', type: 'bpmn:serviceTask', x: 100, y: 200,
+            properties: { name: 'Call API' }, text: { x: 100, y: 260, value: 'Call API' } },
+          { id: 'err1', type: 'bpmn:boundaryEvent', x: 150, y: 240,
+            properties: { definitionType: 'bpmn:errorEventDefinition', errorRef: 'apiError', attachedToRef: 'svc1', cancelActivity: true },
+            text: { x: 150, y: 280, value: 'API Error' } },
+          { id: 'endOk', type: 'bpmn:endEvent', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'OK' } },
+          { id: 'endErr', type: 'bpmn:endEvent', x: 400, y: 240, properties: {}, text: { x: 400, y: 280, value: 'Error' } },
+        ],
+        edges: [
+          { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'svc1', properties: {} },
+          { id: 'f2', type: 'sequence-flow', sourceNodeId: 'svc1', targetNodeId: 'endOk', properties: {} },
+          { id: 'f3', type: 'sequence-flow', sourceNodeId: 'err1', targetNodeId: 'endErr', properties: {} },
+        ],
+      };
+
+      const xml = await service.lfJsonToBpmnXml(graph, 'boundTest', 'Boundary Test');
+      expect(xml).toContain('boundaryEvent');
+      expect(xml).toContain('attachedToRef="svc1"');
+      expect(xml).toContain('cancelActivity="true"');
+      expect(xml).toContain('errorEventDefinition');
+      expect(xml).toContain('errorRef="apiError"');
+    });
+
+    // ── export: callActivity from LF JSON ──
+    it('exports callActivity with calledElement', async () => {
+      const graph: LfGraphData = {
+        nodes: [
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
+          { id: 'call1', type: 'bpmn:callActivity', x: 100, y: 200,
+            properties: { calledElement: 'mySubProcess', name: 'Call Sub' },
+            text: { x: 100, y: 260, value: 'Call Sub' } },
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 200, properties: {}, text: { x: 400, y: 240, value: 'End' } },
+        ],
+        edges: [
+          { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'call1', properties: {} },
+          { id: 'f2', type: 'sequence-flow', sourceNodeId: 'call1', targetNodeId: 'end', properties: {} },
+        ],
+      };
+
+      const xml = await service.lfJsonToBpmnXml(graph, 'callTest', 'Call Test');
+      expect(xml).toContain('callActivity');
+      expect(xml).toContain('calledElement="mySubProcess"');
+    });
+
+    // ── round-trip: intermediateCatchEvent ──
+    it('round-trips intermediateCatchEvent with timer preserving properties', async () => {
+      const xml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"',
+        '  targetNamespace="http://flowable.org/bpmn">',
+        '  <process id="rtTimer" name="RT Timer" isExecutable="true">',
+        '    <startEvent id="start" name="Start"/>',
+        '    <intermediateCatchEvent id="timer1" name="Wait">',
+        '      <timerEventDefinition>',
+        '        <timeDuration>PT2H</timeDuration>',
+        '      </timerEventDefinition>',
+        '    </intermediateCatchEvent>',
+        '    <endEvent id="end" name="End"/>',
+        '    <sequenceFlow id="f1" sourceRef="start" targetRef="timer1"/>',
+        '    <sequenceFlow id="f2" sourceRef="timer1" targetRef="end"/>',
+        '  </process>',
+        '</definitions>',
+      ].join('\n');
+
+      const lf = await service.bpmnXmlToLfJson(xml);
+      const regenerated = await service.lfJsonToBpmnXml(lf, 'rtTimer', 'RT Timer');
+
+      // Verify structure preserved
+      const timerNode = lf.nodes.find((n) => n.id === 'timer1');
+      expectDefined(timerNode);
+      expect(timerNode.properties.definitionType).toBe('bpmn:timerEventDefinition');
+      expect(timerNode.properties.timerValue).toBe('PT2H');
+
+      // Verify re-generated XML
+      expect(regenerated).toContain('intermediateCatchEvent');
+      expect(regenerated).toContain('timerEventDefinition');
+      expect(regenerated).toContain('<timeDuration>PT2H</timeDuration>');
+
+      // Re-parse and verify
+      const lf2 = await service.bpmnXmlToLfJson(regenerated);
+      const timer2 = lf2.nodes.find((n) => n.id === 'timer1');
+      expectDefined(timer2);
+      expect(timer2.type).toBe('bpmn:intermediateCatchEvent');
+      expect(timer2.properties.definitionType).toBe('bpmn:timerEventDefinition');
+      expect(timer2.properties.timerType).toBe('duration');
+      expect(timer2.properties.timerValue).toBe('PT2H');
+    });
+
+    // ── round-trip: boundaryEvent ──
+    it('round-trips boundaryEvent preserving attachedToRef and error definition', async () => {
+      const xml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"',
+        '  targetNamespace="http://flowable.org/bpmn">',
+        '  <process id="rtBound" name="RT Boundary" isExecutable="true">',
+        '    <startEvent id="start" name="Start"/>',
+        '    <userTask id="task1" name="Review"/>',
+        '    <boundaryEvent id="b1" name="Timeout" attachedToRef="task1" cancelActivity="false">',
+        '      <timerEventDefinition>',
+        '        <timeDuration>P3D</timeDuration>',
+        '      </timerEventDefinition>',
+        '    </boundaryEvent>',
+        '    <endEvent id="end1" name="Done"/>',
+        '    <endEvent id="end2" name="Escalated"/>',
+        '    <sequenceFlow id="f1" sourceRef="start" targetRef="task1"/>',
+        '    <sequenceFlow id="f2" sourceRef="task1" targetRef="end1"/>',
+        '    <sequenceFlow id="f3" sourceRef="b1" targetRef="end2"/>',
+        '  </process>',
+        '</definitions>',
+      ].join('\n');
+
+      const lf = await service.bpmnXmlToLfJson(xml);
+      const regenerated = await service.lfJsonToBpmnXml(lf, 'rtBound', 'RT Boundary');
+
+      const bNode = lf.nodes.find((n) => n.id === 'b1');
+      expectDefined(bNode);
+      expect(bNode.type).toBe('bpmn:boundaryEvent');
+      expect(bNode.properties.attachedToRef).toBe('task1');
+      expect(bNode.properties.cancelActivity).toBe(false);
+      expect(bNode.properties.definitionType).toBe('bpmn:timerEventDefinition');
+      expect(bNode.properties.timerValue).toBe('P3D');
+
+      // Re-parse regenerated XML
+      const lf2 = await service.bpmnXmlToLfJson(regenerated);
+      const b2 = lf2.nodes.find((n) => n.id === 'b1');
+      expectDefined(b2);
+      expect(b2.type).toBe('bpmn:boundaryEvent');
+      expect(b2.properties.attachedToRef).toBe('task1');
+      expect(b2.properties.definitionType).toBe('bpmn:timerEventDefinition');
+      expect(b2.properties.timerValue).toBe('P3D');
+    });
+
+    // ── round-trip: callActivity ──
+    it('round-trips callActivity preserving calledElement', async () => {
+      const xml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"',
+        '  targetNamespace="http://flowable.org/bpmn">',
+        '  <process id="rtCall" name="RT Call" isExecutable="true">',
+        '    <startEvent id="start" name="Start"/>',
+        '    <callActivity id="call1" name="Sub Process" calledElement="childProcess"/>',
+        '    <endEvent id="end" name="End"/>',
+        '    <sequenceFlow id="f1" sourceRef="start" targetRef="call1"/>',
+        '    <sequenceFlow id="f2" sourceRef="call1" targetRef="end"/>',
+        '  </process>',
+        '</definitions>',
+      ].join('\n');
+
+      const lf = await service.bpmnXmlToLfJson(xml);
+      const regenerated = await service.lfJsonToBpmnXml(lf, 'rtCall', 'RT Call');
+
+      const callNode = lf.nodes.find((n) => n.id === 'call1');
+      expectDefined(callNode);
+      expect(callNode.type).toBe('bpmn:callActivity');
+      expect(callNode.properties.calledElement).toBe('childProcess');
+
+      // Re-parse
+      const lf2 = await service.bpmnXmlToLfJson(regenerated);
+      const call2 = lf2.nodes.find((n) => n.id === 'call1');
+      expectDefined(call2);
+      expect(call2.type).toBe('bpmn:callActivity');
+      expect(call2.properties.calledElement).toBe('childProcess');
+    });
+
+    // ── export: messageEventDefinition ──
+    it('exports intermediateCatchEvent with messageEventDefinition', async () => {
+      const graph: LfGraphData = {
+        nodes: [
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
+          { id: 'msg1', type: 'bpmn:intermediateCatchEvent', x: 100, y: 200,
+            properties: { definitionType: 'bpmn:messageEventDefinition', messageRef: 'orderMsg' },
+            text: { x: 100, y: 240, value: 'Wait Msg' } },
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 200, properties: {}, text: { x: 400, y: 240, value: 'End' } },
+        ],
+        edges: [
+          { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'msg1', properties: {} },
+          { id: 'f2', type: 'sequence-flow', sourceNodeId: 'msg1', targetNodeId: 'end', properties: {} },
+        ],
+      };
+
+      const xml = await service.lfJsonToBpmnXml(graph, 'msgTest', 'Msg Test');
+      expect(xml).toContain('messageEventDefinition');
+      expect(xml).toContain('messageRef="orderMsg"');
+    });
+
+    // ── export: signalEventDefinition ──
+    it('exports intermediateThrowEvent with signalEventDefinition', async () => {
+      const graph: LfGraphData = {
+        nodes: [
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
+          { id: 'sig1', type: 'bpmn:intermediateThrowEvent', x: 100, y: 200,
+            properties: { definitionType: 'bpmn:signalEventDefinition', signalRef: 'orderSignal' },
+            text: { x: 100, y: 240, value: 'Send Signal' } },
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 200, properties: {}, text: { x: 400, y: 240, value: 'End' } },
+        ],
+        edges: [
+          { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'sig1', properties: {} },
+          { id: 'f2', type: 'sequence-flow', sourceNodeId: 'sig1', targetNodeId: 'end', properties: {} },
+        ],
+      };
+
+      const xml = await service.lfJsonToBpmnXml(graph, 'sigTest', 'Sig Test');
+      expect(xml).toContain('intermediateThrowEvent');
+      expect(xml).toContain('signalEventDefinition');
+      expect(xml).toContain('signalRef="orderSignal"');
+    });
+
+    // ── export: subProcess with children ──
+    it('exports subProcess preserving inner flow elements', async () => {
+      const graph: LfGraphData = {
+        nodes: [
+          { id: 'start', type: 'bpmn:startEvent', x: 100, y: 80, properties: {}, text: { x: 100, y: 120, value: 'Start' } },
+          { id: 'sub1', type: 'bpmn:subProcess', x: 100, y: 200,
+            properties: {
+              name: 'Sub Process',
+              children: {
+                nodes: [
+                  { id: 'subStart', type: 'bpmn:startEvent', x: 120, y: 220, properties: {}, text: { x: 120, y: 260, value: 'Inner Start' } },
+                  { id: 'subEnd', type: 'bpmn:endEvent', x: 300, y: 220, properties: {}, text: { x: 300, y: 260, value: 'Inner End' } },
+                ],
+                edges: [
+                  { id: 'sfInner', type: 'sequence-flow', sourceNodeId: 'subStart', targetNodeId: 'subEnd', properties: {} },
+                ],
+              },
+            },
+            text: { x: 100, y: 360, value: 'Sub Process' } },
+          { id: 'end', type: 'bpmn:endEvent', x: 400, y: 80, properties: {}, text: { x: 400, y: 120, value: 'End' } },
+        ],
+        edges: [
+          { id: 'f1', type: 'sequence-flow', sourceNodeId: 'start', targetNodeId: 'sub1', properties: {} },
+          { id: 'f2', type: 'sequence-flow', sourceNodeId: 'sub1', targetNodeId: 'end', properties: {} },
+        ],
+      };
+
+      const xml = await service.lfJsonToBpmnXml(graph, 'subTest', 'Sub Test');
+      expect(xml).toContain('subProcess');
+      expect(xml).toContain('id="subStart"');
+      expect(xml).toContain('id="subEnd"');
+      expect(xml).toContain('id="sfInner"');
     });
   });
 });

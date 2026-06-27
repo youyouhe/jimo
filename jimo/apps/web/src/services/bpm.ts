@@ -247,9 +247,10 @@ export async function exportBpmnXml(
   id: string,
   versionId?: string,
 ): Promise<string> {
+  // Do NOT set responseType: 'text' — the request interceptor unwraps
+  // the ApiResponse envelope ({ code: 0, data: xml }), so we get xml directly.
   return request.get(`/bpm/definitions/${id}/export`, {
     params: versionId ? { versionId } : undefined,
-    responseType: 'text',
   });
 }
 

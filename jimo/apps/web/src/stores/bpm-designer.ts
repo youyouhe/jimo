@@ -7,6 +7,8 @@ export interface BpmDesignerState {
   // --- Graph state ---
   /** The current LogicFlow graph data (nodes + edges). */
   lfJson: LfGraphData | null;
+  /** Pending full canvas render requested by agent — consumed by DesignerCanvas. */
+  pendingRender: LfGraphData | null;
   /** Currently selected node id in the designer canvas. */
   selectedNodeId: string | null;
 
@@ -44,6 +46,12 @@ export interface BpmDesignerState {
 export interface BpmDesignerActions {
   /** Replace the entire graph with a new one. Clears undo/redo stacks. */
   setLfJson: (graph: LfGraphData | null) => void;
+
+  /** Queue a full canvas re-render (consumed + cleared by DesignerCanvas). */
+  setPendingRender: (graph: LfGraphData) => void;
+
+  /** Clear the pending render (called by DesignerCanvas after applying it). */
+  clearPendingRender: () => void;
 
   /** Update properties of a node by id. Pushes current state to undo stack. */
   updateNode: (nodeId: string, props: Partial<LfNodeProperties>) => void;
@@ -107,6 +115,7 @@ function getInitialState(): BpmDesignerState {
     processName: '',
     processKey: '',
     activeTab: 'properties',
+    pendingRender: null,
   };
 }
 
@@ -140,9 +149,17 @@ export const useBpmDesignerStore = create<BpmDesignerState & BpmDesignerActions>
         lfJson: graph ? cloneGraph(graph) : null,
         undoStack: [],
         redoStack: [],
-        isDirty: false,
-        selectedNodeId: null,
+        // isDirty intentionally NOT touched here — syncToStore fires on every
+        // canvas mutation; resetting isDirty would make auto-save impossible.
       });
+    },
+
+    setPendingRender: (graph) => {
+      set({ pendingRender: cloneGraph(graph) });
+    },
+
+    clearPendingRender: () => {
+      set({ pendingRender: null });
     },
 
     // --- Node mutations ---

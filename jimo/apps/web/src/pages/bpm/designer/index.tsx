@@ -81,6 +81,19 @@ export default function BpmDesignerPage() {
             key: def.key,
             lfJson: def.currentVersionLfJson,
           });
+          // Apply graph data to the LogicFlow canvas when it becomes ready
+          const graph = def.currentVersionLfJson;
+          if (graph?.nodes?.length) {
+            const tryApply = (retries: number) => {
+              const handle = canvasRef.current;
+              if (handle?.lf) {
+                handle.applyGraph(graph);
+              } else if (retries > 0) {
+                setTimeout(() => tryApply(retries - 1), 150);
+              }
+            };
+            tryApply(20); // wait up to ~3s for canvas init
+          }
         })
         .catch((err: any) => {
           console.error('Failed to load process definition:', err);

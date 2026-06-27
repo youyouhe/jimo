@@ -15,6 +15,7 @@ import {
   EditOutlined,
   DeleteOutlined,
   EyeOutlined,
+  FundViewOutlined,
   StopOutlined,
   CheckCircleOutlined,
 } from '@ant-design/icons';
@@ -29,6 +30,7 @@ import {
 } from '@/services/bpm';
 import VersionTimeline from './VersionTimeline';
 import DeployButton from './DeployButton';
+import BpmPreviewModal from './BpmPreviewModal';
 
 const STATUS_BADGE_MAP: Record<
   ProcessStatus,
@@ -45,6 +47,10 @@ export default function ProcessManagerPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [currentRecord, setCurrentRecord] =
     useState<BpmProcessDefinition | null>(null);
+
+  // Preview modal
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewDefId, setPreviewDefId] = useState<string | null>(null);
 
   const openDetail = (record: BpmProcessDefinition) => {
     setCurrentRecord(record);
@@ -185,6 +191,17 @@ export default function ProcessManagerPage() {
             onClick={() => openDetail(record)}
           >
             View
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            icon={<FundViewOutlined />}
+            onClick={() => {
+              setPreviewDefId(record.id);
+              setPreviewOpen(true);
+            }}
+          >
+            Preview
           </Button>
           <Button
             type="link"
@@ -345,6 +362,13 @@ export default function ProcessManagerPage() {
           </>
         )}
       </Drawer>
+
+      {/* Preview Modal — read-only BPMN diagram */}
+      <BpmPreviewModal
+        open={previewOpen}
+        onClose={() => { setPreviewOpen(false); setPreviewDefId(null); }}
+        definitionId={previewDefId}
+      />
     </>
   );
 }

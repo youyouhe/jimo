@@ -9,6 +9,7 @@ import {
   Tooltip,
   Badge,
   Select,
+  Popconfirm,
 } from 'antd';
 import {
   SaveOutlined,
@@ -22,6 +23,7 @@ import {
   ImportOutlined,
   CloudUploadOutlined,
   BorderInnerOutlined,
+  ClearOutlined,
 } from '@ant-design/icons';
 import type LogicFlow from '@logicflow/core';
 import { useBpmDesignerStore } from '@/stores/bpm-designer';
@@ -77,13 +79,16 @@ export default function DesignerToolbar({ lf, onDefinitionIdChange }: DesignerTo
     if (!definitionId || !lf) return;
     setSaving(true);
     try {
-      const graphData = lf.getGraphData();
-      const lfGraph: LfGraphData = {
-        nodes: (graphData as any)?.nodes || [],
-        edges: (graphData as any)?.edges || [],
-      };
+      // Use the store graph which syncToStore keeps up-to-date on every mutation,
+      // rather than lf.getGraphData() which can return empty for BPMN plugin nodes.
+      const graph = useBpmDesignerStore.getState().lfJson;
+      if (!graph || !graph.nodes?.length) {
+        message.warning('No nodes on canvas to save');
+        setSaving(false);
+        return;
+      }
       await updateProcess(definitionId, {
-        lfJson: lfGraph,
+        lfJson: { nodes: graph.nodes, edges: graph.edges },
       });
       markClean();
       message.success('Draft saved');
@@ -98,9 +103,8 @@ export default function DesignerToolbar({ lf, onDefinitionIdChange }: DesignerTo
   const handlePublish = useCallback(() => {
     if (!definitionId || !lf) return;
 
-    const graphData = lf.getGraphData();
-    const hasNodes = (graphData as any)?.nodes?.length > 0;
-    if (!hasNodes) {
+    const graph = useBpmDesignerStore.getState().lfJson;
+    if (!graph || !graph.nodes?.length) {
       message.warning('Add at least one node before publishing');
       return;
     }
@@ -113,15 +117,9 @@ export default function DesignerToolbar({ lf, onDefinitionIdChange }: DesignerTo
       onOk: async () => {
         setSaving(true);
         try {
-          const lfGraph: LfGraphData = {
-            nodes: (graphData as any)?.nodes || [],
-            edges: (graphData as any)?.edges || [],
-          };
           await updateProcess(definitionId, {
-            lfJson: lfGraph,
+            lfJson: { nodes: graph.nodes, edges: graph.edges },
           });
-          // Explicitly set published status via a second API call
-          // (backend handles status transitions)
           markClean();
           setStatus('published');
           message.success('Process published');
@@ -143,6 +141,30 @@ export default function DesignerToolbar({ lf, onDefinitionIdChange }: DesignerTo
 
   // --- Import / Export modal ---
   const [importExportOpen, setImportExportOpen] = useState(false);
+
+  const handleOpenImportExport = useCallback(async () => {
+    // Auto-save if dirty before opening import/export (mirrors deploy behavior)
+    if (isDirty && definitionId) {
+      try {
+        setSaving(true);
+        const graph = useBpmDesignerStore.getState().lfJson;
+        if (graph && graph.nodes?.length) {
+          await updateProcess(definitionId, {
+            lfJson: { nodes: graph.nodes, edges: graph.edges },
+          });
+          markClean();
+          message.success('Auto-saved before export');
+        }
+      } catch (err: any) {
+        message.error(err?.message || 'Failed to save before export');
+        setSaving(false);
+        return;
+      } finally {
+        setSaving(false);
+      }
+    }
+    setImportExportOpen(true);
+  }, [definitionId, isDirty, setSaving, markClean]);
 
   // --- Deploy modal state ---
   const [deployModalOpen, setDeployModalOpen] = useState(false);
@@ -193,26 +215,44 @@ export default function DesignerToolbar({ lf, onDefinitionIdChange }: DesignerTo
       setStatus(definition.status);
       setSavingName(definition.name);
       if (onDefinitionIdChange) onDefinitionIdChange(definition.id);
+
+      // Update the LogicFlow canvas with the imported graph.
+      // Must happen AFTER loadDefinition so the store is in sync.
+      const graph = definition.currentVersionLfJson;
+      if (lf && graph) {
+        try {
+          // Defer to let React commit the store update first, then repaint canvas
+          setTimeout(() => {
+            try {
+              lf.clearData();
+              (graph.nodes || []).forEach((n: any) => lf.addNode(n));
+              (graph.edges || []).forEach((e: any) => lf.addEdge(e));
+              (lf as any).fitView?.();
+            } catch { /* ignore */ }
+          }, 50);
+        } catch { /* ignore */ }
+      }
+
       message.success(`Imported "${definition.name}" — ready to design`);
     },
-    [loadDefinition, onDefinitionIdChange],
+    [loadDefinition, lf, onDefinitionIdChange],
   );
 
   // --- Deploy ---
   const handleOpenDeploy = useCallback(async () => {
     if (!definitionId) return;
     // Auto-save if dirty before deploying
-    if (isDirty && lf) {
+    if (isDirty) {
       try {
         setSaving(true);
-        const graphData = lf.getGraphData();
-        const lfGraph: LfGraphData = {
-          nodes: (graphData as any)?.nodes || [],
-          edges: (graphData as any)?.edges || [],
-        };
-        await updateProcess(definitionId, { lfJson: lfGraph });
-        markClean();
-        message.success('Auto-saved before deploy');
+        const graph = useBpmDesignerStore.getState().lfJson;
+        if (graph && graph.nodes?.length) {
+          await updateProcess(definitionId, {
+            lfJson: { nodes: graph.nodes, edges: graph.edges },
+          });
+          markClean();
+          message.success('Auto-saved before deploy');
+        }
       } catch (err: any) {
         message.error(err?.message || 'Failed to save before deploy');
         setSaving(false);
@@ -315,7 +355,14 @@ export default function DesignerToolbar({ lf, onDefinitionIdChange }: DesignerTo
   const handleZoomReset = useCallback(() => {
     if (!lf) return;
     lf.resetZoom();
+    (lf as any).fitView?.();
     useBpmDesignerStore.getState().setZoom(1);
+  }, [lf]);
+
+  const handleClearCanvas = useCallback(() => {
+    if (!lf) return;
+    lf.clearData();
+    useBpmDesignerStore.getState().setLfJson({ nodes: [], edges: [] });
   }, [lf]);
 
   // --- Grid toggle ---
@@ -421,6 +468,19 @@ export default function DesignerToolbar({ lf, onDefinitionIdChange }: DesignerTo
             <Button icon={<ExpandOutlined />} size="small" onClick={handleZoomReset} />
           </Tooltip>
 
+          <Popconfirm
+            title="清空画布？"
+            description="将删除所有节点和连线，此操作不可撤销。"
+            okText="清空"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={handleClearCanvas}
+          >
+            <Tooltip title="清空画布">
+              <Button icon={<ClearOutlined />} size="small" danger disabled={!lf} />
+            </Tooltip>
+          </Popconfirm>
+
           {/* Grid toggle */}
           <Tooltip title={gridVisible ? '隐藏网格' : '显示网格'}>
             <Button
@@ -463,7 +523,8 @@ export default function DesignerToolbar({ lf, onDefinitionIdChange }: DesignerTo
                 <Button
                   icon={<ImportOutlined />}
                   size="small"
-                  onClick={() => setImportExportOpen(true)}
+                  loading={isSaving}
+                  onClick={handleOpenImportExport}
                 >
                   Import / Export
                 </Button>
