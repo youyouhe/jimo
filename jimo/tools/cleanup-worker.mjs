@@ -60,6 +60,7 @@ const PROJECT_ROOT = resolveProjectRoot();
 const SERVER_SRC   = path.join(PROJECT_ROOT, 'release/jimo/apps/server/src');
 const SCHEMA_INDEX = path.join(SERVER_SRC, 'db/schema/index.ts');
 const APP_MODULE   = path.join(SERVER_SRC, 'app.module.ts');
+const GENERATED_MODULE = path.join(SERVER_SRC, 'generated.module.ts');
 const UMIRC        = path.join(PROJECT_ROOT, 'release/jimo/apps/web/.umirc.ts');
 
 // ── name derivation (mirrors autocode-field-utils.ts) ────────────────────────
@@ -177,7 +178,8 @@ async function removeDanglingImports(n) {
 }
 
 async function removeModuleRegistration(n) {
-  await editFile(APP_MODULE, content => {
+  if (!fs.existsSync(GENERATED_MODULE)) return;
+  await editFile(GENERATED_MODULE, content => {
     let out = content;
     // Remove main module import + array entry
     out = out.replace(
@@ -391,38 +393,34 @@ async function processEntrypointsJob(sql, job, jobsDir) {
   });
   console.log(`[cleanup-worker] entrypoints: schema-index updated for '${p.tableName}'`);
 
-  // 2. updateAppModule
+  // 2. updateGeneratedModule
   await writeProgress(1, ENTRYPOINTS_STEPS[1].label);
-  await editFile(APP_MODULE, content => {
+  // Bootstrap generated.module.ts if it doesn't exist yet
+  if (!fs.existsSync(GENERATED_MODULE)) {
+    await writeFile(GENERATED_MODULE,
+      `import { Module } from '@nestjs/common';\n\n@Module({\n  imports: [\n  ],\n})\nexport class GeneratedModule {}\n`,
+      'utf-8',
+    );
+  }
+  await editFile(GENERATED_MODULE, content => {
     const importLine = `import { ${n.pascalSingular}Module } from './modules/${n.kebabSingular}/${n.kebabSingular}.module';`;
-    const moduleLine = `    ${n.pascalSingular}Module,`;
     if (!content.includes(importLine)) {
-      const lastImportMatch = content.match(/^import .+;$/gm);
-      if (lastImportMatch && lastImportMatch.length > 0) {
-        const lastImport = lastImportMatch[lastImportMatch.length - 1];
-        content = content.replace(lastImport, `${lastImport}\n${importLine}`);
-      }
-      content = content.replace(/(\s+)(OperationRecordModule,)/, `$1$2\n${moduleLine}`);
+      content = content.replace(`import { Module }`, `${importLine}\nimport { Module }`);
+      content = content.replace(`imports: [\n  `, `imports: [\n    ${n.pascalSingular}Module,\n  `);
     }
     if (p.agentEnabled) {
       const agentImportLine = `import { ${n.pascalSingular}AgentModule } from './modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module';`;
-      const agentModuleLine = `    ${n.pascalSingular}AgentModule,`;
       if (!content.includes(agentImportLine)) {
-        const lastImportMatch2 = content.match(/^import .+;$/gm);
-        if (lastImportMatch2 && lastImportMatch2.length > 0) {
-          const lastImport2 = lastImportMatch2[lastImportMatch2.length - 1];
-          content = content.replace(lastImport2, `${lastImport2}\n${agentImportLine}`);
-        }
-        const moduleLineEsc = moduleLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        content = content.replace(`import { Module }`, `${agentImportLine}\nimport { Module }`);
         content = content.replace(
-          new RegExp(`(\\s+)(${moduleLineEsc})`),
-          `$1$2\n${agentModuleLine}`,
+          `    ${n.pascalSingular}Module,`,
+          `    ${n.pascalSingular}Module,\n    ${n.pascalSingular}AgentModule,`,
         );
       }
     }
     return content;
   });
-  console.log(`[cleanup-worker] entrypoints: app.module.ts updated for '${p.tableName}'`);
+  console.log(`[cleanup-worker] entrypoints: generated.module.ts updated for '${p.tableName}'`);
 
   // 3. updateUmiRoutes + updateUmiRoutesMap
   await writeProgress(2, ENTRYPOINTS_STEPS[2].label);

@@ -44,47 +44,38 @@ export class EntrypointService {
 
   async updateAppModule(dto: AutoCodeDto, projectRoot: string): Promise<void> {
     const n = deriveNames(dto.tableName);
-    const modulePath = path.join(projectRoot, 'release/jimo/apps/server/src/app.module.ts');
+    const generatedPath = path.join(projectRoot, 'release/jimo/apps/server/src/generated.module.ts');
 
-    let content = await fs.readFile(modulePath, 'utf-8');
-
-    const importLine = `import { ${n.pascalSingular}Module } from './modules/${n.kebabSingular}/${n.kebabSingular}.module';`;
-    const moduleLine = `    ${n.pascalSingular}Module,`;
-
-    if (!content.includes(importLine)) {
-      const lastImportMatch = content.match(/^import .+;$/gm);
-      if (lastImportMatch && lastImportMatch.length > 0) {
-        const lastImport = lastImportMatch[lastImportMatch.length - 1]!;
-        content = content.replace(lastImport, `${lastImport}\n${importLine}`);
-      }
-
-      content = content.replace(
-        /(\s+)(OperationRecordModule,)/,
-        `$1$2\n${moduleLine}`,
+    // Ensure the file exists (idempotent bootstrap)
+    if (!existsSync(generatedPath)) {
+      await fs.writeFile(generatedPath,
+        `import { Module } from '@nestjs/common';\n\n@Module({\n  imports: [\n  ],\n})\nexport class GeneratedModule {}\n`,
+        'utf-8',
       );
     }
 
-    // Register agent module when enabled
+    let content = await fs.readFile(generatedPath, 'utf-8');
+
+    // Inject main module
+    const importLine = `import { ${n.pascalSingular}Module } from './modules/${n.kebabSingular}/${n.kebabSingular}.module';`;
+    if (!content.includes(importLine)) {
+      content = content.replace(`import { Module }`, `${importLine}\nimport { Module }`);
+      content = content.replace(`imports: [\n  `, `imports: [\n    ${n.pascalSingular}Module,\n  `);
+    }
+
+    // Inject agent module when enabled
     if (dto.agentConfig?.enabled) {
       const agentImportLine = `import { ${n.pascalSingular}AgentModule } from './modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module';`;
-      const agentModuleLine = `    ${n.pascalSingular}AgentModule,`;
-
       if (!content.includes(agentImportLine)) {
-        const lastImportMatch2 = content.match(/^import .+;$/gm);
-        if (lastImportMatch2 && lastImportMatch2.length > 0) {
-          const lastImport2 = lastImportMatch2[lastImportMatch2.length - 1]!;
-          content = content.replace(lastImport2, `${lastImport2}\n${agentImportLine}`);
-        }
-
-        const mainModuleLineEsc = moduleLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        content = content.replace(`import { Module }`, `${agentImportLine}\nimport { Module }`);
         content = content.replace(
-          new RegExp(`(\\s+)(${mainModuleLineEsc})`),
-          `$1$2\n${agentModuleLine}`,
+          `    ${n.pascalSingular}Module,`,
+          `    ${n.pascalSingular}Module,\n    ${n.pascalSingular}AgentModule,`,
         );
       }
     }
 
-    await fs.writeFile(modulePath, content, 'utf-8');
+    await fs.writeFile(generatedPath, content, 'utf-8');
   }
 
   async updateUmiRoutes(dto: AutoCodeDto, projectRoot: string): Promise<void> {
@@ -239,33 +230,26 @@ export class EntrypointService {
 
   async removeModuleRegistration(n: DerivedNames): Promise<void> {
     const projectRoot = resolveProjectRoot();
-    const modulePath = path.join(projectRoot, 'release/jimo/apps/server/src/app.module.ts');
-    if (!existsSync(modulePath)) return;
+    const generatedPath = path.join(projectRoot, 'release/jimo/apps/server/src/generated.module.ts');
+    if (!existsSync(generatedPath)) return;
 
-    let content = await fs.readFile(modulePath, 'utf-8');
+    let content = await fs.readFile(generatedPath, 'utf-8');
 
-    const importPattern = new RegExp(
-      `import \\{ ${n.pascalSingular}Module \\} from '\\./modules/${n.kebabSingular}/${n.kebabSingular}\\.module';\\n?`,
+    // Remove main module import + array entry
+    content = content.replace(
+      new RegExp(`import \\{ ${n.pascalSingular}Module \\} from '\\./modules/${n.kebabSingular}/${n.kebabSingular}\\.module';\\n?`),
+      '',
     );
-    content = content.replace(importPattern, '');
+    content = content.replace(new RegExp(`\\n[ ]+${n.pascalSingular}Module,`), '');
 
-    const moduleArrayPattern = new RegExp(
-      `\\n[ ]+${n.pascalSingular}Module,`,
+    // Remove agent module import + array entry
+    content = content.replace(
+      new RegExp(`import \\{ ${n.pascalSingular}AgentModule \\} from '\\./modules/${n.kebabSingular}/agent/${n.kebabSingular}\\.agent\\.module';\\n?`),
+      '',
     );
-    content = content.replace(moduleArrayPattern, '');
+    content = content.replace(new RegExp(`\\n[ ]+${n.pascalSingular}AgentModule,`), '');
 
-    // Also remove agent module registration if present
-    const agentImportPattern = new RegExp(
-      `import \\{ ${n.pascalSingular}AgentModule \\} from '\\./modules/${n.kebabSingular}/agent/${n.kebabSingular}\\.agent\\.module';\\n?`,
-    );
-    content = content.replace(agentImportPattern, '');
-
-    const agentModulePattern = new RegExp(
-      `\\n[ ]+${n.pascalSingular}AgentModule,`,
-    );
-    content = content.replace(agentModulePattern, '');
-
-    await fs.writeFile(modulePath, content, 'utf-8');
+    await fs.writeFile(generatedPath, content, 'utf-8');
   }
 
   // =========================================================================

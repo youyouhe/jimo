@@ -29,6 +29,9 @@ jimo/apps/server/src/db/schema/lc-*.ts
 # ── Backend modules (all lc_-prefixed business modules) ──────────────────────
 jimo/apps/server/src/modules/lc-*/
 #
+# ── Generated module barrel (auto-managed by autocode, never hand-edit) ───────
+jimo/apps/server/src/generated.module.ts
+#
 # ── Legacy: old-style modules built before the lc_ prefix convention ─────────
 # These were generated without a prefix and are kept here for history.
 # Once cleared via autocode they will disappear from disk naturally.

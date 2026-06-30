@@ -34,6 +34,7 @@ import { BpmSyncModule } from './modules/bpm-sync/bpm-sync.module';
 import { BpmModule } from './modules/bpm/bpm.module';
 import { OwnershipModule } from './common/ownership/ownership.module';
 import { BpmRulesModule } from './modules/bpm-rules/bpm-rules.module';
+import { GeneratedModule } from './generated.module';
 
 @Module({
   imports: [
@@ -67,6 +68,7 @@ import { BpmRulesModule } from './modules/bpm-rules/bpm-rules.module';
     ExportTemplateModule,
     VersionModule,
     AuthorityBtnModule,
+    GeneratedModule,
   ],
   providers: [
     {
