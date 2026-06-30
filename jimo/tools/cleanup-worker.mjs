@@ -138,17 +138,23 @@ async function deleteGeneratedFiles(n) {
     path.join(serverSrc, `modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`),
     path.join(serverSrc, `modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`),
     path.join(serverSrc, `modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`),
-    path.join(webSrc, `services/${n.kebabSingular}.ts`),
-    path.join(webSrc, `pages/${n.kebabName}/index.tsx`),
-    path.join(webSrc, `pages/${n.kebabName}/map.tsx`),
+    path.join(serverSrc, `modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`),
+    path.join(serverSrc, `modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`),
+    path.join(serverSrc, `modules/${n.kebabSingular}/${n.kebabSingular}.service.contract.spec.ts`),
+    path.join(serverSrc, `modules/${n.kebabSingular}/${n.kebabSingular}.http.contract.spec.ts`),
+    path.join(webSrc, `services/lc/${n.kebabSingular}.ts`),
+    path.join(webSrc, `pages/lc/${n.kebabName}/index.tsx`),
+    path.join(webSrc, `pages/lc/${n.kebabName}/detail.tsx`),
+    path.join(webSrc, `pages/lc/${n.kebabName}/map.tsx`),
   ];
 
   for (const f of files) await rmForce(f);
 
   const moduleDir = path.join(serverSrc, `modules/${n.kebabSingular}`);
-  await rmdirSafe(path.join(moduleDir, 'dto'));
+  try { await rm(path.join(moduleDir, 'dto'),   { recursive: true, force: true }); } catch { /* */ }
+  try { await rm(path.join(moduleDir, 'agent'), { recursive: true, force: true }); } catch { /* */ }
   await rmdirSafe(moduleDir);
-  await rmdirSafe(path.join(webSrc, `pages/${n.kebabName}`));
+  try { await rm(path.join(webSrc, `pages/lc/${n.kebabName}`), { recursive: true, force: true }); } catch { /* */ }
 }
 
 async function removeSchemaExport(n) {
@@ -173,11 +179,18 @@ async function removeDanglingImports(n) {
 async function removeModuleRegistration(n) {
   await editFile(APP_MODULE, content => {
     let out = content;
+    // Remove main module import + array entry
     out = out.replace(
       new RegExp(`import \\{ ${n.pascalSingular}Module \\} from '\\./modules/${n.kebabSingular}/${n.kebabSingular}\\.module';\n?`, 'g'),
       ''
     );
-    out = out.replace(new RegExp(`\\s*${n.pascalSingular}Module,\\n?`, 'g'), '');
+    out = out.replace(new RegExp(`\n[ ]+${n.pascalSingular}Module,`, 'g'), '');
+    // Remove agent module import + array entry
+    out = out.replace(
+      new RegExp(`import \\{ ${n.pascalSingular}AgentModule \\} from '\\./modules/${n.kebabSingular}/agent/${n.kebabSingular}\\.agent\\.module';\n?`, 'g'),
+      ''
+    );
+    out = out.replace(new RegExp(`\n[ ]+${n.pascalSingular}AgentModule,`, 'g'), '');
     return out;
   });
 }

@@ -76,8 +76,9 @@ export class EntrypointService {
           content = content.replace(lastImport2, `${lastImport2}\n${agentImportLine}`);
         }
 
+        const mainModuleLineEsc = moduleLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         content = content.replace(
-          /(\s+)(${n.pascalSingular}Module,)/,
+          new RegExp(`(\\s+)(${mainModuleLineEsc})`),
           `$1$2\n${agentModuleLine}`,
         );
       }
@@ -249,7 +250,7 @@ export class EntrypointService {
     content = content.replace(importPattern, '');
 
     const moduleArrayPattern = new RegExp(
-      `\\s*${n.pascalSingular}Module,\\n?`,
+      `\\n[ ]+${n.pascalSingular}Module,`,
     );
     content = content.replace(moduleArrayPattern, '');
 
@@ -260,7 +261,7 @@ export class EntrypointService {
     content = content.replace(agentImportPattern, '');
 
     const agentModulePattern = new RegExp(
-      `\\s*${n.pascalSingular}AgentModule,\\n?`,
+      `\\n[ ]+${n.pascalSingular}AgentModule,`,
     );
     content = content.replace(agentModulePattern, '');
 

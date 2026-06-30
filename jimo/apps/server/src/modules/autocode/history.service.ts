@@ -164,12 +164,13 @@ export class HistoryService {
     }
     const moduleDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/${n.kebabSingular}`);
     if (existsSync(moduleDir)) {
+      try { await fs.rm(path.join(moduleDir, 'dto'), { recursive: true, force: true }); } catch { /* */ }
+      try { await fs.rm(path.join(moduleDir, 'agent'), { recursive: true, force: true }); } catch { /* */ }
       try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
-      try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
     }
     const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.pageDir}`);
     if (existsSync(pageDir)) {
-      try { await fs.rmdir(pageDir); } catch { /* not empty */ }
+      try { await fs.rm(pageDir, { recursive: true, force: true }); } catch { /* */ }
     }
 
     await this.entrypointService.removeRouteFromUmirc(n);
