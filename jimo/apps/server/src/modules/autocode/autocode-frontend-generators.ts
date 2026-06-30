@@ -13,7 +13,7 @@ import {
  * Generate frontend API service file.
  */
 export function generateFrontendService(dto: AutoCodeDto, relationDictTypes: Map<string, string | null> = new Map()): string {
-  const n = deriveNames(dto.tableName);
+  const n = deriveNames(dto.tableName, dto._packageSlug ?? '');
   const oneToManyFields = dto.fields.filter((f) => f.type === 'relation' && f.relationType === 'one-to-many');
 
   // Generate child detail interfaces for one-to-many (including grandchild)
@@ -924,7 +924,7 @@ function buildExpandedRowRender(
  * Generate Umi 4 frontend page with ProTable + ModalForm.
  */
 export function generateFrontendPage(dto: AutoCodeDto, relationDictTypes: Map<string, string | null> = new Map()): string {
-  const n = deriveNames(dto.tableName);
+  const n = deriveNames(dto.tableName, dto._packageSlug ?? '');
   const listableFields = dto.fields.filter((f) => f.listable);
   const creatableFields = dto.fields.filter((f) => f.creatable);
   const editableFields = dto.fields.filter((f) => f.editable);
@@ -1490,8 +1490,8 @@ ${buildModalFormBody(formFields, creatableFields)}
  * No create modal — the toolbar "新建" button routes to /create instead.
  */
 export function generateFrontendDocumentListPage(dto: AutoCodeDto, relationDictTypes: Map<string, string | null> = new Map()): string {
-  const n = deriveNames(dto.tableName);
-  const listableFields = dto.fields.filter((f) => f.listable && f.type !== 'relation' || (f.type === 'relation' && f.relationType !== 'one-to-many'));
+  const n = deriveNames(dto.tableName, dto._packageSlug ?? '');
+  const listableFields = dto.fields.filter((f) => f.listable && !(f.type === 'relation' && f.relationType === 'one-to-many'));
   const searchableFields = dto.fields.filter((f) => f.searchable);
   const tableSearchableFields = searchableFields.filter((f) => !(f.type === 'relation' && f.relationType === 'one-to-many'));
 
@@ -1746,7 +1746,7 @@ ${columnLines.join('\n')}
  * with an inline EditableProTable.  Toolbar: 保存草稿 / 提交审批 / 返回列表.
  */
 export function generateFrontendDocumentPage(dto: AutoCodeDto, relationDictTypes: Map<string, string | null> = new Map()): string {
-  const n = deriveNames(dto.tableName);
+  const n = deriveNames(dto.tableName, dto._packageSlug ?? '');
   const headerFields = dto.fields.filter((f) => f.creatable && f.type !== 'calculated' && !(f.type === 'relation' && f.relationType === 'one-to-many'));
   const o2mFields = dto.fields.filter((f) => f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields && f.detailFields.length > 0);
 
@@ -2043,7 +2043,7 @@ ${o2mSections.join('\n\n')}
  * appended (local until 保存) and deleted inline.
  */
 export function generateFrontendGridPage(dto: AutoCodeDto, _relationDictTypes: Map<string, string | null> = new Map()): string {
-  const n = deriveNames(dto.tableName);
+  const n = deriveNames(dto.tableName, dto._packageSlug ?? '');
   const isNumericF = (f: AutoCodeField) => f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal';
 
   const AUDIT_COLS = new Set(['id', 'created_at', 'updated_at', 'owner_id', 'created_by', 'updated_by', 'deleted_at', 'createdAt', 'updatedAt', 'ownerId', 'createdBy', 'updatedBy', 'deletedAt']);
@@ -2061,22 +2061,24 @@ export function generateFrontendGridPage(dto: AutoCodeDto, _relationDictTypes: M
 
   const editableColumns = editableFields.map((f) => {
     const label = f.description || f.name;
-    if (f.type === 'boolean') return `    { title: '${label}', dataIndex: '${f.name}', valueType: 'switch', width: 90, ellipsis: true },`;
-    if (isNumericF(f)) return `    { title: '${label}', dataIndex: '${f.name}', valueType: 'digit', width: 130, ellipsis: true, fieldProps: { style: { width: '100%' } } },`;
-    if (f.type === 'timestamp') return `    { title: '${label}', dataIndex: '${f.name}', valueType: 'dateTime', width: 180, ellipsis: true, fieldProps: { style: { width: '100%' } } },`;
-    if (f.type === 'dict') return `    { title: '${label}', dataIndex: '${f.name}', valueType: 'select', width: 150, ellipsis: true, request: async () => { const list = await getDictDetailsByType('${f.dictType || ''}'); return list.map((d: any) => ({ label: d.label, value: d.value })); }, fieldProps: { showSearch: true, allowClear: true } },`;
+    const fixed = f.fixed ? `fixed: 'left', ` : '';
+    if (f.type === 'boolean') return `    { title: '${label}', dataIndex: '${f.name}', ${fixed}valueType: 'switch', width: 90, ellipsis: true },`;
+    if (isNumericF(f)) return `    { title: '${label}', dataIndex: '${f.name}', ${fixed}valueType: 'digit', width: 130, ellipsis: true, fieldProps: { style: { width: '100%' } } },`;
+    if (f.type === 'timestamp') return `    { title: '${label}', dataIndex: '${f.name}', ${fixed}valueType: 'dateTime', width: 180, ellipsis: true, fieldProps: { style: { width: '100%' } } },`;
+    if (f.type === 'dict') return `    { title: '${label}', dataIndex: '${f.name}', ${fixed}valueType: 'select', width: 150, ellipsis: true, request: async () => { const list = await getDictDetailsByType('${f.dictType || ''}'); return list.map((d: any) => ({ label: d.label, value: d.value })); }, fieldProps: { showSearch: true, allowClear: true } },`;
     if (f.type === 'relation') {
       const fetchFn = `get${toPascalCase(singularize(f.relationTable!))}Options`;
       const displayField = f.relationDisplayField || 'name';
-      return `    { title: '${label}', dataIndex: '${f.name}', valueType: 'select', width: 170, ellipsis: true, request: async () => { const res = await ${fetchFn}(); return res.map((item: any) => ({ label: item.${displayField}, value: item.id })); }, fieldProps: { showSearch: true, allowClear: true } },`;
+      return `    { title: '${label}', dataIndex: '${f.name}', ${fixed}valueType: 'select', width: 170, ellipsis: true, request: async () => { const res = await ${fetchFn}(); return res.map((item: any) => ({ label: item.${displayField}, value: item.id })); }, fieldProps: { showSearch: true, allowClear: true } },`;
     }
-    return `    { title: '${label}', dataIndex: '${f.name}', valueType: 'text', width: 170, ellipsis: true, fieldProps: { style: { width: '100%' } } },`;
+    return `    { title: '${label}', dataIndex: '${f.name}', ${fixed}valueType: 'text', width: 170, ellipsis: true, fieldProps: { style: { width: '100%' } } },`;
   });
 
   const readOnlyColumns = readOnlyFields.map((f) => {
     const label = f.description || f.name;
-    if (f.type === 'image') return `    { title: '${label}', dataIndex: '${f.name}', editable: false, width: 80, search: false, render: (_: any, r: any) => r.${f.name} ? <Image src={r.${f.name}} width={36} height={36} style={{ objectFit: 'cover', borderRadius: 4 }} /> : '-' },`;
-    return `    { title: '${label}', dataIndex: '${f.name}', editable: false, width: 150, ellipsis: true, search: false },`;
+    const fixed = f.fixed ? `fixed: 'left', ` : '';
+    if (f.type === 'image') return `    { title: '${label}', dataIndex: '${f.name}', ${fixed}editable: false, width: 80, search: false, render: (_: any, r: any) => r.${f.name} ? <Image src={r.${f.name}} width={36} height={36} style={{ objectFit: 'cover', borderRadius: 4 }} /> : '-' },`;
+    return `    { title: '${label}', dataIndex: '${f.name}', ${fixed}editable: false, width: 150, ellipsis: true, search: false },`;
   });
 
   const editableNames = editableFields.map((f) => `'${f.name}'`).join(', ');
@@ -2141,14 +2143,15 @@ export default function ${n.pascalName}GridPage() {
   const loadList = useCallback(async () => {
     setLoading(true);
     try {
-      // Backend caps pageSize at 100 (PaginationDto @Max(100)), so page through
-      // all rows. MAX_PAGES guards against runaway fetches on very large tables.
+      // Backend caps pageSize at 100 (PaginationDto @Max(100)). Grid loads at
+      // most MAX_ROWS rows — beyond that performance degrades with all rows in
+      // edit mode. Users should filter first on large tables.
       const PAGE_SIZE = 100;
-      const MAX_PAGES = 100;
+      const MAX_ROWS = 500;
       const all: any[] = [];
       let page = 1;
       let total = 0;
-      while (page <= MAX_PAGES) {
+      while (all.length < MAX_ROWS) {
         const res = await get${n.pascalName}List({ page, pageSize: PAGE_SIZE });
         const chunk = res.list || [];
         all.push(...chunk);
@@ -2158,11 +2161,12 @@ export default function ${n.pascalName}GridPage() {
       }
       originalRef.current = {};
       all.forEach((r: any) => {
+        r.__key = r.id; // stable client key; server id changes when a new row is persisted
         ${hasTimestamp ? `TIMESTAMP_FIELDS.forEach((k: string) => { if (r[k]) r[k] = dayjs(r[k]); });` : ''}
         originalRef.current[r.id] = { ...r };
       });
       setRows(all);
-      setEditableKeys(all.map((r: any) => r.id));
+      setEditableKeys(all.map((r: any) => r.__key));
       setNewIds(new Set());
       if (all.length < total) message.warning(\`数据较多，仅加载前 \${all.length} 条\`);
     } catch (e: any) {
@@ -2187,7 +2191,7 @@ export default function ${n.pascalName}GridPage() {
   // snapshot and PATCH only the changed field(s). New (unsaved) rows are skipped.
   const schedulePatch = useCallback((record: any) => {
     const id = record?.id;
-    if (!id || newIds.has(id)) return;
+    if (!id || newIds.has(record.__key)) return;
     const orig = originalRef.current[id];
     if (!orig) return;
     const patch: Record<string, any> = {};
@@ -2214,22 +2218,24 @@ export default function ${n.pascalName}GridPage() {
   // persist as you type, instead of vanishing on refresh. Until the required
   // fields are present we leave it local (no spammy errors).
   const scheduleCreate = useCallback((record: any) => {
-    const id = record?.id;
-    if (!id) return;
-    if (saveTimers.current[id]) clearTimeout(saveTimers.current[id]);
-    saveTimers.current[id] = setTimeout(async () => {
+    const key = record?.__key;
+    if (!key) return;
+    if (saveTimers.current[key]) clearTimeout(saveTimers.current[key]);
+    saveTimers.current[key] = setTimeout(async () => {
       const payload: any = {};
-      (EDITABLE_FIELDS as readonly string[]).forEach((key) => {
-        const v = record[key];
-        if (v !== '' && v !== null && v !== undefined) payload[key] = toSerial(v);
+      (EDITABLE_FIELDS as readonly string[]).forEach((f) => {
+        const v = record[f];
+        if (v !== '' && v !== null && v !== undefined) payload[f] = toSerial(v);
       });${requiredNames ? `
       for (const req of [${requiredNames}] as const) {
         if (payload[req] === undefined || payload[req] === '' || payload[req] === null) return; // not ready yet
       }` : ''}
       try {
         const created = await create${n.pascalSingular}(payload);
-        setRows((prev) => prev.map((r: any) => (r.id === id ? created : r)));
-        setNewIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
+        // Keep __key stable across the create so EditableProTable never loses
+        // edit state (mutating rowKey would desync its internal tracking).
+        setRows((prev) => prev.map((r: any) => (r.__key === key ? { ...created, __key: key } : r)));
+        setNewIds((prev) => { const s = new Set(prev); s.delete(key); return s; });
         originalRef.current[created.id] = { ...created };
       } catch (e: any) {
         message.error(e.message || '创建失败');
@@ -2238,29 +2244,29 @@ export default function ${n.pascalName}GridPage() {
   }, []);
 
   const handleAddRow = () => {
-    const tempId = 'new_' + Date.now().toString() + '_' + Math.random().toString(36).slice(2, 6);
-    const empty = { id: tempId, ${emptyDefaults} };
+    const tempKey = 'new_' + Date.now().toString() + '_' + Math.random().toString(36).slice(2, 6);
+    const empty = { __key: tempKey, id: tempKey, ${emptyDefaults} };
     setRows((prev) => [...prev, empty]);
-    setEditableKeys((prev) => [...prev, tempId]);
-    setNewIds((prev) => { const s = new Set(prev); s.add(tempId); return s; });
+    setEditableKeys((prev) => [...prev, tempKey]);
+    setNewIds((prev) => { const s = new Set(prev); s.add(tempKey); return s; });
   };
 
-  const handleSaveNew = async (id: string) => {
-    const row = rows.find((r: any) => r.id === id);
-    if (!row) return;
+  const handleSaveNew = async (row: any) => {
+    const key = row?.__key;
+    if (!key) return;
     const payload: any = {};
-    (EDITABLE_FIELDS as readonly string[]).forEach((key) => {
-      const v = row[key];
-      if (v !== '' && v !== null && v !== undefined) payload[key] = toSerial(v);
+    (EDITABLE_FIELDS as readonly string[]).forEach((f) => {
+      const v = row[f];
+      if (v !== '' && v !== null && v !== undefined) payload[f] = toSerial(v);
     });${requiredNames ? `
     for (const req of [${requiredNames}] as const) {
       if (payload[req] === undefined || payload[req] === '' || payload[req] === null) { message.warning('请填写必填项'); return; }
     }` : ''}
     try {
-      if (saveTimers.current[id]) { clearTimeout(saveTimers.current[id]); delete saveTimers.current[id]; }
+      if (saveTimers.current[key]) { clearTimeout(saveTimers.current[key]); delete saveTimers.current[key]; }
       const created = await create${n.pascalSingular}(payload);
-      setRows((prev) => prev.map((r: any) => (r.id === id ? created : r)));
-      setNewIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
+      setRows((prev) => prev.map((r: any) => (r.__key === key ? { ...created, __key: key } : r)));
+      setNewIds((prev) => { const s = new Set(prev); s.delete(key); return s; });
       originalRef.current[created.id] = { ...created };
       message.success('已创建');
     } catch (e: any) {
@@ -2268,18 +2274,20 @@ export default function ${n.pascalName}GridPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (newIds.has(id)) {
-      setRows((prev) => prev.filter((r: any) => r.id !== id));
-      setEditableKeys((prev) => prev.filter((k) => k !== id));
-      setNewIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
+  const handleDelete = async (row: any) => {
+    const key = row?.__key;
+    if (!key) return;
+    if (newIds.has(key)) {
+      setRows((prev) => prev.filter((r: any) => r.__key !== key));
+      setEditableKeys((prev) => prev.filter((k) => k !== key));
+      setNewIds((prev) => { const s = new Set(prev); s.delete(key); return s; });
       return;
     }
     try {
-      await delete${n.pascalSingular}(id);
-      setRows((prev) => prev.filter((r: any) => r.id !== id));
-      setEditableKeys((prev) => prev.filter((k) => k !== id));
-      delete originalRef.current[id];
+      await delete${n.pascalSingular}(row.id);
+      setRows((prev) => prev.filter((r: any) => r.__key !== key));
+      setEditableKeys((prev) => prev.filter((k) => k !== key));
+      delete originalRef.current[row.id];
       message.success('已删除');
     } catch (e: any) {
       message.error(e.message || '删除失败');
@@ -2294,7 +2302,7 @@ ${readOnlyColumns.length > 0 ? readOnlyColumns.join('\n') + '\n' : ''}${editable
     <>
     <EditableProTable<any>
       headerTitle="${headerShortName}（单元格直编，自动保存）"
-      rowKey="id"
+      rowKey="__key"
       loading={loading}
       value={rows}
       onChange={(data: any) => setRows(data || [])}
@@ -2302,23 +2310,23 @@ ${readOnlyColumns.length > 0 ? readOnlyColumns.join('\n') + '\n' : ''}${editable
       scroll={{ x: 'max-content' }}
       sticky
       search={false}
-      pagination={false}
+      pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'], showTotal: (t: number) => \`共 \${t} 条\` }}
       editable={{
         type: 'multiple',
         editableKeys,
         onChange: setEditableKeys,
         onValuesChange: (record: any) => {
-          if (!record || !record.id) return;
-          if (newIds.has(record.id)) scheduleCreate(record); else schedulePatch(record);
+          if (!record || !record.__key) return;
+          if (newIds.has(record.__key)) scheduleCreate(record); else schedulePatch(record);
         },
         actionRender: (row: any) => {
-          const isNew = newIds.has(row.id);
+          const isNew = newIds.has(row.__key);
           const nodes: React.ReactNode[] = [];
           if (isNew) {
-            if (btnPerms.has('add')) nodes.push(<a key="save" onClick={() => handleSaveNew(row.id)}>保存</a>);
-            if (btnPerms.has('add')) nodes.push(<a key="cancel" style={{ color: '#ff4d4f' }} onClick={() => handleDelete(row.id)}>取消</a>);
+            if (btnPerms.has('add')) nodes.push(<a key="save" onClick={() => handleSaveNew(row)}>保存</a>);
+            if (btnPerms.has('add')) nodes.push(<a key="cancel" style={{ color: '#ff4d4f' }} onClick={() => handleDelete(row)}>取消</a>);
           } else {
-            if (btnPerms.has('delete')) nodes.push(<a key="del" style={{ color: '#ff4d4f' }} onClick={() => handleDelete(row.id)}>删除</a>);
+            if (btnPerms.has('delete')) nodes.push(<a key="del" style={{ color: '#ff4d4f' }} onClick={() => handleDelete(row)}>删除</a>);
           }
           return nodes;
         },

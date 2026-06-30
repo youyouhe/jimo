@@ -13,6 +13,7 @@ import {
   activeFields,
   isBusinessColumn,
   singularize,
+  deriveMasterSingular,
   generateMockValue,
   type MockCtx,
 } from '../autocode-field-utils';
@@ -26,7 +27,8 @@ export async function mockInsertData(
   const count = dto.mockData?.count ?? 0;
   if (count <= 0 || !dto.mockData?.enabled) return;
 
-  const tableName = `lc_${dto.tableName}`;
+  // dto.tableName already carries the lc_ prefix (lc/ namespace); don't double-prefix.
+  const tableName = dto.tableName.startsWith('lc_') ? dto.tableName : `lc_${dto.tableName}`;
   const fields = activeFields(dto.fields).filter(
     (f) =>
       isBusinessColumn(f.name) &&
@@ -260,7 +262,7 @@ export async function mockInsertData(
 
     for (const f of oneToManyFields) {
       const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
-      const singularMain = singularize(dto.tableName);
+      const singularMain = deriveMasterSingular(dto.tableName);
       const singularField = singularize(f.name);
       const childTable = isExisting ? `lc_${f.relationTable}` : `lc_${singularMain}_${singularField}`;
       const fkColumn = isExisting ? (f.relationFkColumn || `${singularMain}_id`) : `${singularMain}_id`;

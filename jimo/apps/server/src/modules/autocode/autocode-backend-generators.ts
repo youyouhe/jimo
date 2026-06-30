@@ -4,6 +4,7 @@ import {
   toCamelCase,
   toKebabCase,
   singularize,
+  deriveMasterSingular,
   toDrizzleType,
   toDefaultValue,
   toRequired,
@@ -153,7 +154,7 @@ export function generateSchema(dto: AutoCodeDto): string {
   let existingTableSchemaImports = '';
   for (const field of oneToManyFields) {
     if (!field.detailFields || field.detailFields.length === 0) continue;
-    const singularMain = singularize(dto.tableName);
+    const singularMain = deriveMasterSingular(dto.tableName);
 
     const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
     if (isExisting) {
@@ -514,7 +515,7 @@ export function generateService(dto: AutoCodeDto): string {
   let childMethods = '';
   for (const field of oneToManyFields) {
     if (!field.detailFields || field.detailFields.length === 0) continue;
-    const singularMain = singularize(dto.tableName);
+    const singularMain = deriveMasterSingular(dto.tableName);
     const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
 
     let childSchemaVar: string;
@@ -729,7 +730,7 @@ ${grandchildAttach.map(({ grandMethodName }) => `      await this.remove${grandM
     if (rows.length > 0) {
       const masterIds = rows.map((r) => r.id);
 ${oneToManyFields.map((field) => {
-  const singularMain = singularize(dto.tableName);
+  const singularMain = deriveMasterSingular(dto.tableName);
   const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
   const childSchemaVar = isExisting
     ? deriveNames(field.relationTable!).schemaVar
@@ -754,7 +755,7 @@ ${oneToManyFields.map((field) => {
       const grandchildAttachInFindAll = (field.detailFields || [])
         .filter(gf => gf.type === 'relation' && gf.relationType === 'one-to-many' && gf.detailFields && gf.detailFields.length > 0)
         .map(gf => {
-          const singularMain2 = singularize(dto.tableName);
+          const singularMain2 = deriveMasterSingular(dto.tableName);
           const singularChild2 = singularize(field.name);
           const singularGrand2 = singularize(gf.name);
           const grandSchemaVar2 = toCamelCase(`${singularMain2}_${singularChild2}_${singularGrand2}`);
@@ -937,7 +938,7 @@ ${creatableFields.map(f => f.type === 'decimal' ? `          ${f.name}: dto.${f.
         .returning();
       const created = rows[0]!;
 ${oneToManyFields.map((field) => {
-  const singularMain = singularize(dto.tableName);
+  const singularMain = deriveMasterSingular(dto.tableName);
   const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
   const childSchemaVar = isExisting
     ? deriveNames(field.relationTable!).schemaVar

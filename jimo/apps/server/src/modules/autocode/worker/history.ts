@@ -2,13 +2,14 @@
  * Pure-function port of AutocodeService history step (saveHistory).
  * Called by tools/generate-worker.ts. No NestJS DI, no Drizzle — direct postgres.
  *
- * Known divergence: the original merges agent metadata into templates.__agent
- * via a private service method; omitted here (caller may pre-set files.__agent).
+ * Merges agent metadata into templates.__agent (via buildAgentConfigMetadata)
+ * whenever hasAgent is true, and stores templates/fields as proper jsonb objects
+ * via the tagged template. (sql.unsafe + JSON.stringify double-encodes to a jsonb
+ * string scalar, jsonb_typeof='string', which breaks templates.__agent reads —
+ * same lesson as worker/entrypoints.ts.)
  */
-import type { Sql } from 'postgres';
 import type { AutoCodeDto } from '../dto/autocode.dto';
-
-type AnyPostgresSql = Sql;
+import { buildAgentConfigMetadata } from './agent-config';
 
 export interface SaveHistoryOpts {
   packageName?: string;
@@ -17,7 +18,7 @@ export interface SaveHistoryOpts {
 }
 
 export async function saveHistory(
-  sql: AnyPostgresSql,
+  sql: any,
   dto: AutoCodeDto,
   files: Record<string, any>,
   opts?: SaveHistoryOpts,
@@ -50,23 +51,30 @@ export async function saveHistory(
   const hasAgent =
     dto.agentConfig?.enabled ?? (existing as any)?.hasAgent ?? false;
 
-  // Pass JSON strings without ::jsonb cast — postgres-js binds them as 'text'
-  // and the column type (jsonb) handles the coercion automatically. Using
-  // ::jsonb with a pre-serialised string causes double-encoding (jsonb_typeof='string').
+  // Inject agent metadata so entity-scoped agent chat can load its config.
+  // Key off `hasAgent` (not dto.agentConfig?.enabled) — hasAgent already folds
+  // in the existing-record fallback and is the value actually persisted, so it
+  // reliably reflects "this row should carry an __agent snapshot". Relying on
+  // dto.agentConfig?.enabled at the caller proved unreliable in the update path.
+  if (hasAgent) templates.__agent = buildAgentConfigMetadata(dto);
+
   const packageSlug = (dto as any)._packageSlug ?? 'default';
 
-  await sql.unsafe(
-    `INSERT INTO sys_auto_code_histories (
+  // Use the tagged template (NOT sql.unsafe + JSON.stringify) so postgres-js
+  // serialises objects to jsonb directly. The unsafe/stringify form produces a
+  // jsonb *string scalar* (jsonb_typeof='string'), which breaks every reader
+  // that does templates.__agent / templates->'__agent'. Cast jsonb columns
+  // explicitly with ::jsonb.
+  await sql`
+    INSERT INTO sys_auto_code_histories (
       package_name, table_name, business_db, templates, version, fields,
       change_log, operation, parent_id, visibility_strategy, has_approval_flow, has_agent,
       package_slug
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-    [
-      asyncPackageName, dto.tableName, businessDB,
-      JSON.stringify(templates), nextVersion,
-      JSON.stringify(fields), changeLog, operation,
-      parentId, visibilityStrategy, hasApprovalFlow, hasAgent,
-      packageSlug,
-    ],
-  );
+    ) VALUES (
+      ${asyncPackageName}, ${dto.tableName}, ${businessDB},
+      ${templates}::jsonb, ${nextVersion}, ${fields}::jsonb,
+      ${changeLog}, ${operation}, ${parentId}, ${visibilityStrategy},
+      ${hasApprovalFlow}, ${hasAgent}, ${packageSlug}
+    )
+  `;
 }

@@ -96,6 +96,7 @@ const DEFAULT_FIELD: AutoCodeField = {
   listable: true,
   creatable: true,
   editable: true,
+  fixed: false,
   removed: false,
 };
 
@@ -239,35 +240,44 @@ function GenerateProgressModal({
         if (cancelled) return;
         failCountRef.current += 1;
 
-        // Too many consecutive failures → treat as expired/failed
+        // After the entrypoint step mutates app.module / .umirc, `nest --watch` restarts
+        // the backend, so polls fail for several seconds. The generate-worker is a separate
+        // tsx process unaffected by the restart, so it has already written the final `done`
+        // status (with result.createdFiles) to the DB — we just need to keep retrying until
+        // the HTTP server responds again. Completing optimistically on the FIRST failure
+        // used a stale jobStatus with no result, which is why the UI showed "共 0 个文件".
         if (failCountRef.current >= MAX_FAIL_COUNT) {
-          setJobStatus({
-            jobId: jobId,
-            status: 'failed',
-            steps: [],
-            progress: 0,
-            currentStepLabel: '任务已过期或丢失',
-            error: '无法获取任务状态（可能已过期）。请关闭后重试。',
-          });
-          clearActiveJob();
+          // Backend didn't recover within ~30s. If most steps had completed, generation
+          // almost certainly succeeded — mark completed (file count may be unknown).
+          // Otherwise the job is genuinely lost.
+          if (jobStatus && jobStatus.progress >= 80) {
+            setJobStatus({
+              ...jobStatus,
+              status: 'completed',
+              progress: 100,
+              currentStepLabel: '代码生成完成',
+              result: jobStatus.result || { createdFiles: [] },
+              completedAt: new Date().toISOString(),
+            });
+          } else {
+            setJobStatus({
+              jobId: jobId,
+              status: 'failed',
+              steps: [],
+              progress: 0,
+              currentStepLabel: '任务已过期或丢失',
+              error: '无法获取任务状态（可能已过期）。请关闭后重试。',
+            });
+            clearActiveJob();
+          }
           return;
         }
 
-        // Network error — backend is likely restarting (nest --watch)
-        if (jobStatus && jobStatus.progress >= 80) {
-          // Most steps done → treat as completed (backend restarted after entry point updates)
-          setJobStatus({
-            ...jobStatus,
-            status: 'completed',
-            progress: 100,
-            currentStepLabel: '代码生成完成',
-            result: jobStatus.result || { createdFiles: [] },
-            completedAt: new Date().toISOString(),
-          });
-          return;
-        }
-        setPollError('连接中断，正在重试...');
-        // Retry after longer interval
+        // Keep polling through the restart window; once the backend is back, the poll
+        // returns the real terminal status with createdFiles populated.
+        setPollError(jobStatus && jobStatus.progress >= 80
+          ? '后端正在重启以加载新模块，正在等待恢复...'
+          : '连接中断，正在重试...');
         pollTimerRef.current = setTimeout(poll, 2000);
       }
     };
@@ -1265,6 +1275,11 @@ export default function AutocodePage() {
                             <Form.Item {...rest} name={[name, 'editable']} valuePropName="checked" noStyle>
                               <Switch checkedChildren="Edit" unCheckedChildren="No Edit" size="small" />
                             </Form.Item>
+                            {pageType === 'grid' && (
+                              <Form.Item {...rest} name={[name, 'fixed']} valuePropName="checked" noStyle>
+                                <Switch checkedChildren="冻结" unCheckedChildren="不冻结" size="small" />
+                              </Form.Item>
+                            )}
                             {updateMode && (
                               <Form.Item noStyle shouldUpdate={(prev, cur) => prev.fields?.[name]?.removed !== cur.fields?.[name]?.removed}>
                                 {({ getFieldValue }) => {

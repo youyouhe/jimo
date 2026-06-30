@@ -119,6 +119,11 @@ export class AutoCodeField {
   @IsBoolean()
   editable: boolean = true;
 
+  @ApiProperty({ description: 'Freeze this column to the left edge of the table (grid page only)', default: false })
+  @IsOptional()
+  @IsBoolean()
+  fixed?: boolean = false;
+
   // ── Relation-specific fields (only used when type === 'relation') ──
 
   @ApiPropertyOptional({

@@ -29,6 +29,8 @@ import {
   toKebabCase,
   activeFields,
   deriveNames,
+  deriveMasterSingular,
+  singularize,
   type GenerateJobStatus,
   type GenerateStep,
   type GenerateStepStatus,
@@ -981,15 +983,15 @@ export class AutocodeService {
     for (const f of activeFieldsArray) {
       if (f.type !== 'relation' || f.relationType !== 'one-to-many') continue;
       if (!f.detailFields || f.detailFields.length === 0) continue;
-      const singularMain = toKebabCase(dto.tableName);
-      const singularField = toKebabCase(f.name);
+      const singularMain = deriveMasterSingular(dto.tableName);
+      const singularField = singularize(f.name);
       const subLcTable = (f.relationExistingTable && f.relationTable)
         ? `lc_${f.relationTable}`
         : `lc_${singularMain}_${singularField}`;
       const fkMap: Record<string, string> = {};
       const isExistingSubTable = !!(f.relationExistingTable && f.relationTable);
       const parentFkCol = isExistingSubTable ? (f.relationFkColumn || `${singularMain}_id`) : `${singularMain}_id`;
-      fkMap[parentFkCol] = `lc_${dto.tableName}`;
+      fkMap[parentFkCol] = dto.tableName;
       for (const df of f.detailFields) {
         if (df.type === 'relation' && (df.relationType === 'many-to-one' || df.relationType === 'many-to-many') && df.relationTable) {
           fkMap[df.name] = `lc_${df.relationTable}`;

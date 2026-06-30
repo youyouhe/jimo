@@ -14,6 +14,8 @@ export interface AutoCodeField {
   listable: boolean;
   creatable: boolean;
   editable: boolean;
+  /** Freeze this column to the left edge — only effective on grid pages */
+  fixed?: boolean;
   // Relation-specific
   relationType?: 'many-to-one' | 'many-to-many' | 'one-to-many';
   relationTable?: string;

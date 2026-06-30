@@ -38,6 +38,31 @@ export function singularize(word: string): string {
   return word;
 }
 
+/**
+ * Strip the lc_ business-table prefix if present. 'lc_contracts' → 'contracts'.
+ * Idempotent: 'contracts' → 'contracts'.
+ */
+export function stripLcPrefix(name: string): string {
+  return name.startsWith('lc_') ? name.slice(3) : name;
+}
+
+/**
+ * Singular master stem used to derive sub-table names, FK columns, and LIKE
+ * prefixes. Strips lc_ FIRST, then singularizes — so 'lc_contracts' → 'contract'
+ * (NOT 'lc_contract'). Mirrors the canonical derivation in menu.service.ts.
+ */
+export function deriveMasterSingular(tableName: string): string {
+  return singularize(stripLcPrefix(tableName));
+}
+
+/**
+ * Canonical sub-table (one-to-many child) physical name.
+ * 'lc_contracts' + 'items' → 'lc_contract_item'.
+ */
+export function deriveSubTableName(masterTableName: string, childFieldName: string): string {
+  return `lc_${deriveMasterSingular(masterTableName)}_${singularize(childFieldName)}`;
+}
+
 // ---------------------------------------------------------------------------
 // Type mapper
 // ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { eq, isNull, sql, desc, and } from 'drizzle-orm';
 import { AI_GENERATOR_SYSTEM_PROMPT } from './ai-generator.prompt';
 import { isReservedTableName } from './reserved-names';
+import { deriveMasterSingular } from './autocode-field-utils';
 import {
   PROPOSE_ENTITY_TOOL,
   CREATE_DICT_TOOL,
@@ -106,10 +107,12 @@ export class AiGeneratorService {
         this.db
           .select({ type: sysDictionaries.type, name: sysDictionaries.name })
           .from(sysDictionaries)
+          .where(isNull(sysDictionaries.deletedAt))
           .catch(() => [] as { type: string; name: string }[]),
         this.db
           .select({ id: sysAutoCodePackages.id, name: sysAutoCodePackages.name })
           .from(sysAutoCodePackages)
+          .where(isNull(sysAutoCodePackages.deletedAt))
           .catch(() => [] as { id: string; name: string }[]),
         this.db
           .selectDistinct({ tableName: sysAutoCodeHistories.tableName })
@@ -406,6 +409,7 @@ ${pkgList}${optionsBlock}`,
                 const rows = await this.db
                   .select({ type: sysDictionaries.type, name: sysDictionaries.name })
                   .from(sysDictionaries)
+                  .where(isNull(sysDictionaries.deletedAt))
                   .limit(200);
                 return { dicts: rows.map((r) => ({ type: r.type, name: r.name })) };
               } catch (e: any) {
@@ -488,7 +492,12 @@ ${pkgList}${optionsBlock}`,
                 this.db
                   .select({ id: sysAutoCodePackages.id, name: sysAutoCodePackages.name })
                   .from(sysAutoCodePackages)
-                  .where(eq(sysAutoCodePackages.id, packageId))
+                  .where(
+                    and(
+                      eq(sysAutoCodePackages.id, packageId),
+                      isNull(sysAutoCodePackages.deletedAt),
+                    ),
+                  )
                   .limit(1)
                   .catch(() => []),
               ]);
@@ -930,7 +939,12 @@ ${pkgList}${optionsBlock}`,
       const existing = await this.db
         .select({ id: sysAutoCodePackages.id })
         .from(sysAutoCodePackages)
-        .where(eq(sysAutoCodePackages.name, name))
+        .where(
+          and(
+            eq(sysAutoCodePackages.name, name),
+            isNull(sysAutoCodePackages.deletedAt),
+          ),
+        )
         .limit(1);
       if (existing.length > 0) {
         const packageId = existing[0].id;
@@ -1017,7 +1031,9 @@ ${pkgList}${optionsBlock}`,
 
       const enabledTools: string[] = agentCfg.enabledTools ?? [];
       const tableName: string = agentCfg.tableName ?? businessType;
-      const lcTable = `lc_${tableName}`;
+      // tableName (from __agent.tableName / businessType) already carries the lc_ prefix;
+      // don't double-prefix or every entity tool targets lc_lc_<name> (non-existent).
+      const lcTable = tableName.startsWith('lc_') ? tableName : `lc_${tableName}`;
       const visibilityStrategy: string = agentCfg.visibilityStrategy ?? 'private';
       const isAdmin = false; // entity tools don't have role info, fallback to non-admin
 
@@ -1047,6 +1063,28 @@ ${pkgList}${optionsBlock}`,
         (f: any) => f && f.type !== 'calculated',
       );
 
+      // Coerce LLM-supplied values by field type so Postgres casts succeed.
+      // LLMs often emit human-formatted numbers ("285,000.00", "¥285,000", "1,234")
+      // for numeric columns — bound raw, the comma breaks the numeric/int cast.
+      // Strip separators/symbols; Postgres then casts the cleaned text to numeric.
+      const NUMERIC_TYPES = new Set(['integer', 'bigint', 'decimal']);
+      const coerceByType = (type: string | undefined, v: any): any => {
+        if (v === null || v === undefined || v === '') return null;
+        if (type === 'boolean') {
+          if (typeof v === 'boolean') return v;
+          const s = String(v).trim().toLowerCase();
+          if (['true', 't', '1', 'yes', 'y', 'on', '是'].includes(s)) return true;
+          if (['false', 'f', '0', 'no', 'n', 'off', '否'].includes(s)) return false;
+          return null;
+        }
+        if (type && NUMERIC_TYPES.has(type)) {
+          const cleaned = String(v).replace(/[^0-9.\-]/g, '');
+          if (cleaned === '' || cleaned === '-' || cleaned === '.' || cleaned === '-.') return null;
+          return cleaned;
+        }
+        return v;
+      };
+
       const tools: Record<string, any> = {};
 
       const tbl = sql.identifier(lcTable);
@@ -1073,6 +1111,7 @@ ${pkgList}${optionsBlock}`,
 
       if (enabledTools.includes('create') && creatableFields.length > 0) {
         const colNames = creatableFields.map((f: any) => f.name);
+        const typeByName = new Map(creatableFields.map((f: any) => [f.name as string, f.type as string | undefined]));
         const props: Record<string, any> = {};
         const requiredCols: string[] = [];
         for (const f of creatableFields) {
@@ -1086,7 +1125,7 @@ ${pkgList}${optionsBlock}`,
           parameters: jsonSchema({ type: 'object', properties: props, required: requiredCols }),
           execute: async (args: any) => {
             const colIdents = colNames.map((n: string) => sql.identifier(n));
-            const vals = colNames.map((n: string) => { const v = args[n]; return sql`${(v === '' || v == null) ? null : v}`; });
+            const vals = colNames.map((n: string) => sql`${coerceByType(typeByName.get(n), args[n])}`);
             const ownerVal = userId ? sql`${userId}` : sql`gen_random_uuid()`;
             const res = await this.db.execute(sql`
               INSERT INTO ${tbl} (${sql.join(colIdents, sql`, `)}, owner_id)
@@ -1100,6 +1139,7 @@ ${pkgList}${optionsBlock}`,
 
       if (enabledTools.includes('update') && editableFields.length > 0) {
         const colNames = editableFields.map((f: any) => f.name);
+        const typeByName = new Map(editableFields.map((f: any) => [f.name as string, f.type as string | undefined]));
         const props: Record<string, any> = {
           id: { type: 'string', description: 'Record UUID' },
         };
@@ -1114,8 +1154,7 @@ ${pkgList}${optionsBlock}`,
           execute: async (args: any) => {
             const setPairs = colNames.map((n: string) => {
               const col = sql.identifier(n);
-              const v = args[n];
-              return sql`${col} = ${(v === '' || v == null) ? null : v}`;
+              return sql`${col} = ${coerceByType(typeByName.get(n), args[n])}`;
             });
             const res = await this.db.execute(sql`
               UPDATE ${tbl}
@@ -1227,7 +1266,7 @@ ${pkgList}${optionsBlock}`,
       // Discover and load sub-table tools (one-to-many children of this master table).
       // Sub-tables follow the naming pattern lc_<singular(master)>_<child> and are
       // NOT in sys_auto_code_histories — detect them via information_schema.
-      const subTablePrefix = `lc_${tableName.replace(/s$/, '')}_`;
+      const subTablePrefix = `lc_${deriveMasterSingular(tableName)}_`;
       const subTableRows = await this.db.execute(
         sql`SELECT table_name FROM information_schema.tables
             WHERE table_schema = 'public'
@@ -1375,10 +1414,10 @@ ${pkgList}${optionsBlock}`,
         // then fall back to name-based heuristics for tables generated before the explicit map was added.
         const subTableFkMap: Record<string, Record<string, string>> = agentCfg.subTableFkMap ?? {};
         const explicitFkMap: Record<string, string> = subTableFkMap[subLcTable] ?? {};
-        const masterLcTable = `lc_${tableName}`;
+        const masterLcTable = tableName;
         // Parent FK = the entry in explicitFkMap whose value points to the master table itself.
         const parentFkColName = Object.entries(explicitFkMap).find(([, ref]) => ref === masterLcTable)?.[0];
-        const masterSingular = tableName.replace(/s$/, '');
+        const masterSingular = deriveMasterSingular(tableName);
         const expectedFkSnake = `${masterSingular}_id`;
         const expectedFkCamel = `${masterSingular.replace(/_([a-z])/g, (_, c) => c.toUpperCase())}_id`;
         const fkCol = dataCols.find((c: any) => c.column_name === (parentFkColName ?? expectedFkSnake) && c.data_type === 'uuid')

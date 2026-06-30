@@ -196,6 +196,23 @@ async function processGenerateJob(sql: any, job: any): Promise<string[]> {
   }
   await updateStep(sql, jobId, 1, 'completed');
 
+  // Between Step 2 and Step 3: update schema/index.ts so drizzle-kit sees the new schema file.
+  // cleanup-worker handles this too (via entrypoints job), but that runs AFTER push —
+  // drizzle-kit reads schema/index.ts to discover tables, so the export must exist first.
+  try {
+    const n = deriveNames(dto.tableName, dto._packageSlug ?? '');
+    const schemaIndexPath = path.join(projectRoot, 'release/jimo/apps/server/src/db/schema/index.ts');
+    const exportLine = `export * from './lc-${n.kebabName}.js';`;
+    let indexContent = await fs.readFile(schemaIndexPath, 'utf-8');
+    if (!indexContent.includes(exportLine)) {
+      indexContent = indexContent.trimEnd() + '\n' + exportLine + '\n';
+      await fs.writeFile(schemaIndexPath, indexContent, 'utf-8');
+      console.log(`[generate-worker] schema/index.ts updated with ${exportLine}`);
+    }
+  } catch (e) {
+    console.error(`[generate-worker] schema/index.ts update FAILED:`, (e as Error).message);
+  }
+
   // Step 3: drizzle-kit push
   await updateStep(sql, jobId, 2, 'running');
   let pushSucceeded = false;
