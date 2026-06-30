@@ -183,15 +183,53 @@ export async function exportDict(id: string): Promise<ExportedDict> {
 
 /**
  * Export a dictionary and trigger file download.
+ * Uses the authenticated request instance to avoid 401 on JWT-protected routes.
  */
-export function downloadDict(id: string, type: string): void {
-  const downloadUrl = `/api/v1/dictionaries/export/${id}`;
+export async function downloadDict(id: string, type: string): Promise<void> {
+  const data = await exportDict(id);
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = downloadUrl;
+  link.href = url;
   link.download = `dictionary-${type}.json`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// ── Version / Snapshot APIs ──────────────────────────────────
+
+export interface SnapshotListItem {
+  id: string;
+  version: number;
+  changeType: string;
+  operator: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface DictionarySnapshot {
+  id: string;
+  dictId: string;
+  version: number;
+  snapshot: ExportedDict;
+  changeType: string;
+  operator: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
+export async function listDictVersions(id: string): Promise<SnapshotListItem[]> {
+  return request.get(`/dictionaries/${id}/versions`);
+}
+
+export async function getDictVersion(id: string, version: number): Promise<DictionarySnapshot> {
+  return request.get(`/dictionaries/${id}/versions/${version}`);
+}
+
+export async function restoreDictVersion(id: string, version: number): Promise<Dictionary> {
+  return request.post(`/dictionaries/${id}/restore/${version}`);
 }
 
 // ── Dictionary Detail APIs ───────────────────────────────────
@@ -201,6 +239,13 @@ export function downloadDict(id: string, type: string): void {
  */
 export async function getDetails(params?: DetailQueryParams): Promise<ListResult<DictionaryDetail>> {
   return request.get('/dictionary-details', { params });
+}
+
+/**
+ * Get dictionary details as a nested tree by dict_id.
+ */
+export async function getDetailTree(dictId: string): Promise<DetailTreeNode[]> {
+  return request.get('/dictionary-details/tree', { params: { dict_id: dictId } });
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import {
   ApiTags,
   ApiBearerAuth,
@@ -40,8 +41,9 @@ export class DictionaryDetailController {
   @ApiResponse({ status: 201, description: 'Detail created successfully' })
   async create(
     @Body() dto: CreateDetailDto,
+    @CurrentUser() user?: { sub: string },
   ): Promise<ApiResp<SysDictionaryDetail>> {
-    const data = await this.dictionaryDetailService.create(dto);
+    const data = await this.dictionaryDetailService.create(dto, user?.sub);
     return { code: 0, msg: 'success', data };
   }
 
@@ -52,6 +54,16 @@ export class DictionaryDetailController {
     @Query() query: QueryDetailDto,
   ): Promise<PaginatedResponse<SysDictionaryDetail>> {
     const data = await this.dictionaryDetailService.findAll(query);
+    return { code: 0, msg: 'success', data };
+  }
+
+  @Get('tree')
+  @ApiOperation({ summary: 'Get dictionary details as a nested tree by dict_id' })
+  @ApiResponse({ status: 200, description: 'Returns nested tree of details for the given dict_id' })
+  async findTree(
+    @Query('dict_id') dictId: string,
+  ): Promise<ApiResp<DetailTreeNode[]>> {
+    const data = await this.dictionaryDetailService.findTreeByDictId(dictId);
     return { code: 0, msg: 'success', data };
   }
 
@@ -85,8 +97,9 @@ export class DictionaryDetailController {
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateDetailDto,
+    @CurrentUser() user?: { sub: string },
   ): Promise<ApiResp<SysDictionaryDetail>> {
-    const data = await this.dictionaryDetailService.update(id, dto);
+    const data = await this.dictionaryDetailService.update(id, dto, user?.sub);
     return { code: 0, msg: 'success', data };
   }
 
@@ -96,8 +109,11 @@ export class DictionaryDetailController {
   @ApiOperation({ summary: 'Soft delete dictionary detail by id (cascade deletes children)' })
   @ApiResponse({ status: 200, description: 'Detail and children deleted' })
   @ApiResponse({ status: 404, description: 'Detail not found' })
-  async remove(@Param('id') id: string): Promise<ApiResp<null>> {
-    await this.dictionaryDetailService.remove(id);
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user?: { sub: string },
+  ): Promise<ApiResp<null>> {
+    await this.dictionaryDetailService.remove(id, user?.sub);
     return { code: 0, msg: 'success', data: null };
   }
 }

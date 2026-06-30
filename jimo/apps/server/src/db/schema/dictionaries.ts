@@ -19,6 +19,7 @@ export const sysDictionaries = pgTable(
     desc: varchar('desc', { length: 256 }),
     parentId: uuid('parent_id'),
     sort: smallint('sort').notNull().default(0),
+    version: smallint('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),

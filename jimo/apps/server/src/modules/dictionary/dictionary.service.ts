@@ -14,6 +14,7 @@ import { UpdateDictDto } from './dto/update-dict.dto';
 import { QueryDictDto } from './dto/query-dict.dto';
 import { ApiErrorCode, PaginatedData } from '@jimo/shared';
 import { SQL } from 'drizzle-orm';
+import { DictionarySnapshotService } from './dictionary-snapshot.service';
 
 export interface DictTreeNode extends SysDictionary {
   children: DictTreeNode[];
@@ -39,6 +40,7 @@ const MAX_DEPTH = 20;
 export class DictionaryService {
   constructor(
     @Inject(DATABASE_CONNECTION) private readonly db: DrizzleDb,
+    private readonly snapshotService: DictionarySnapshotService,
   ) {}
 
   async findAll(query: QueryDictDto): Promise<PaginatedData<SysDictionary>> {
@@ -122,7 +124,7 @@ export class DictionaryService {
     return rows[0]!;
   }
 
-  async create(dto: CreateDictDto): Promise<SysDictionary> {
+  async create(dto: CreateDictDto, operator?: string): Promise<SysDictionary> {
     // Check type uniqueness
     const existing = await this.db
       .select()
@@ -154,10 +156,12 @@ export class DictionaryService {
       })
       .returning();
 
-    return rows[0]!;
+    const dict = rows[0]!;
+    await this.snapshotService.capture({ dictId: dict.id, changeType: 'create', operator });
+    return dict;
   }
 
-  async update(id: string, dto: UpdateDictDto): Promise<SysDictionary> {
+  async update(id: string, dto: UpdateDictDto, operator?: string): Promise<SysDictionary> {
     const existing = await this.findOne(id);
 
     // Check type uniqueness if changed
@@ -216,7 +220,9 @@ export class DictionaryService {
       .where(and(eq(sysDictionaries.id, id), isNull(sysDictionaries.deletedAt)))
       .returning();
 
-    return rows[0]!;
+    const dict = rows[0]!;
+    await this.snapshotService.capture({ dictId: id, changeType: 'update', operator });
+    return dict;
   }
 
   /**
@@ -260,8 +266,11 @@ export class DictionaryService {
     }
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, operator?: string): Promise<void> {
     await this.findOne(id);
+
+    // Snapshot before deletion so the final state is recorded
+    await this.snapshotService.capture({ dictId: id, changeType: 'delete', operator });
 
     // Cascade: soft-delete all details belonging to this dictionary
     await this.db
@@ -276,7 +285,14 @@ export class DictionaryService {
       .where(and(eq(sysDictionaries.id, id), isNull(sysDictionaries.deletedAt)));
   }
 
-  async removeBatch(ids: string[]): Promise<{ count: number }> {
+  async removeBatch(ids: string[], operator?: string): Promise<{ count: number }> {
+    // Snapshot each before deletion
+    await Promise.all(
+      ids.map((id) =>
+        this.snapshotService.capture({ dictId: id, changeType: 'delete', operator }),
+      ),
+    );
+
     // Cascade: soft-delete all details for the batch of dictionaries
     await this.db
       .update(sysDictionaryDetails)
@@ -298,7 +314,7 @@ export class DictionaryService {
    * Expects JSON body matching ExportDict shape.
    * Creates the dict, inserts all details with ID remapping for parent_id references.
    */
-  async importDict(json: Record<string, any>): Promise<SysDictionary> {
+  async importDict(json: Record<string, any>, operator?: string): Promise<SysDictionary> {
     const name = json.name as string | undefined;
     const type = json.type as string | undefined;
     const details = (json.details ?? json.sysDictionaryDetails ?? []) as Array<Record<string, any>>;
@@ -324,7 +340,7 @@ export class DictionaryService {
       });
     }
 
-    return await this.db.transaction(async (tx) => {
+    const imported = await this.db.transaction(async (tx) => {
       // Insert the dictionary
       const [dict] = await tx
         .insert(sysDictionaries)
@@ -386,6 +402,9 @@ export class DictionaryService {
 
       return dict;
     });
+
+    await this.snapshotService.capture({ dictId: imported.id, changeType: 'import', operator });
+    return imported;
   }
 
   /**
@@ -418,6 +437,75 @@ export class DictionaryService {
         parent_id: d.parentId,
       })),
     };
+  }
+
+  /**
+   * Restore a dictionary to a previous snapshot version.
+   * Applies the snapshot's dict fields + replaces all current details.
+   * Creates a new snapshot with changeType='restore'.
+   */
+  async restoreVersion(id: string, version: number, operator?: string): Promise<SysDictionary> {
+    const snap = await this.snapshotService.getVersion(id, version);
+    const payload = snap.snapshot as any;
+
+    // Update dict fields from snapshot
+    await this.db
+      .update(sysDictionaries)
+      .set({
+        name: payload.name,
+        status: payload.status,
+        desc: payload.desc ?? null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(sysDictionaries.id, id), isNull(sysDictionaries.deletedAt)));
+
+    // Soft-delete all current details
+    await this.db
+      .update(sysDictionaryDetails)
+      .set({ deletedAt: sql`NOW()` })
+      .where(and(eq(sysDictionaryDetails.dictId, id), isNull(sysDictionaryDetails.deletedAt)));
+
+    // Re-insert details from snapshot with ID remapping for parent references
+    const detailsPayload: Array<any> = payload.details ?? [];
+    if (detailsPayload.length > 0) {
+      const idMap = new Map<string, string>();
+      for (const d of detailsPayload) {
+        const [row] = await this.db
+          .insert(sysDictionaryDetails)
+          .values({
+            dictId: id,
+            label: d.label,
+            value: d.value,
+            status: d.status,
+            sort: d.sort,
+            parentId: null,
+          })
+          .returning();
+        if (row && d._orig_id) idMap.set(d._orig_id, row.id);
+      }
+      // Remap parent_id if snapshot stored _orig_id references
+      for (const d of detailsPayload) {
+        if (d.parent_id && d._orig_id && idMap.has(d.parent_id)) {
+          const newId = idMap.get(d._orig_id);
+          const newParentId = idMap.get(d.parent_id);
+          if (newId && newParentId) {
+            await this.db
+              .update(sysDictionaryDetails)
+              .set({ parentId: newParentId })
+              .where(eq(sysDictionaryDetails.id, newId));
+          }
+        }
+      }
+    }
+
+    await this.snapshotService.capture({
+      dictId: id,
+      changeType: 'restore',
+      operator,
+      note: `Restored from v${version}`,
+    });
+
+    return this.findOne(id);
   }
 
   /**

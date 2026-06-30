@@ -16,6 +16,7 @@ import { UpdateDetailDto } from './dto/update-detail.dto';
 import { QueryDetailDto } from './dto/query-detail.dto';
 import { ApiErrorCode, PaginatedData } from '@jimo/shared';
 import { SQL } from 'drizzle-orm';
+import { DictionarySnapshotService } from '../dictionary/dictionary-snapshot.service';
 
 export interface DetailTreeNode extends SysDictionaryDetail {
   children: DetailTreeNode[];
@@ -27,6 +28,7 @@ const MAX_DEPTH = 20;
 export class DictionaryDetailService {
   constructor(
     @Inject(DATABASE_CONNECTION) private readonly db: DrizzleDb,
+    private readonly snapshotService: DictionarySnapshotService,
   ) {}
 
   async findAll(query: QueryDetailDto): Promise<PaginatedData<SysDictionaryDetail>> {
@@ -126,7 +128,7 @@ export class DictionaryDetailService {
       .orderBy(sysDictionaryDetails.sort, sysDictionaryDetails.createdAt);
   }
 
-  async create(dto: CreateDetailDto): Promise<SysDictionaryDetail> {
+  async create(dto: CreateDetailDto, operator?: string): Promise<SysDictionaryDetail> {
     // Validate parent_id if provided
     if (dto.parent_id) {
       await this.findOne(dto.parent_id);
@@ -144,10 +146,12 @@ export class DictionaryDetailService {
       })
       .returning();
 
-    return rows[0]!;
+    const detail = rows[0]!;
+    await this.snapshotService.capture({ dictId: detail.dictId, changeType: 'detail_add', operator });
+    return detail;
   }
 
-  async update(id: string, dto: UpdateDetailDto): Promise<SysDictionaryDetail> {
+  async update(id: string, dto: UpdateDetailDto, operator?: string): Promise<SysDictionaryDetail> {
     const existing = await this.findOne(id);
 
     // Circular reference check on parent_id change
@@ -189,14 +193,16 @@ export class DictionaryDetailService {
       )
       .returning();
 
-    return rows[0]!;
+    const detail = rows[0]!;
+    await this.snapshotService.capture({ dictId: detail.dictId, changeType: 'detail_update', operator });
+    return detail;
   }
 
   /**
    * Soft-delete a detail and cascade to all its children.
    */
-  async remove(id: string): Promise<void> {
-    await this.findOne(id);
+  async remove(id: string, operator?: string): Promise<void> {
+    const detail = await this.findOne(id);
 
     // Find all descendants recursively and soft-delete them
     await this.cascadeSoftDelete(id);
@@ -208,6 +214,8 @@ export class DictionaryDetailService {
       .where(
         and(eq(sysDictionaryDetails.id, id), isNull(sysDictionaryDetails.deletedAt)),
       );
+
+    await this.snapshotService.capture({ dictId: detail.dictId, changeType: 'detail_delete', operator });
   }
 
   /**
