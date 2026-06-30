@@ -134,7 +134,7 @@ async function updateStep(sql: any, jobId: string, stepIndex: number, stepStatus
   `;
 }
 
-async function processGenerateJob(sql: any, job: any): Promise<void> {
+async function processGenerateJob(sql: any, job: any): Promise<string[]> {
   const jobId: string = job.id;
   const dto: AutoCodeDto = job.payload?.dto;
   if (!dto) throw new Error('job payload missing dto');
@@ -247,6 +247,8 @@ async function processGenerateJob(sql: any, job: any): Promise<void> {
   await updateStep(sql, jobId, 6, 'running');
   await enqueueEntrypoints(sql, jobId, dto, hasPointFields, createdFiles);
   await updateStep(sql, jobId, 6, 'completed');
+
+  return createdFiles;
 }
 
 /** Compute field-level change log (ported pure fn from HistoryService). */
@@ -273,7 +275,7 @@ function computeChangeLog(oldFields: any[], newFields: any[]): string {
  * No force-cleanup, no mock, no menu (table already exists). Reuses preview +
  * file-write + push + saveHistory(operation='update', changeLog) + enqueueEntrypoints.
  */
-async function processUpdateJob(sql: any, job: any): Promise<void> {
+async function processUpdateJob(sql: any, job: any): Promise<string[]> {
   const jobId: string = job.id;
   const dto: any = job.payload?.dto; // UpdateModuleDto
   if (!dto) throw new Error('update job payload missing dto');
@@ -354,6 +356,8 @@ async function processUpdateJob(sql: any, job: any): Promise<void> {
   await updateStep(sql, jobId, 4, 'running', UPDATE_STEPS);
   await enqueueEntrypoints(sql, jobId, autoCodeDto, false, createdFiles);
   await updateStep(sql, jobId, 4, 'completed', UPDATE_STEPS);
+
+  return createdFiles;
 }
 
 /** If dto.packageId set, resolve its menuId (parent for the new menu). */
@@ -407,11 +411,13 @@ async function main(): Promise<void> {
 
     try {
       const jobType = job.job_type ?? 'generate';
-      if (jobType === 'update') await processUpdateJob(sql, job);
-      else await processGenerateJob(sql, job);
+      const createdFiles = jobType === 'update'
+        ? await processUpdateJob(sql, job)
+        : await processGenerateJob(sql, job);
       await sql`
         UPDATE sys_generate_jobs
-        SET status = 'done', finished_at = NOW(), result = ${{ completedAt: new Date().toISOString() }}::jsonb
+        SET status = 'done', finished_at = NOW(),
+            result = ${{ completedAt: new Date().toISOString(), createdFiles }}::jsonb
         WHERE id = ${job.id}
       `;
       console.log(`[generate-worker] ✅ Job ${job.id} done (${job.table_name})`);
