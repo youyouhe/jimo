@@ -490,6 +490,12 @@ show_status() {
     printf "║  cleanup-worker : ${YELLOW}未运行${NC}\n"
   fi
 
+  if pid=$(read_pid "$gen_worker_pid_file"); then
+    printf "║  generate-worker: ${GREEN}运行中${NC}  PID: %-8s\n" "$pid"
+  else
+    printf "║  generate-worker: ${YELLOW}未运行${NC}\n"
+  fi
+
   echo "╚══════════════════════════════════════════════╝"
   echo ""
 }
