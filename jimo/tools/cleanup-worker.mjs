@@ -83,16 +83,24 @@ function singularize(word) {
   if (word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1);
   return word;
 }
-function deriveNames(tableName) {
-  const kebabName          = toKebabCase(tableName);
-  const kebabSingular      = toKebabCase(singularize(tableName));
-  const pascalSingular     = toPascalCase(singularize(tableName));
-  const pascalName         = toPascalCase(tableName);
+function deriveNames(tableName, packageSlug = '') {
+  // Strip lc_ prefix for name generation — class/var names stay clean (e.g. StudentModule not LcStudentModule)
+  const baseName           = tableName.startsWith('lc_') ? tableName.slice(3) : tableName;
+  const fullTableName      = tableName.startsWith('lc_') ? tableName : `lc_${tableName}`;
+  const kebabName          = toKebabCase(baseName);          // verify-e (without lc-)
+  const kebabSingular      = toKebabCase(singularize(baseName));
+  const lcKebabSingular    = `lc-${kebabSingular}`;          // lc-verify-e
+  const pascalSingular     = toPascalCase(singularize(baseName)); // VerifyE
+  const pascalName         = toPascalCase(baseName);          // VerifyE
+  const slug               = packageSlug || 'default';
+  const moduleDir          = `lc/${slug}/${lcKebabSingular}`;
+  const srcRelPath         = '../../../../';
+  const dtoSrcRelPath      = '../../../../../';
   const routePath          = `/lc/${kebabName}`;
   const pageDir            = `lc/${kebabName}`;
   const pageComponentPath  = `./lc/${kebabName}/index`;
   const pageMapComponentPath = `./lc/${kebabName}/map`;
-  return { tableName, kebabName, kebabSingular, pascalSingular, pascalName, routePath, pageDir, pageComponentPath, pageMapComponentPath };
+  return { tableName: fullTableName, baseName, packageSlug: slug, kebabName, kebabSingular, lcKebabSingular, moduleDir, srcRelPath, dtoSrcRelPath, pascalSingular, pascalName, routePath, pageDir, pageComponentPath, pageMapComponentPath };
 }
 
 // ── file helpers ─────────────────────────────────────────────────────────────
@@ -132,17 +140,17 @@ async function deleteGeneratedFiles(n) {
   const webSrc    = path.join(PROJECT_ROOT, 'release/jimo/apps/web/src');
 
   const files = [
-    path.join(serverSrc, `db/schema/${n.kebabName}.ts`),
-    path.join(serverSrc, `modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`),
-    path.join(serverSrc, `modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`),
-    path.join(serverSrc, `modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`),
-    path.join(serverSrc, `modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`),
-    path.join(serverSrc, `modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`),
-    path.join(serverSrc, `modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`),
-    path.join(serverSrc, `modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`),
-    path.join(serverSrc, `modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`),
-    path.join(serverSrc, `modules/${n.kebabSingular}/${n.kebabSingular}.service.contract.spec.ts`),
-    path.join(serverSrc, `modules/${n.kebabSingular}/${n.kebabSingular}.http.contract.spec.ts`),
+    path.join(serverSrc, `db/schema/lc-${n.kebabName}.ts`),
+    path.join(serverSrc, `modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`),
+    path.join(serverSrc, `modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`),
+    path.join(serverSrc, `modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`),
+    path.join(serverSrc, `modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`),
+    path.join(serverSrc, `modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`),
+    path.join(serverSrc, `modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`),
+    path.join(serverSrc, `modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.service.ts`),
+    path.join(serverSrc, `modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module.ts`),
+    path.join(serverSrc, `modules/${n.moduleDir}/${n.lcKebabSingular}.service.contract.spec.ts`),
+    path.join(serverSrc, `modules/${n.moduleDir}/${n.lcKebabSingular}.http.contract.spec.ts`),
     path.join(webSrc, `services/lc/${n.kebabSingular}.ts`),
     path.join(webSrc, `pages/lc/${n.kebabName}/index.tsx`),
     path.join(webSrc, `pages/lc/${n.kebabName}/detail.tsx`),
@@ -151,10 +159,11 @@ async function deleteGeneratedFiles(n) {
 
   for (const f of files) await rmForce(f);
 
-  const moduleDir = path.join(serverSrc, `modules/${n.kebabSingular}`);
+  const moduleDir = path.join(serverSrc, `modules/${n.moduleDir}`);
   try { await rm(path.join(moduleDir, 'dto'),   { recursive: true, force: true }); } catch { /* */ }
   try { await rm(path.join(moduleDir, 'agent'), { recursive: true, force: true }); } catch { /* */ }
   await rmdirSafe(moduleDir);
+  await rmdirSafe(path.join(serverSrc, `modules/lc/${n.packageSlug}`));
   try { await rm(path.join(webSrc, `pages/lc/${n.kebabName}`), { recursive: true, force: true }); } catch { /* */ }
 }
 
@@ -162,6 +171,8 @@ async function removeSchemaExport(n) {
   await editFile(SCHEMA_INDEX, content =>
     content.replace(new RegExp(`export \\* from '\\.\\/${n.kebabName}\\.js';\\n?`, 'g'), '')
            .replace(new RegExp(`export \\* from '\\.\\/${n.kebabName}';\\n?`, 'g'), '')
+           .replace(new RegExp(`export \\* from '\\.\/lc-${n.kebabName}\\.js';\\n?`, 'g'), '')
+           .replace(new RegExp(`export \\* from '\\.\/lc-${n.kebabName}';\\n?`, 'g'), '')
   );
 }
 
@@ -179,17 +190,18 @@ async function removeDanglingImports(n) {
 
 async function removeModuleRegistration(n) {
   if (!fs.existsSync(GENERATED_MODULE)) return;
+  const escapedModuleDir = n.moduleDir.replace(/\//g, '\\/');
   await editFile(GENERATED_MODULE, content => {
     let out = content;
     // Remove main module import + array entry
     out = out.replace(
-      new RegExp(`import \\{ ${n.pascalSingular}Module \\} from '\\./modules/${n.kebabSingular}/${n.kebabSingular}\\.module';\n?`, 'g'),
+      new RegExp(`import \\{ ${n.pascalSingular}Module \\} from '\\./modules/${escapedModuleDir}/${n.lcKebabSingular}\\.module';\n?`, 'g'),
       ''
     );
     out = out.replace(new RegExp(`\n[ ]+${n.pascalSingular}Module,`, 'g'), '');
     // Remove agent module import + array entry
     out = out.replace(
-      new RegExp(`import \\{ ${n.pascalSingular}AgentModule \\} from '\\./modules/${n.kebabSingular}/agent/${n.kebabSingular}\\.agent\\.module';\n?`, 'g'),
+      new RegExp(`import \\{ ${n.pascalSingular}AgentModule \\} from '\\./modules/${escapedModuleDir}/agent/${n.lcKebabSingular}\\.agent\\.module';\n?`, 'g'),
       ''
     );
     out = out.replace(new RegExp(`\n[ ]+${n.pascalSingular}AgentModule,`, 'g'), '');
@@ -218,7 +230,15 @@ async function removeUmiRoutes(n) {
 async function processJob(sql, job) {
   const { id, table_name, payload } = job;
   const cascade = payload?.cascade ?? false;
-  const n = deriveNames(table_name);
+  // Resolve packageSlug: from payload (new jobs) or from history record (old jobs)
+  let packageSlug = payload?.packageSlug || '';
+  if (!packageSlug && payload?.historyId) {
+    try {
+      const rows = await sql`SELECT package_slug FROM sys_auto_code_histories WHERE id = ${payload.historyId} LIMIT 1`;
+      packageSlug = rows[0]?.package_slug || '';
+    } catch { /* ignore */ }
+  }
+  const n = deriveNames(table_name, packageSlug);
   const dbTableName = `lc_${table_name}`;
 
   console.log(`[cleanup-worker] Processing job ${id} — table: ${table_name}`);
@@ -374,7 +394,19 @@ function extractMenuName(description, fallback) {
 async function processEntrypointsJob(sql, job, jobsDir) {
   const p = job.payload || {};
   const nestJobId = p.jobId;
-  const n = deriveNames(p.tableName);
+  // p.packageSlug may be null (old job payload before fix) — extract from createdFiles as fallback
+  // createdFiles[0] is typically the schema file at db/schema/lc-name.ts
+  // createdFiles[1] is a module file at modules/lc/<slug>/lc-<singular>/...
+  let packageSlug = p.packageSlug || '';
+  if (!packageSlug && Array.isArray(p.createdFiles)) {
+    // Find a module file path and extract the slug from it: modules/lc/<slug>/...
+    const modFile = p.createdFiles.find(f => f.includes('/modules/lc/'));
+    if (modFile) {
+      const match = modFile.match(/\/modules\/lc\/([^/]+)\//);
+      if (match) packageSlug = match[1];
+    }
+  }
+  const n = deriveNames(p.tableName, packageSlug);
 
   const stepsState = ENTRYPOINTS_STEPS.map(s => ({ ...s, stepStatus: 'pending' }));
   const writeProgress = async (stepIdx, label) => {
@@ -387,7 +419,7 @@ async function processEntrypointsJob(sql, job, jobsDir) {
   // 1. updateSchemaIndex
   await writeProgress(0, ENTRYPOINTS_STEPS[0].label);
   await editFile(SCHEMA_INDEX, content => {
-    const exportLine = `export * from './${n.kebabName}.js';`;
+    const exportLine = `export * from './lc-${n.kebabName}.js';`;
     if (content.includes(exportLine)) return content;
     return content.trimEnd() + '\n' + exportLine + '\n';
   });
@@ -403,13 +435,13 @@ async function processEntrypointsJob(sql, job, jobsDir) {
     );
   }
   await editFile(GENERATED_MODULE, content => {
-    const importLine = `import { ${n.pascalSingular}Module } from './modules/${n.kebabSingular}/${n.kebabSingular}.module';`;
+    const importLine = `import { ${n.pascalSingular}Module } from './modules/${n.moduleDir}/${n.lcKebabSingular}.module';`;
     if (!content.includes(importLine)) {
       content = content.replace(`import { Module }`, `${importLine}\nimport { Module }`);
       content = content.replace(`imports: [\n  `, `imports: [\n    ${n.pascalSingular}Module,\n  `);
     }
     if (p.agentEnabled) {
-      const agentImportLine = `import { ${n.pascalSingular}AgentModule } from './modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module';`;
+      const agentImportLine = `import { ${n.pascalSingular}AgentModule } from './modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module';`;
       if (!content.includes(agentImportLine)) {
         content = content.replace(`import { Module }`, `${agentImportLine}\nimport { Module }`);
         content = content.replace(

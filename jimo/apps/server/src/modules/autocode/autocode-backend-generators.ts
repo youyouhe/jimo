@@ -32,6 +32,18 @@ function resolveSchemaFileName(tableName: string): string {
 }
 
 /**
+ * Returns the schema import path (without the leading dir) for a given table.
+ * System tables (sys_*) live in db/schema/ with their plain name (e.g. 'users').
+ * All LC-generated tables get the 'lc-' prefix (e.g. 'lc-verify-h').
+ */
+function resolveSchemaImportFile(tableName: string): string {
+  if (SYSTEM_SCHEMA_FILE_MAP[tableName]) {
+    return SYSTEM_SCHEMA_FILE_MAP[tableName];
+  }
+  return `lc-${deriveNames(tableName).kebabName}`;
+}
+
+/**
  * Generate Drizzle pgTable schema definition.
  */
 export function generateSchema(dto: AutoCodeDto): string {
@@ -133,7 +145,7 @@ export function generateSchema(dto: AutoCodeDto): string {
     if (field.relationTable === dto.tableName) continue;
     if (field.relationTable) {
       const targetNames = deriveNames(field.relationTable);
-      relationImports.push(`import { ${targetNames.schemaVar} } from './${resolveSchemaFileName(field.relationTable)}';`);
+      relationImports.push(`import { ${targetNames.schemaVar} } from './${resolveSchemaImportFile(field.relationTable)}';`);
     }
   }
 
@@ -146,7 +158,7 @@ export function generateSchema(dto: AutoCodeDto): string {
     const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
     if (isExisting) {
       const targetNames = deriveNames(field.relationTable!);
-      existingTableSchemaImports += `import { ${targetNames.schemaVar} } from './${targetNames.kebabName}';\n`;
+      existingTableSchemaImports += `import { ${targetNames.schemaVar} } from './${resolveSchemaImportFile(field.relationTable!)}';\n`;
       continue;
     }
 
@@ -359,7 +371,7 @@ export function generateQueryDto(dto: AutoCodeDto): string {
 
   return `import { ${validatorNames.join(', ')} } from 'class-validator';
 ${needsType ? "import { Type } from 'class-transformer';\n" : ''}import { ApiPropertyOptional } from '@nestjs/swagger';
-import { PaginationDto } from '../../../common/dto/pagination.dto';
+import { PaginationDto } from '${n.dtoSrcRelPath}common/dto/pagination.dto';
 
 export class Query${n.pascalSingular}Dto extends PaginationDto {
 ${fieldStrings.join('\n\n')}
@@ -374,7 +386,7 @@ export function generateUpdateDto(dto: AutoCodeDto): string {
   const n = deriveNames(dto.tableName);
 
   return `import { PartialType } from '@nestjs/swagger';
-import { Create${n.pascalSingular}Dto } from './create-${n.kebabSingular}.dto';
+import { Create${n.pascalSingular}Dto } from './create-${n.lcKebabSingular}.dto';
 
 export class Update${n.pascalSingular}Dto extends PartialType(Create${n.pascalSingular}Dto) {}
 `;
@@ -510,12 +522,12 @@ export function generateService(dto: AutoCodeDto): string {
     if (isExisting) {
       childSchemaVar = deriveNames(field.relationTable!).schemaVar;
       fkColName = field.relationFkColumn!;
-      childImports += `import { ${childSchemaVar} } from '../../db/schema/${deriveNames(field.relationTable!).kebabName}';\n`;
+      childImports += `import { ${childSchemaVar} } from '${n.srcRelPath}db/schema/lc-${deriveNames(field.relationTable!).kebabName}';\n`;
     } else {
       const singularField = singularize(field.name);
       childSchemaVar = toCamelCase(`${singularMain}_${singularField}`);
       fkColName = `${singularMain}_id`;
-      childImports += `import { ${childSchemaVar} } from '../../db/schema/${n.kebabName}';\n`;
+      childImports += `import { ${childSchemaVar} } from '${n.srcRelPath}db/schema/lc-${n.kebabName}';\n`;
     }
     const detailCols = field.detailFields.filter(df => df.name !== 'id' && !(df.type === 'relation' && df.relationTable === dto.tableName) && !(df.type === 'relation' && df.relationType === 'one-to-many'));
     const childRelFields = (field.detailFields || []).filter(df => df.name !== 'id' && df.type === 'relation' && df.relationTable && df.relationTable !== dto.tableName);
@@ -526,7 +538,7 @@ export function generateService(dto: AutoCodeDto): string {
     for (const crf of childRelFields) {
       const crfTarget = deriveNames(crf.relationTable!);
       const crfDisplay = crf.relationDisplayField || 'id';
-      childRelImports += `import { ${crfTarget.schemaVar} } from '../../db/schema/${crfTarget.kebabName}';\n`;
+      childRelImports += `import { ${crfTarget.schemaVar} } from '${n.srcRelPath}db/schema/${resolveSchemaImportFile(crf.relationTable!)}';\n`;
       childRelSelectFields += `\n      ${crf.name}_display: ${crfTarget.schemaVar}.${crfDisplay},`;
       childRelJoins += `\n        .leftJoin(${crfTarget.schemaVar}, eq(${childSchemaVar}.${crf.name}, ${crfTarget.schemaVar}.id))`;
     }
@@ -648,7 +660,7 @@ ${grandchildAttach.map(({ grandMethodName }) => `      await this.remove${grandM
       const grandSchemaVar = toCamelCase(grandTableName);
       const grandFkColName = `${singularMain}_${singularChild}_id`;
 
-      childImports += `import { ${grandSchemaVar} } from '../../db/schema/${n.kebabName}';\n`;
+      childImports += `import { ${grandSchemaVar} } from '${n.srcRelPath}db/schema/lc-${n.kebabName}';\n`;
 
       const grandDetailCols = gf.detailFields.filter(
         (gdf) => gdf.name !== 'id' && !(gdf.type === 'relation' && gdf.relationType === 'one-to-many'),
@@ -804,7 +816,7 @@ ${oneToManyFields.map((field) => `        await this.remove${toPascalCase(field.
     }
     const targetNames = deriveNames(f.relationTable);
     const displayField = f.relationDisplayField || 'id';
-    manyToOneSchemaImports += `import { ${targetNames.schemaVar} } from '../../db/schema/${resolveSchemaFileName(f.relationTable)}';\n`;
+    manyToOneSchemaImports += `import { ${targetNames.schemaVar} } from '${n.srcRelPath}db/schema/${resolveSchemaImportFile(f.relationTable)}';\n`;
     manyToOneSelectFields += `\n      ${f.name}_display: ${targetNames.schemaVar}.${displayField},`;
     manyToOneJoins += `\n        .leftJoin(${targetNames.schemaVar}, eq(${n.schemaVar}.${f.name}, ${targetNames.schemaVar}.id))`;
   }
@@ -816,13 +828,13 @@ ${oneToManyFields.map((field) => `        await this.remove${toPascalCase(field.
   ConflictException,
 } from '@nestjs/common';
 import { eq, and, isNull, like, sql, count, inArray, gte, lte, desc${hasManyToOne ? ', getTableColumns' : ''} } from 'drizzle-orm';
-${hasSelfRef ? "import { alias } from 'drizzle-orm/pg-core';\n" : ''}import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
-import { OwnershipHelper } from '../../common/ownership/ownership.helper';
-import { ${n.schemaVar}, ${n.schemaType} } from '../../db/schema/${n.kebabName}';
-${hasCalculatedFields ? "import { evaluateFormula } from '../autocode/formula-evaluator';" : ''}
-${manyToOneSchemaImports}${childImports}${hasCodeFields ? "import { EncodingRuleService } from '../encoding-rule/encoding-rule.service.js';\n" : ''}import { Create${n.pascalSingular}Dto } from './dto/create-${n.kebabSingular}.dto';
-import { Update${n.pascalSingular}Dto } from './dto/update-${n.kebabSingular}.dto';
-import { Query${n.pascalSingular}Dto } from './dto/query-${n.kebabSingular}.dto';
+${hasSelfRef ? "import { alias } from 'drizzle-orm/pg-core';\n" : ''}import { DATABASE_CONNECTION, DrizzleDb } from '${n.srcRelPath}db/connection';
+import { OwnershipHelper } from '${n.srcRelPath}common/ownership/ownership.helper';
+import { ${n.schemaVar}, ${n.schemaType} } from '${n.srcRelPath}db/schema/lc-${n.kebabName}';
+${hasCalculatedFields ? `import { evaluateFormula } from '${n.srcRelPath}modules/autocode/formula-evaluator';` : ''}
+${manyToOneSchemaImports}${childImports}${hasCodeFields ? `import { EncodingRuleService } from '${n.srcRelPath}modules/encoding-rule/encoding-rule.service.js';\n` : ''}import { Create${n.pascalSingular}Dto } from './dto/create-${n.lcKebabSingular}.dto';
+import { Update${n.pascalSingular}Dto } from './dto/update-${n.lcKebabSingular}.dto';
+import { Query${n.pascalSingular}Dto } from './dto/query-${n.lcKebabSingular}.dto';
 import { ApiErrorCode, PaginatedData } from '@jimo/shared';
 import { SQL } from 'drizzle-orm';
 
@@ -1119,17 +1131,17 @@ import {
   ApiOperation,
   ApiResponse,
 } from '@nestjs/swagger';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { ${n.pascalSingular}Service } from './${n.kebabSingular}.service';
-import { Create${n.pascalSingular}Dto } from './dto/create-${n.kebabSingular}.dto';
-import { Update${n.pascalSingular}Dto } from './dto/update-${n.kebabSingular}.dto';
-import { Query${n.pascalSingular}Dto } from './dto/query-${n.kebabSingular}.dto';
-import { BatchDeleteDto } from '../../common/dto/batch-delete.dto';
+import { CurrentUser } from '${n.srcRelPath}common/decorators/current-user.decorator';
+import { ${n.pascalSingular}Service } from './${n.lcKebabSingular}.service';
+import { Create${n.pascalSingular}Dto } from './dto/create-${n.lcKebabSingular}.dto';
+import { Update${n.pascalSingular}Dto } from './dto/update-${n.lcKebabSingular}.dto';
+import { Query${n.pascalSingular}Dto } from './dto/query-${n.lcKebabSingular}.dto';
+import { BatchDeleteDto } from '${n.srcRelPath}common/dto/batch-delete.dto';
 import {
   ApiResponse as ApiResp,
   PaginatedResponse,
 } from '@jimo/shared';
-import { ${n.schemaType} } from '../../db/schema/${n.kebabName}';
+import { ${n.schemaType} } from '${n.srcRelPath}db/schema/lc-${n.kebabName}';
 
 @ApiTags('lc/${n.kebabName}')
 @ApiBearerAuth()
@@ -1228,8 +1240,8 @@ export function generateModule(dto: AutoCodeDto): string {
   const hasCodeFields = dto.fields.some((f) => f.type === 'code');
 
   return `import { Module } from '@nestjs/common';
-import { ${n.pascalSingular}Controller } from './${n.kebabSingular}.controller';
-import { ${n.pascalSingular}Service } from './${n.kebabSingular}.service';${hasCodeFields ? `\nimport { EncodingRuleModule } from '../encoding-rule/encoding-rule.module.js';` : ''}
+import { ${n.pascalSingular}Controller } from './${n.lcKebabSingular}.controller';
+import { ${n.pascalSingular}Service } from './${n.lcKebabSingular}.service';${hasCodeFields ? `\nimport { EncodingRuleModule } from '${n.srcRelPath}modules/encoding-rule/encoding-rule.module.js';` : ''}
 
 @Module({${hasCodeFields ? `\n  imports: [EncodingRuleModule],` : ''}
   controllers: [${n.pascalSingular}Controller],
@@ -1397,9 +1409,9 @@ ${propLines.join('\n')}
   const systemPrompt = dto.agentConfig?.systemPrompt ?? '';
 
   return `import { Injectable, Inject } from '@nestjs/common';
-import { DATABASE_CONNECTION, DrizzleDb } from '../../../db/connection';
-import { ${n.pascalSingular}Service } from '../${n.kebabSingular}.service';
-import { AutocodeService } from '../../autocode/autocode.service';
+import { DATABASE_CONNECTION, DrizzleDb } from '../../../../../db/connection';
+import { ${n.pascalSingular}Service } from '../${n.lcKebabSingular}.service';
+import { AutocodeService } from '../../../../../modules/autocode/autocode.service';
 
 /**
  * Entity agent service for ${n.kebabName}.
@@ -1434,9 +1446,9 @@ export function generateAgentModule(dto: AutoCodeDto): string {
   const n = deriveNames(dto.tableName);
 
   return `import { Module } from '@nestjs/common';
-import { ${n.pascalSingular}Module } from '../${n.kebabSingular}.module';
-import { AutocodeModule } from '../../autocode/autocode.module';
-import { ${n.pascalSingular}AgentService } from './${n.kebabSingular}.agent.service';
+import { ${n.pascalSingular}Module } from '../${n.lcKebabSingular}.module';
+import { AutocodeModule } from '../../../../../modules/autocode/autocode.module';
+import { ${n.pascalSingular}AgentService } from './${n.lcKebabSingular}.agent.service';
 
 @Module({
   imports: [${n.pascalSingular}Module, AutocodeModule],

@@ -53,16 +53,20 @@ export async function saveHistory(
   // Pass JSON strings without ::jsonb cast — postgres-js binds them as 'text'
   // and the column type (jsonb) handles the coercion automatically. Using
   // ::jsonb with a pre-serialised string causes double-encoding (jsonb_typeof='string').
+  const packageSlug = (dto as any)._packageSlug ?? 'default';
+
   await sql.unsafe(
     `INSERT INTO sys_auto_code_histories (
       package_name, table_name, business_db, templates, version, fields,
-      change_log, operation, parent_id, visibility_strategy, has_approval_flow, has_agent
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      change_log, operation, parent_id, visibility_strategy, has_approval_flow, has_agent,
+      package_slug
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [
       asyncPackageName, dto.tableName, businessDB,
       JSON.stringify(templates), nextVersion,
       JSON.stringify(fields), changeLog, operation,
       parentId, visibilityStrategy, hasApprovalFlow, hasAgent,
+      packageSlug,
     ],
   );
 }

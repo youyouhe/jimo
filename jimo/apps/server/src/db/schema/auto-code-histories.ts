@@ -36,6 +36,8 @@ export const sysAutoCodeHistories = pgTable(
     hasApprovalFlow: boolean('has_approval_flow').default(false),
     /** Whether AI agent is enabled for this table */
     hasAgent: boolean('has_agent').default(false),
+    /** Package slug at generation time — needed to reconstruct module path on delete */
+    packageSlug: varchar('package_slug', { length: 64 }).notNull().default(''),
   },
 );
 

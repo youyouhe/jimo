@@ -281,41 +281,68 @@ export function buildCreateTableSql(tableName: string, fields: AutoCodeField[], 
 // ---------------------------------------------------------------------------
 
 export interface DerivedNames {
-  tableName: string;
-  pascalName: string;
-  pascalSingular: string;
+  tableName: string;       // full table name, always lc_-prefixed (e.g. lc_students)
+  baseName: string;        // table name without lc_ prefix (e.g. students)
+  packageSlug: string;     // package directory slug (e.g. hr)
+  pascalName: string;      // PascalCase of baseName (e.g. Students)
+  pascalSingular: string;  // PascalCase singular of baseName (e.g. Student)
   camelName: string;
   camelSingular: string;
-  kebabName: string;
-  kebabSingular: string;
+  kebabName: string;       // kebab-case of baseName (e.g. students)
+  kebabSingular: string;   // kebab-case singular of baseName (e.g. student)
+  lcKebabSingular: string; // lc-prefixed kebab singular (e.g. lc-student) — used for file names
+  moduleDir: string;       // backend module path segment: lc/<slug>/lc-<singular> (e.g. lc/hr/lc-student)
+  /** Relative path from the generated module dir back to src/ (e.g. '../../../../' for lc/<slug>/lc-name/) */
+  srcRelPath: string;
+  /** Relative path from the dto/ subdir back to src/ (one level deeper than srcRelPath) */
+  dtoSrcRelPath: string;
   routePath: string;
   schemaVar: string;
   schemaType: string;
-  /** 前端隔离路径 —— 业务表前端产物落在 lc/ 子目录,与系统页面物理隔离,杜绝同名占用 */
-  pageDir: string; // lc/<kebabName> — fs 路径段,拼成 pages/${pageDir}/index.tsx
-  pageComponentPath: string; // ./lc/<kebabName>/index — .umirc.ts component + sysMenus.component
-  pageMapComponentPath: string; // ./lc/<kebabName>/map
-  serviceRelDir: string; // lc/<kebabSingular> — fs 路径段,拼成 services/${serviceRelDir}.ts
-  serviceImportAlias: string; // @/services/lc/<kebabSingular> — 前端 generator 内 import
+  /** 前端隔离路径 —— 业务表前端产物落在 lc/ 子目录 */
+  pageDir: string;           // lc/<kebabName> — pages/${pageDir}/index.tsx
+  pageComponentPath: string; // ./lc/<kebabName>/index
+  pageMapComponentPath: string;
+  serviceRelDir: string;     // lc/<kebabSingular> — services/${serviceRelDir}.ts
+  serviceImportAlias: string;
 }
 
-export function deriveNames(tableName: string): DerivedNames {
-  const pascalName = toPascalCase(tableName);
-  const pascalSingular = toPascalCase(singularize(tableName));
-  const camelName = toCamelCase(tableName);
-  const camelSingular = toCamelCase(singularize(tableName));
-  const kebabName = toKebabCase(tableName);
-  const kebabSingular = toKebabCase(singularize(tableName));
+export function deriveNames(tableName: string, packageSlug: string = ''): DerivedNames {
+  // Strip lc_ prefix for name generation so class/var names stay clean (e.g. StudentModule not LcStudentModule)
+  const baseName = tableName.startsWith('lc_') ? tableName.slice(3) : tableName;
+  // Ensure DB table name always has lc_ prefix
+  const fullTableName = tableName.startsWith('lc_') ? tableName : `lc_${tableName}`;
+
+  const pascalName = toPascalCase(baseName);
+  const pascalSingular = toPascalCase(singularize(baseName));
+  const camelName = toCamelCase(baseName);
+  const camelSingular = toCamelCase(singularize(baseName));
+  const kebabName = toKebabCase(baseName);
+  const kebabSingular = toKebabCase(singularize(baseName));
+  const lcKebabSingular = `lc-${kebabSingular}`;
+  const slug = packageSlug || 'default';
+  const moduleDir = `lc/${slug}/${lcKebabSingular}`;
+  // moduleDir has 3 path segments (lc/<slug>/lc-<name>), so:
+  // - from module root: 4 levels up reach src/
+  // - from dto/ subdir: 5 levels up reach src/
+  const srcRelPath = '../../../../';
+  const dtoSrcRelPath = '../../../../../';
   const routePath = `/lc/${kebabName}`;
 
   return {
-    tableName,
+    tableName: fullTableName,
+    baseName,
+    packageSlug: slug,
     pascalName,
     pascalSingular,
     camelName,
     camelSingular,
     kebabName,
     kebabSingular,
+    lcKebabSingular,
+    moduleDir,
+    srcRelPath,
+    dtoSrcRelPath,
     routePath,
     schemaVar: camelName,
     schemaType: pascalName,

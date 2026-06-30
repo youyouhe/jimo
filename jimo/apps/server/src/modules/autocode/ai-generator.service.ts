@@ -938,8 +938,10 @@ ${pkgList}${optionsBlock}`,
         return { ok: true, packageId, name, message: `Package "${name}" 已存在，直接复用 id=${packageId}` };
       }
 
+      const slug = (name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'pkg';
       const pkg = await this.autocodeService.createPackage({
         name,
+        slug,
         description: description || '',
         templates: {},
       });

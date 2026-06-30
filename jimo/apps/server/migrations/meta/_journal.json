@@ -78,6 +78,13 @@
       "when": 1782785000000,
       "tag": "0010_add_dict_version_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1782800000000,
+      "tag": "0011_add_package_slug",
+      "breakpoints": true
     }
   ]
 }

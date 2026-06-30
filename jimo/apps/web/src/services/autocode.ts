@@ -363,6 +363,7 @@ export async function getUpdateStatus(jobId: string): Promise<GenerateJobStatus>
 export interface AutoCodePackage {
   id: string;
   name: string;
+  slug: string;
   description: string;
   templates: Record<string, string>;
   // Generation config snapshot
@@ -391,6 +392,7 @@ export interface AutoCodePackageListResult {
 
 export interface CreateAutoCodePackageDto {
   name: string;
+  slug: string;
   description?: string;
   templates: Record<string, string>;
   tableName?: string;
@@ -400,6 +402,7 @@ export interface CreateAutoCodePackageDto {
 
 export interface UpdateAutoCodePackageDto {
   name?: string;
+  slug?: string;
   description?: string;
   templates?: Record<string, string>;
   tableName?: string;

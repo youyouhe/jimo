@@ -153,9 +153,9 @@ import { execSync } from 'node:child_process';
 import * as path from 'node:path';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import * as schema from '../../db/schema';
-import { ${Service} } from './${n.kebabSingular}.service';
-import { OwnershipHelper } from '../../common/ownership/ownership.helper';
+import * as schema from '${n.srcRelPath}db/schema';
+import { ${Service} } from './${n.lcKebabSingular}.service';
+import { OwnershipHelper } from '${n.srcRelPath}common/ownership/ownership.helper';
 
 const RUN = process.env.RUN_L2_DB === '1';
 const TEST_URL = 'postgresql://lowcode:lowcode123@localhost:5432/lowcode_test';
@@ -280,10 +280,10 @@ import request from 'supertest';
 import { execSync } from 'node:child_process';
 import * as path from 'node:path';
 import postgres from 'postgres';
-import { databaseProvider } from '../../db/connection';
-import { ${Controller} } from './${n.kebabSingular}.controller';
-import { ${Service} } from './${n.kebabSingular}.service';
-import { OwnershipHelper } from '../../common/ownership/ownership.helper';
+import { databaseProvider } from '${n.srcRelPath}db/connection';
+import { ${Controller} } from './${n.lcKebabSingular}.controller';
+import { ${Service} } from './${n.lcKebabSingular}.service';
+import { OwnershipHelper } from '${n.srcRelPath}common/ownership/ownership.helper';
 
 const RUN = process.env.RUN_L2_DB === '1';
 const TEST_URL = 'postgresql://lowcode:lowcode123@localhost:5432/lowcode_test';

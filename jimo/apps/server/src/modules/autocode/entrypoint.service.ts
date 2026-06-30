@@ -31,9 +31,9 @@ export class EntrypointService {
   // =========================================================================
 
   async updateSchemaIndex(dto: AutoCodeDto, projectRoot: string): Promise<void> {
-    const n = deriveNames(dto.tableName);
+    const n = deriveNames(dto.tableName, (dto as any)._packageSlug ?? '');
     const indexPath = path.join(projectRoot, 'release/jimo/apps/server/src/db/schema/index.ts');
-    const exportLine = `export * from './${n.kebabName}.js';`;
+    const exportLine = `export * from './lc-${n.kebabName}.js';`;
 
     let content = await fs.readFile(indexPath, 'utf-8');
     if (content.includes(exportLine)) return;
@@ -43,7 +43,7 @@ export class EntrypointService {
   }
 
   async updateAppModule(dto: AutoCodeDto, projectRoot: string): Promise<void> {
-    const n = deriveNames(dto.tableName);
+    const n = deriveNames(dto.tableName, (dto as any)._packageSlug ?? '');
     const generatedPath = path.join(projectRoot, 'release/jimo/apps/server/src/generated.module.ts');
 
     // Ensure the file exists (idempotent bootstrap)
@@ -57,7 +57,7 @@ export class EntrypointService {
     let content = await fs.readFile(generatedPath, 'utf-8');
 
     // Inject main module
-    const importLine = `import { ${n.pascalSingular}Module } from './modules/${n.kebabSingular}/${n.kebabSingular}.module';`;
+    const importLine = `import { ${n.pascalSingular}Module } from './modules/${n.moduleDir}/${n.lcKebabSingular}.module';`;
     if (!content.includes(importLine)) {
       content = content.replace(`import { Module }`, `${importLine}\nimport { Module }`);
       content = content.replace(`imports: [\n  `, `imports: [\n    ${n.pascalSingular}Module,\n  `);
@@ -65,7 +65,7 @@ export class EntrypointService {
 
     // Inject agent module when enabled
     if (dto.agentConfig?.enabled) {
-      const agentImportLine = `import { ${n.pascalSingular}AgentModule } from './modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module';`;
+      const agentImportLine = `import { ${n.pascalSingular}AgentModule } from './modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module';`;
       if (!content.includes(agentImportLine)) {
         content = content.replace(`import { Module }`, `${agentImportLine}\nimport { Module }`);
         content = content.replace(
@@ -182,7 +182,7 @@ export class EntrypointService {
     let content = await fs.readFile(indexPath, 'utf-8');
 
     const exportPattern = new RegExp(
-      `export \\* from '\\.\\/${n.kebabName}\\.js';\\n?`,
+      `export \\* from '\\.\\\/lc-${n.kebabName}\\.js';\\n?`,
     );
     content = content.replace(exportPattern, '');
 
@@ -200,8 +200,8 @@ export class EntrypointService {
     if (!existsSync(serverSrc)) return;
 
     const patterns = [
-      new RegExp(`^import\\s+\\{[^}]*\\}\\s+from\\s+'\\.\\.?\\/(?:[\\w-]+\\/)*${n.kebabName}';\n?`, 'gm'),
-      new RegExp(`^import\\s+\\{[^}]*\\}\\s+from\\s+'[^']*db\\/schema\\/${n.kebabName}';\n?`, 'gm'),
+      new RegExp(`^import\\s+\\{[^}]*\\}\\s+from\\s+'\\.\\.?\\/(?:[\\w-]+\\/)*lc-${n.kebabName}';\n?`, 'gm'),
+      new RegExp(`^import\\s+\\{[^}]*\\}\\s+from\\s+'[^']*db\\/schema\\/lc-${n.kebabName}';\n?`, 'gm'),
     ];
 
     const walk = async (dir: string): Promise<void> => {
@@ -237,14 +237,14 @@ export class EntrypointService {
 
     // Remove main module import + array entry
     content = content.replace(
-      new RegExp(`import \\{ ${n.pascalSingular}Module \\} from '\\./modules/${n.kebabSingular}/${n.kebabSingular}\\.module';\\n?`),
+      new RegExp(`import \\{ ${n.pascalSingular}Module \\} from '\\./modules/${n.moduleDir.replace(/\//g, '\\/')}/${n.lcKebabSingular}\\.module';\\n?`),
       '',
     );
     content = content.replace(new RegExp(`\\n[ ]+${n.pascalSingular}Module,`), '');
 
     // Remove agent module import + array entry
     content = content.replace(
-      new RegExp(`import \\{ ${n.pascalSingular}AgentModule \\} from '\\./modules/${n.kebabSingular}/agent/${n.kebabSingular}\\.agent\\.module';\\n?`),
+      new RegExp(`import \\{ ${n.pascalSingular}AgentModule \\} from '\\./modules/${n.moduleDir.replace(/\//g, '\\/')}\/agent\\/${n.lcKebabSingular}\\.agent\\.module';\\n?`),
       '',
     );
     content = content.replace(new RegExp(`\\n[ ]+${n.pascalSingular}AgentModule,`), '');
@@ -276,7 +276,7 @@ export class EntrypointService {
       `);
     } catch { /* best-effort */ }
 
-    const n = deriveNames(dto.tableName);
+    const n = deriveNames(dto.tableName, (dto as any)._packageSlug ?? '');
     const payload = {
       jobId,
       tableName: dto.tableName,
@@ -287,6 +287,10 @@ export class EntrypointService {
       pageType: dto.pageType ?? 'list',
       kebabName: n.kebabName,
       kebabSingular: n.kebabSingular,
+      lcKebabSingular: n.lcKebabSingular,
+      moduleDir: n.moduleDir,
+      packageSlug: n.packageSlug,
+      packageId: dto.packageId,
       pascalSingular: n.pascalSingular,
       routePath: n.routePath,
       pageDir: n.pageDir,

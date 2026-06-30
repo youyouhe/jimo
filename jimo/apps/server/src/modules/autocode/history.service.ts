@@ -133,7 +133,7 @@ export class HistoryService {
     const history = await this.findOneHistory(id);
     const tableName = history.tableName!;
     this.ensureNotReservedTable(tableName);
-    const n = deriveNames(tableName);
+    const n = deriveNames(tableName, history.packageSlug ?? '');
     const projectRoot = resolveProjectRoot();
 
     const deletedFiles: string[] = [];
@@ -141,15 +141,15 @@ export class HistoryService {
     let removedMenus = 0;
 
     const expectedPaths = [
-      `release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
+      `release/jimo/apps/server/src/db/schema/lc-${n.kebabName}.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.service.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module.ts`,
       `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
       `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
       `release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`,
@@ -162,11 +162,14 @@ export class HistoryService {
         deletedFiles.push(p);
       }
     }
-    const moduleDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/${n.kebabSingular}`);
+    const moduleDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/${n.moduleDir}`);
     if (existsSync(moduleDir)) {
       try { await fs.rm(path.join(moduleDir, 'dto'), { recursive: true, force: true }); } catch { /* */ }
       try { await fs.rm(path.join(moduleDir, 'agent'), { recursive: true, force: true }); } catch { /* */ }
       try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
+      // Remove lc/<slug>/ parent dir if now empty
+      const pkgDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/lc/${n.packageSlug}`);
+      try { await fs.rmdir(pkgDir); } catch { /* not empty or doesn't exist */ }
     }
     const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.pageDir}`);
     if (existsSync(pageDir)) {
@@ -248,7 +251,7 @@ export class HistoryService {
         gen_random_uuid(),
         ${history.tableName},
         'pending',
-        ${JSON.stringify({ historyId: id, cascade, jobId })}::jsonb
+        ${JSON.stringify({ historyId: id, cascade, jobId, packageSlug: history.packageSlug ?? '' })}::jsonb
       )
     `);
 
@@ -444,15 +447,15 @@ export class HistoryService {
     let removedMenus = 0;
 
     const expectedPaths = [
-      `release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
+      `release/jimo/apps/server/src/db/schema/lc-${n.kebabName}.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.service.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module.ts`,
       `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
       `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
       `release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`,
@@ -465,10 +468,13 @@ export class HistoryService {
         deletedFiles.push(p);
       }
     }
-    const moduleDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/${n.kebabSingular}`);
+    const moduleDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/${n.moduleDir}`);
     if (existsSync(moduleDir)) {
       try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
       try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
+      // Remove lc/<slug>/ parent dir if now empty
+      const pkgDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/lc/${n.packageSlug}`);
+      try { await fs.rmdir(pkgDir); } catch { /* not empty or doesn't exist */ }
     }
     const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.pageDir}`);
     if (existsSync(pageDir)) {
@@ -589,15 +595,15 @@ export class HistoryService {
     const projectRoot = resolveProjectRoot();
     const files: string[] = [];
     const expectedPaths = [
-      `release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
+      `release/jimo/apps/server/src/db/schema/lc-${n.kebabName}.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.service.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module.ts`,
       `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
       `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
       `release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`,
@@ -622,7 +628,7 @@ export class HistoryService {
     try {
       const n = deriveNames(tableName);
       const projectRoot = resolveProjectRoot();
-      const schemaPath = path.join(projectRoot, 'release/jimo/apps/server/src/db/schema', `${n.kebabName}.ts`);
+      const schemaPath = path.join(projectRoot, 'release/jimo/apps/server/src/db/schema', `lc-${n.kebabName}.ts`);
 
       if (!existsSync(schemaPath)) return [];
 

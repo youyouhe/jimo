@@ -59,6 +59,7 @@ export class PackageService {
       .insert(sysAutoCodePackages)
       .values({
         name: dto.name,
+        slug: dto.slug,
         description: dto.description ?? '',
         templates: dto.templates ?? {},
         tableName: dto.tableName ?? '',
@@ -90,6 +91,7 @@ export class PackageService {
 
     const updateData: Record<string, unknown> = { updatedAt: new Date() };
     if (dto.name !== undefined) updateData.name = dto.name;
+    if (dto.slug !== undefined) updateData.slug = dto.slug;
     if (dto.description !== undefined) updateData.description = dto.description;
     if (dto.templates !== undefined) updateData.templates = dto.templates;
     if (dto.tableName !== undefined) updateData.tableName = dto.tableName;

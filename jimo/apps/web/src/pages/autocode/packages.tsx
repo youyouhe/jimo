@@ -85,6 +85,7 @@ export default function AutocodePackagesPage() {
       if (editingRecord) {
         const dto: UpdateAutoCodePackageDto = {
           name: values.name,
+          slug: values.slug,
           description: values.description || '',
           templates,
         };
@@ -93,6 +94,7 @@ export default function AutocodePackagesPage() {
       } else {
         const dto: CreateAutoCodePackageDto = {
           name: values.name,
+          slug: values.slug,
           description: values.description || '',
           templates,
         };
@@ -116,7 +118,14 @@ export default function AutocodePackagesPage() {
       title: 'Name',
       dataIndex: 'name',
       width: 180,
-      search: true,  // Enable name search
+      search: true,
+    },
+    {
+      title: 'Slug',
+      dataIndex: 'slug',
+      width: 120,
+      search: false,
+      render: (_, record) => record.slug ? <Tag color="blue">{record.slug}</Tag> : <Tag color="warning">unset</Tag>,
     },
     {
       title: 'Description',
@@ -306,6 +315,7 @@ export default function AutocodePackagesPage() {
           editingRecord
             ? {
                 name: editingRecord.name,
+                slug: editingRecord.slug,
                 description: editingRecord.description,
                 templatesRaw: JSON.stringify(editingRecord.templates, null, 2),
               }
@@ -317,8 +327,23 @@ export default function AutocodePackagesPage() {
         <ProFormText
           name="name"
           label="Package Name"
-          placeholder="e.g. Standard CRUD Template"
+          placeholder="e.g. 人事管理"
           rules={[{ required: true, message: 'Please enter package name' }]}
+        />
+        <ProFormText
+          name="slug"
+          label="Slug"
+          placeholder="e.g. hr"
+          tooltip="目录标识符，只允许小写字母、数字和连字符。生成的后端模块放在 modules/lc/<slug>/ 下"
+          rules={[
+            { required: true, message: 'Please enter slug' },
+            { pattern: /^[a-z][a-z0-9-]*$/, message: 'Only lowercase letters, digits, hyphens' },
+          ]}
+          fieldProps={{
+            onInput: (e: any) => {
+              e.target.value = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
+            },
+          }}
         />
         <ProFormTextArea
           name="description"

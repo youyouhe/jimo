@@ -369,11 +369,14 @@ export class AutoCodeDto {
   force?: boolean = false;
 
   @ApiPropertyOptional({
-    description: 'Optional package ID — when set, the generated module menu is placed under the package directory',
+    description: 'Optional package ID — when set, the generated module menu is placed under the package directory and files are grouped under modules/lc/<slug>/',
   })
   @IsOptional()
   @IsUUID()
   packageId?: string;
+
+  /** Resolved at runtime from packageId — not sent by client, injected by service before preview() */
+  _packageSlug?: string;
 
   @ApiPropertyOptional({
     description: 'Generate mock business data after table creation',

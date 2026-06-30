@@ -131,27 +131,27 @@ export class AutocodeService {
   // =========================================================================
 
   preview(dto: AutoCodeDto): Record<string, string> {
-    const n = deriveNames(dto.tableName);
+    const n = deriveNames(dto.tableName, dto._packageSlug);
     const files: Record<string, string> = {};
 
-    files[`release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`] = generateSchema(dto);
+    files[`release/jimo/apps/server/src/db/schema/lc-${n.kebabName}.ts`] = generateSchema(dto);
 
     const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
 
-    files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`] = generateCreateDto(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`] = generateQueryDto(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`] = generateUpdateDto(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`] = generateService(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`] = generateController(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`] = generateModule(activeDto);
+    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`] = generateCreateDto(activeDto);
+    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`] = generateQueryDto(activeDto);
+    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`] = generateUpdateDto(activeDto);
+    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`] = generateService(activeDto);
+    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`] = generateController(activeDto);
+    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`] = generateModule(activeDto);
 
     // Table-level L2 contract specs (auto-generated; gated by RUN_L2_DB=1 at runtime).
-    files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.contract.spec.ts`] = generateServiceContractSpec(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.http.contract.spec.ts`] = generateHttpContractSpec(activeDto);
+    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.contract.spec.ts`] = generateServiceContractSpec(activeDto);
+    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.http.contract.spec.ts`] = generateHttpContractSpec(activeDto);
 
     if (dto.agentConfig?.enabled) {
-      files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`] = generateAgentService(activeDto);
-      files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`] = generateAgentModule(activeDto);
+      files[`release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.service.ts`] = generateAgentService(activeDto);
+      files[`release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module.ts`] = generateAgentModule(activeDto);
     }
 
     if (dto.generateWeb) {
@@ -213,12 +213,26 @@ export class AutocodeService {
 
   async generate(dto: AutoCodeDto): Promise<{ createdFiles: string[] }> {
     this.assertNoApprovalStatusField(dto);
+
+    // Normalize tableName and resolve _packageSlug before preview/deriveNames calls
+    if (dto.tableName && !dto.tableName.startsWith('lc_')) {
+      dto.tableName = 'lc_' + dto.tableName;
+    }
+    if (dto.packageId) {
+      try {
+        const pkg = await this.packageService.findOnePackage(dto.packageId);
+        dto._packageSlug = pkg.slug ?? 'default';
+      } catch { dto._packageSlug = 'default'; }
+    } else {
+      dto._packageSlug = 'default';
+    }
+
     const files = this.preview(dto);
     const projectRoot = resolveProjectRoot();
 
     // Infer dict types for many-to-one display fields
     if (dto.generateWeb) {
-      const n = deriveNames(dto.tableName);
+      const n = deriveNames(dto.tableName, dto._packageSlug);
       const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
       const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
       if ([...relationDictTypes.values()].some((v) => v !== null)) {
@@ -279,6 +293,7 @@ export class AutocodeService {
       }
       await this.db.insert(sysAutoCodeHistories).values({
         packageName,
+        packageSlug: dto._packageSlug ?? 'default',
         tableName: dto.tableName,
         businessDB: (dto as any).businessDB || '',
         templates,
@@ -485,7 +500,7 @@ export class AutocodeService {
 
     if (histories.length === 0) return { nodes: [], edges: [] };
 
-    const componentPaths = histories.map((h) => `./${deriveNames(h.tableName!).kebabName}/index`);
+    const componentPaths = histories.map((h) => `./${deriveNames(h.tableName!, '').kebabName}/index`);
     const menuRows = await this.db
       .select({ component: sysMenus.component, name: sysMenus.name })
       .from(sysMenus)
@@ -493,7 +508,7 @@ export class AutocodeService {
     const menuNameByComponent = new Map(menuRows.map((m) => [m.component, m.name]));
 
     const inputs: ErHistoryInput[] = histories.map((h) => {
-      const componentPath = `./${deriveNames(h.tableName!).kebabName}/index`;
+      const componentPath = `./${deriveNames(h.tableName!, '').kebabName}/index`;
       return {
         tableName: h.tableName!,
         description: menuNameByComponent.get(componentPath) || h.tableName!,
@@ -617,25 +632,38 @@ export class AutocodeService {
     };
 
     try {
+      // Normalize tableName and resolve _packageSlug before any deriveNames calls
+      if (dto.tableName && !dto.tableName.startsWith('lc_')) {
+        dto.tableName = 'lc_' + dto.tableName;
+      }
+      if (dto.packageId) {
+        try {
+          const pkg = await this.packageService.findOnePackage(dto.packageId);
+          dto._packageSlug = pkg.slug ?? 'default';
+        } catch { dto._packageSlug = 'default'; }
+      } else {
+        dto._packageSlug = 'default';
+      }
+
       // Force mode cleanup
       if (dto.force) {
         this.historyService.ensureNotReservedTable(dto.tableName);
-        const n = deriveNames(dto.tableName);
+        const n = deriveNames(dto.tableName, dto._packageSlug);
         const root = resolveProjectRoot();
         const expectedPaths = [
-          `release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
+          `release/jimo/apps/server/src/db/schema/lc-${n.kebabName}.ts`,
+          `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`,
+          `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`,
+          `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`,
+          `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`,
+          `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`,
+          `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`,
+          `release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.service.ts`,
+          `release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module.ts`,
           `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
           `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.contract.spec.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.http.contract.spec.ts`,
+          `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.contract.spec.ts`,
+          `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.http.contract.spec.ts`,
         ];
         const { existsSync } = await import('node:fs');
         for (const p of expectedPaths) {
@@ -643,7 +671,7 @@ export class AutocodeService {
           if (existsSync(fullPath)) await fs.rm(fullPath, { force: true });
         }
         // Remove module dir (including agent/ and dto/ subdirs)
-        const moduleDir = path.join(root, `release/jimo/apps/server/src/modules/${n.kebabSingular}`);
+        const moduleDir = path.join(root, `release/jimo/apps/server/src/modules/${n.moduleDir}`);
         if (existsSync(moduleDir)) {
           try { await fs.rm(path.join(moduleDir, 'dto'), { recursive: true, force: true }); } catch { /* */ }
           try { await fs.rm(path.join(moduleDir, 'agent'), { recursive: true, force: true }); } catch { /* */ }
@@ -664,7 +692,7 @@ export class AutocodeService {
       projectRoot = resolveProjectRoot();
 
       if (dto.generateWeb) {
-        const n = deriveNames(dto.tableName);
+        const n = deriveNames(dto.tableName, dto._packageSlug);
         const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
         const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
         if ([...relationDictTypes.values()].some((v) => v !== null)) {
@@ -766,6 +794,7 @@ export class AutocodeService {
         if (dto.agentConfig?.enabled) asyncTemplates.__agent = this.buildAgentConfigMetadata(dto);
         await this.db.insert(sysAutoCodeHistories).values({
           packageName: asyncPackageName,
+          packageSlug: dto._packageSlug ?? 'default',
           tableName: dto.tableName,
           businessDB: (dto as any).businessDB || '',
           templates: asyncTemplates,
@@ -819,6 +848,20 @@ export class AutocodeService {
       const oldVersion = latest.version ?? 1;
       const changeLog = this.historyService.computeChangeLog(oldFields, dto.fields);
 
+      // Normalize tableName and resolve _packageSlug for update path
+      if (dto.tableName && !dto.tableName.startsWith('lc_')) {
+        dto.tableName = 'lc_' + dto.tableName;
+      }
+      let updatePackageSlug = 'default';
+      if (dto.packageId) {
+        try {
+          const pkg = await this.packageService.findOnePackage(dto.packageId);
+          updatePackageSlug = pkg.slug ?? 'default';
+        } catch { /* */ }
+      } else if ((latest as any).packageSlug) {
+        updatePackageSlug = (latest as any).packageSlug;
+      }
+
       const autoCodeDto: AutoCodeDto = {
         tableName: dto.tableName,
         description: dto.description || '',
@@ -830,6 +873,7 @@ export class AutocodeService {
         visibilityStrategy: dto.visibilityStrategy ?? (latest.visibilityStrategy as any) ?? 'private',
         packageId: dto.packageId,
         force: dto.force,
+        _packageSlug: updatePackageSlug,
       };
 
       // Step 1: Generate
@@ -838,7 +882,7 @@ export class AutocodeService {
       projectRoot = resolveProjectRoot();
 
       if (autoCodeDto.generateWeb) {
-        const n2 = deriveNames(autoCodeDto.tableName);
+        const n2 = deriveNames(autoCodeDto.tableName, autoCodeDto._packageSlug);
         const activeDto2: AutoCodeDto = { ...autoCodeDto, fields: activeFields(autoCodeDto.fields) };
         const relationDictTypes2 = await this.lookupRelationDisplayDictTypes(activeDto2.fields);
         if ([...relationDictTypes2.values()].some((v) => v !== null)) {
@@ -895,6 +939,7 @@ export class AutocodeService {
         if (autoCodeDto.agentConfig?.enabled) updateTemplates.__agent = this.buildAgentConfigMetadata(autoCodeDto);
         await this.db.insert(sysAutoCodeHistories).values({
           packageName: updatePackageName,
+          packageSlug: autoCodeDto._packageSlug ?? 'default',
           tableName: dto.tableName,
           businessDB: '',
           templates: updateTemplates,

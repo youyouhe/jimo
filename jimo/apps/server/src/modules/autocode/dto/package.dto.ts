@@ -20,6 +20,16 @@ export class CreatePackageDto {
   @MaxLength(255)
   name: string = '';
 
+  @ApiProperty({
+    description: 'URL/directory-friendly identifier (lowercase letters, digits, hyphens). Used as modules/lc/<slug>/ directory.',
+    example: 'hr',
+  })
+  @IsNotEmpty()
+  @IsString()
+  @Matches(/^[a-z][a-z0-9-]*$/, { message: 'slug must be lowercase letters, digits, and hyphens' })
+  @MaxLength(64)
+  slug: string = '';
+
   @ApiPropertyOptional({ description: 'Package description' })
   @IsOptional()
   @IsString()
@@ -65,6 +75,13 @@ export class UpdatePackageDto {
   @IsString()
   @MaxLength(255)
   name?: string;
+
+  @ApiPropertyOptional({ description: 'Package slug (directory identifier)' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[a-z][a-z0-9-]*$/, { message: 'slug must be lowercase letters, digits, and hyphens' })
+  @MaxLength(64)
+  slug?: string;
 
   @ApiPropertyOptional({ description: 'Package description' })
   @IsOptional()

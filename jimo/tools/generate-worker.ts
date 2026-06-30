@@ -84,22 +84,22 @@ function resolveProjectRoot(): string {
 
 /** Replicate AutocodeService.preview — pure: dto → files map (no DB). */
 function preview(dto: AutoCodeDto): Record<string, string> {
-  const n = deriveNames(dto.tableName);
+  const n = deriveNames(dto.tableName, dto._packageSlug ?? '');
   const files: Record<string, string> = {};
-  files[`release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`] = generateSchema(dto);
+  files[`release/jimo/apps/server/src/db/schema/lc-${n.kebabName}.ts`] = generateSchema(dto);
   const activeDto = { ...dto, fields: activeFields(dto.fields) };
-  const mod = `release/jimo/apps/server/src/modules/${n.kebabSingular}`;
-  files[`${mod}/dto/create-${n.kebabSingular}.dto.ts`] = generateCreateDto(activeDto);
-  files[`${mod}/dto/query-${n.kebabSingular}.dto.ts`] = generateQueryDto(activeDto);
-  files[`${mod}/dto/update-${n.kebabSingular}.dto.ts`] = generateUpdateDto(activeDto);
-  files[`${mod}/${n.kebabSingular}.service.ts`] = generateService(activeDto);
-  files[`${mod}/${n.kebabSingular}.controller.ts`] = generateController(activeDto);
-  files[`${mod}/${n.kebabSingular}.module.ts`] = generateModule(activeDto);
-  files[`${mod}/${n.kebabSingular}.service.contract.spec.ts`] = generateServiceContractSpec(activeDto);
-  files[`${mod}/${n.kebabSingular}.http.contract.spec.ts`] = generateHttpContractSpec(activeDto);
+  const mod = `release/jimo/apps/server/src/modules/${n.moduleDir}`;
+  files[`${mod}/dto/create-${n.lcKebabSingular}.dto.ts`] = generateCreateDto(activeDto);
+  files[`${mod}/dto/query-${n.lcKebabSingular}.dto.ts`] = generateQueryDto(activeDto);
+  files[`${mod}/dto/update-${n.lcKebabSingular}.dto.ts`] = generateUpdateDto(activeDto);
+  files[`${mod}/${n.lcKebabSingular}.service.ts`] = generateService(activeDto);
+  files[`${mod}/${n.lcKebabSingular}.controller.ts`] = generateController(activeDto);
+  files[`${mod}/${n.lcKebabSingular}.module.ts`] = generateModule(activeDto);
+  files[`${mod}/${n.lcKebabSingular}.service.contract.spec.ts`] = generateServiceContractSpec(activeDto);
+  files[`${mod}/${n.lcKebabSingular}.http.contract.spec.ts`] = generateHttpContractSpec(activeDto);
   if (dto.agentConfig?.enabled) {
-    files[`${mod}/agent/${n.kebabSingular}.agent.service.ts`] = generateAgentService(activeDto);
-    files[`${mod}/agent/${n.kebabSingular}.agent.module.ts`] = generateAgentModule(activeDto);
+    files[`${mod}/agent/${n.lcKebabSingular}.agent.service.ts`] = generateAgentService(activeDto);
+    files[`${mod}/agent/${n.lcKebabSingular}.agent.module.ts`] = generateAgentModule(activeDto);
   }
   if (dto.generateWeb) {
     files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto);
@@ -138,6 +138,11 @@ async function processGenerateJob(sql: any, job: any): Promise<void> {
   const jobId: string = job.id;
   const dto: AutoCodeDto = job.payload?.dto;
   if (!dto) throw new Error('job payload missing dto');
+
+  // Resolve package slug and normalize tableName BEFORE any downstream use
+  dto._packageSlug = await resolvePackageSlug(sql, dto.packageId);
+  if (!dto.tableName.startsWith('lc_')) dto.tableName = 'lc_' + dto.tableName;
+
   const projectRoot = resolveProjectRoot();
   const createdFiles: string[] = [];
 
@@ -146,17 +151,17 @@ async function processGenerateJob(sql: any, job: any): Promise<void> {
     if (isReservedTableName(dto.tableName)) {
       throw new Error(`拒绝删除:表 '${dto.tableName}' 是系统保留名,不会处理其系统文件(保护平台自带资产)。`);
     }
-    const n = deriveNames(dto.tableName);
+    const n = deriveNames(dto.tableName, dto._packageSlug ?? '');
     const expectedPaths = [
-      `release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.contract.spec.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.http.contract.spec.ts`,
+      `release/jimo/apps/server/src/db/schema/lc-${n.kebabName}.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.contract.spec.ts`,
+      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.http.contract.spec.ts`,
       `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
       `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
     ];
@@ -164,13 +169,15 @@ async function processGenerateJob(sql: any, job: any): Promise<void> {
       const fp = path.join(projectRoot, p);
       if (existsSync(fp)) await fs.rm(fp, { force: true });
     }
-    const moduleDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/${n.kebabSingular}`);
+    const moduleDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/${n.moduleDir}`);
     if (existsSync(moduleDir)) {
       for (const sub of ['dto', 'agent']) {
         try { await fs.rmdir(path.join(moduleDir, sub)); } catch { /* */ }
       }
       try { await fs.rmdir(moduleDir); } catch { /* */ }
     }
+    const pkgDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/lc/${n.packageSlug}`);
+    try { await fs.rmdir(pkgDir); } catch { /* */ }
     console.log(`[generate-worker] Force cleanup for '${dto.tableName}'`);
   }
 
@@ -358,6 +365,15 @@ async function resolvePackageParentMenu(sql: any, dto: AutoCodeDto): Promise<str
   } catch {
     return null;
   }
+}
+
+/** Resolve package slug from sys_auto_code_packages by packageId. */
+async function resolvePackageSlug(sql: any, packageId: string | undefined): Promise<string> {
+  if (!packageId) return 'default';
+  try {
+    const rows = await sql`SELECT slug FROM sys_auto_code_packages WHERE id = ${packageId} AND deleted_at IS NULL LIMIT 1`;
+    return rows[0]?.slug || 'default';
+  } catch { return 'default'; }
 }
 
 async function main(): Promise<void> {

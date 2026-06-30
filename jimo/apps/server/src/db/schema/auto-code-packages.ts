@@ -14,6 +14,7 @@ export const sysAutoCodePackages = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     name: varchar('name', { length: 255 }).notNull(),
+    slug: varchar('slug', { length: 64 }).notNull().default(''),
     description: text('description').default(''),
     templates: jsonb('templates').notNull().default({}),
     // ── Generation config snapshot (for "Load from Package") ──
