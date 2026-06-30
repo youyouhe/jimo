@@ -79,75 +79,63 @@ export class EntrypointService {
   }
 
   async updateUmiRoutes(dto: AutoCodeDto, projectRoot: string): Promise<void> {
-    const n = deriveNames(dto.tableName);
-    const umircPath = path.join(projectRoot, 'release/jimo/apps/web/.umirc.ts');
-    let content = await fs.readFile(umircPath, 'utf-8');
+    const n = deriveNames(dto.tableName, (dto as any)._packageSlug ?? '');
+    const generatedRoutesPath = path.join(projectRoot, 'release/jimo/apps/web/src/generated-routes.ts');
 
-    const routePath = n.routePath;
-    // Strip every previously-generated route for this table (main + detail +
-    // map) before re-adding, so regenerating a document module no longer
-    // accumulates duplicate detail routes. See stripTableRouteBlocks().
-    content = stripTableRouteBlocks(content, n.pageDir);
-
-    let routeEntry: string;
-    if (dto.pageType === 'document') {
-      routeEntry = `    {
-      path: '${routePath}',
-      name: '${extractMenuName(dto.description, n.pascalName)}',
-      icon: 'TableOutlined',
-      component: '${n.pageComponentPath}',
-    },
-    {
-      path: '${routePath}/create',
-      component: './${n.pageDir}/detail',
-      layout: false,
-    },
-    {
-      path: '${routePath}/:id',
-      component: './${n.pageDir}/detail',
-      layout: false,
-    },`;
-    } else {
-      routeEntry = `    {
-      path: '${routePath}',
-      name: '${extractMenuName(dto.description, n.pascalName)}',
-      icon: 'TableOutlined',
-      component: '${n.pageComponentPath}',
-    },`;
+    if (!existsSync(generatedRoutesPath)) {
+      await fs.writeFile(generatedRoutesPath,
+        `import type { IRoute } from '@umijs/max';\n\nexport const generatedRoutes: IRoute[] = [\n];\n`,
+        'utf-8',
+      );
     }
 
-    content = content.replace(
-      /    \{ path: '\/\*', redirect: '\/dashboard' \},?/,
-      `${routeEntry}\n    { path: '/*', redirect: '/dashboard' },`,
-    );
+    let content = await fs.readFile(generatedRoutesPath, 'utf-8');
 
-    await fs.writeFile(umircPath, content, 'utf-8');
+    // Strip any existing entries for this table before re-adding (idempotent on re-generate)
+    content = this._stripGeneratedRouteBlock(content, n.routePath);
+
+    const menuName = extractMenuName(dto.description, n.pascalName);
+    let entries: string;
+    if (dto.pageType === 'document') {
+      entries =
+        `  { path: '${n.routePath}', name: '${menuName}', icon: 'TableOutlined', component: '${n.pageComponentPath}' },\n` +
+        `  { path: '${n.routePath}/create', component: './${n.pageDir}/detail', layout: false },\n` +
+        `  { path: '${n.routePath}/:id', component: './${n.pageDir}/detail', layout: false },\n`;
+    } else {
+      entries =
+        `  { path: '${n.routePath}', name: '${menuName}', icon: 'TableOutlined', component: '${n.pageComponentPath}' },\n`;
+    }
+
+    content = content.replace(`];\n`, `${entries}];\n`);
+    await fs.writeFile(generatedRoutesPath, content, 'utf-8');
   }
 
   async updateUmiRoutesMap(dto: AutoCodeDto, projectRoot: string): Promise<void> {
-    const n = deriveNames(dto.tableName);
-    const mapRoutePath = `${n.routePath}-map`;
-    const umircPath = path.join(projectRoot, 'release/jimo/apps/web/.umirc.ts');
-    let content = await fs.readFile(umircPath, 'utf-8');
+    const n = deriveNames(dto.tableName, (dto as any)._packageSlug ?? '');
+    const generatedRoutesPath = path.join(projectRoot, 'release/jimo/apps/web/src/generated-routes.ts');
 
-    const escapedPath = mapRoutePath.replace(/\//g, '\\/');
-    const existingBlock = new RegExp(
-      `\\s*\\{[^{}]*path:\\s*'${escapedPath}'[^{}]*\\},?`,
-      'gs',
-    );
-    content = content.replace(existingBlock, '');
+    if (!existsSync(generatedRoutesPath)) return;
 
-    const routeEntry = `    {
-      path: '${mapRoutePath}',
-      name: '${extractMenuName(dto.description, n.pascalName)}地图',
-      icon: 'EnvironmentOutlined',
-      component: '${n.pageMapComponentPath}',
-    },`;
-    content = content.replace(
-      /    \{ path: '\/\*', redirect: '\/dashboard' \},?/,
-      `${routeEntry}\n    { path: '/*', redirect: '/dashboard' },`,
+    let content = await fs.readFile(generatedRoutesPath, 'utf-8');
+    const mapPath = `${n.routePath}-map`;
+
+    // Remove existing map route if present
+    content = this._stripGeneratedRouteBlock(content, mapPath);
+
+    const entry =
+      `  { path: '${mapPath}', name: '${extractMenuName(dto.description, n.pascalName)}地图', icon: 'EnvironmentOutlined', component: '${n.pageMapComponentPath}' },\n`;
+    content = content.replace(`];\n`, `${entry}];\n`);
+    await fs.writeFile(generatedRoutesPath, content, 'utf-8');
+  }
+
+  /** Remove all route entries whose path starts with the given routePath prefix. */
+  private _stripGeneratedRouteBlock(content: string, routePath: string): string {
+    const escaped = routePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Match full object literals: { path: '/lc/foo', ... },
+    return content.replace(
+      new RegExp(`  \\{[^{}]*path:\\s*'${escaped}(?:/[^']*)?'[^{}]*\\},\\n?`, 'g'),
+      '',
     );
-    await fs.writeFile(umircPath, content, 'utf-8');
   }
 
   // =========================================================================
@@ -156,22 +144,13 @@ export class EntrypointService {
 
   async removeRouteFromUmirc(n: DerivedNames): Promise<void> {
     const projectRoot = resolveProjectRoot();
-    const umircPath = path.join(projectRoot, 'release/jimo/apps/web/.umirc.ts');
-    if (!existsSync(umircPath)) return;
+    const generatedRoutesPath = path.join(projectRoot, 'release/jimo/apps/web/src/generated-routes.ts');
+    if (!existsSync(generatedRoutesPath)) return;
 
-    let content = await fs.readFile(umircPath, 'utf-8');
-    // Remove every route block whose component points into this table's page
-    // directory (index / detail / map / the standalone "-map" route), for any
-    // pageType. Also clears duplicate detail routes left by older
-    // regenerations that only stripped the main route.
-    content = stripTableRouteBlocks(content, n.pageDir);
-
-    content = content.replace(
-      /    \{\n      path: '\/pkg\/[^']+',\n      name: '[^']+',\n      icon: '[^']+',\n      routes: \[\s*\],\n    \},\n?/g,
-      '',
-    );
-
-    await fs.writeFile(umircPath, content, 'utf-8');
+    let content = await fs.readFile(generatedRoutesPath, 'utf-8');
+    content = this._stripGeneratedRouteBlock(content, n.routePath);
+    content = this._stripGeneratedRouteBlock(content, `${n.routePath}-map`);
+    await fs.writeFile(generatedRoutesPath, content, 'utf-8');
   }
 
   async removeSchemaExport(n: DerivedNames): Promise<void> {

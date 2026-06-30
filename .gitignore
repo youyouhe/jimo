@@ -29,6 +29,9 @@ jimo/apps/server/src/modules/lc/
 #
 # ── Generated module barrel ───────────────────────────────────────────────────
 jimo/apps/server/src/generated.module.ts
+#
+# ── Generated routes barrel ───────────────────────────────────────────────────
+jimo/apps/web/src/generated-routes.ts
 
 # Logs
 *.log

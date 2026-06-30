@@ -61,7 +61,8 @@ const SERVER_SRC   = path.join(PROJECT_ROOT, 'release/jimo/apps/server/src');
 const SCHEMA_INDEX = path.join(SERVER_SRC, 'db/schema/index.ts');
 const APP_MODULE   = path.join(SERVER_SRC, 'app.module.ts');
 const GENERATED_MODULE = path.join(SERVER_SRC, 'generated.module.ts');
-const UMIRC        = path.join(PROJECT_ROOT, 'release/jimo/apps/web/.umirc.ts');
+const UMIRC             = path.join(PROJECT_ROOT, 'release/jimo/apps/web/.umirc.ts');
+const GENERATED_ROUTES  = path.join(PROJECT_ROOT, 'release/jimo/apps/web/src/generated-routes.ts');
 
 // ── name derivation (mirrors autocode-field-utils.ts) ────────────────────────
 function toPascalCase(name) {
@@ -209,20 +210,20 @@ async function removeModuleRegistration(n) {
   });
 }
 
+function stripRouteBlock(content, routePath) {
+  const escaped = routePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return content.replace(
+    new RegExp(`  \\{[^{}]*path:\\s*'${escaped}(?:/[^']*)?'[^{}]*\\},\\n?`, 'g'),
+    '',
+  );
+}
+
 async function removeUmiRoutes(n) {
-  await editFile(UMIRC, content => {
-    // Remove route blocks for /lc/<kebabName> and /lc/<kebabName>-map
-    const paths = [`/lc/${n.kebabName}`, `/lc/${n.kebabName}-map`];
-    let out = content;
-    for (const routePath of paths) {
-      // Match a { path: '...', component: '...' } block (with optional trailing comma)
-      const escaped = routePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      out = out.replace(
-        new RegExp(`\\s*\\{[^}]*path:\\s*'${escaped}'[^}]*\\},?`, 'g'),
-        ''
-      );
-    }
-    return out;
+  if (!fs.existsSync(GENERATED_ROUTES)) return;
+  await editFile(GENERATED_ROUTES, content => {
+    content = stripRouteBlock(content, n.routePath);
+    content = stripRouteBlock(content, `${n.routePath}-map`);
+    return content;
   });
 }
 
@@ -458,61 +459,35 @@ async function processEntrypointsJob(sql, job, jobsDir) {
   await writeProgress(2, ENTRYPOINTS_STEPS[2].label);
   if (p.generateWeb !== false) {
     const menuName = extractMenuName(p.description, n.pascalName);
-
-    await editFile(UMIRC, content => {
-      const routePath = n.routePath;
-      const escapedPath = routePath.replace(/\//g, '\\/');
-      const existingBlock = new RegExp(`\\s*\\{[^{}]*path:\\s*'${escapedPath}'[^{}]*\\},?`, 'gs');
-      content = content.replace(existingBlock, '');
-
-      let routeEntry;
-      if (p.pageType === 'document') {
-        routeEntry = `    {
-      path: '${routePath}',
-      name: '${menuName}',
-      icon: 'TableOutlined',
-      component: '${n.pageComponentPath}',
-    },
-    {
-      path: '${routePath}/create',
-      component: '${n.pageDir}/detail',
-      layout: false,
-    },
-    {
-      path: '${routePath}/:id',
-      component: '${n.pageDir}/detail',
-      layout: false,
-    },`;
-      } else {
-        routeEntry = `    {
-      path: '${routePath}',
-      name: '${menuName}',
-      icon: 'TableOutlined',
-      component: '${n.pageComponentPath}',
-    },`;
-      }
-      return content.replace(
-        /    \{ path: '\/\*', redirect: '\/dashboard' \},?/,
-        `${routeEntry}\n    { path: '/*', redirect: '/dashboard' },`,
+    // Bootstrap generated-routes.ts if missing
+    if (!fs.existsSync(GENERATED_ROUTES)) {
+      await writeFile(GENERATED_ROUTES,
+        `import type { IRoute } from '@umijs/max';\n\nexport const generatedRoutes: IRoute[] = [\n];\n`,
+        'utf-8',
       );
+    }
+    await editFile(GENERATED_ROUTES, content => {
+      // Strip existing entries for this table (idempotent)
+      content = stripRouteBlock(content, n.routePath);
+      let entries;
+      if (p.pageType === 'document') {
+        entries =
+          `  { path: '${n.routePath}', name: '${menuName}', icon: 'TableOutlined', component: '${n.pageComponentPath}' },\n` +
+          `  { path: '${n.routePath}/create', component: './${n.pageDir}/detail', layout: false },\n` +
+          `  { path: '${n.routePath}/:id', component: './${n.pageDir}/detail', layout: false },\n`;
+      } else {
+        entries =
+          `  { path: '${n.routePath}', name: '${menuName}', icon: 'TableOutlined', component: '${n.pageComponentPath}' },\n`;
+      }
+      return content.replace(`];\n`, `${entries}];\n`);
     });
 
     if (p.hasPointFields) {
-      const mapRoutePath = `${n.routePath}-map`;
-      await editFile(UMIRC, content => {
-        const escapedMapPath = mapRoutePath.replace(/\//g, '\\/');
-        const existingMapBlock = new RegExp(`\\s*\\{[^{}]*path:\\s*'${escapedMapPath}'[^{}]*\\},?`, 'gs');
-        content = content.replace(existingMapBlock, '');
-        const mapEntry = `    {
-      path: '${mapRoutePath}',
-      name: '${menuName}地图',
-      icon: 'EnvironmentOutlined',
-      component: '${n.pageMapComponentPath}',
-    },`;
-        return content.replace(
-          /    \{ path: '\/\*', redirect: '\/dashboard' \},?/,
-          `${mapEntry}\n    { path: '/*', redirect: '/dashboard' },`,
-        );
+      const mapPath = `${n.routePath}-map`;
+      await editFile(GENERATED_ROUTES, content => {
+        content = stripRouteBlock(content, mapPath);
+        const entry = `  { path: '${mapPath}', name: '${menuName}地图', icon: 'EnvironmentOutlined', component: '${n.pageMapComponentPath}' },\n`;
+        return content.replace(`];\n`, `${entry}];\n`);
       });
     }
   }
