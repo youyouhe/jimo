@@ -16,7 +16,7 @@ import {
   ApiOperation,
   ApiResponse,
 } from '@nestjs/swagger';
-import { SystemService, ServerInfo } from './system.service';
+import { SystemService, ServerInfo, CleanupQueueStatus } from './system.service';
 import { DatabaseInfoDto } from './dto/database-info.dto';
 import { MinioConfigDto, SaveMinioConfigDto } from './dto/minio-config.dto';
 import { CreateSystemConfigDto } from './dto/create-system-config.dto';
@@ -132,5 +132,12 @@ export class SystemController {
   async remove(@Param('id') id: string): Promise<ApiResp<null>> {
     await this.systemService.remove(id);
     return { code: 0, msg: 'success', data: null };
+  }
+
+  @Get('cleanup-queue-status')
+  @ApiOperation({ summary: '清理工作队列状态（pending/running/failed/done 计数 + 近期异常job）' })
+  async getCleanupQueueStatus(): Promise<ApiResp<CleanupQueueStatus>> {
+    const data = await this.systemService.getCleanupQueueStatus();
+    return { code: 0, msg: 'success', data };
   }
 }

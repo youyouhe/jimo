@@ -183,7 +183,19 @@ export class BpmAgentService {
           } else if (chunk.type === 'tool-result') {
             const result = chunk.result;
             // Handle canvas_update specially — emit dedicated event for frontend
-            if (result && typeof result === 'object' && result.type === 'canvas_update') {
+            if (result && typeof result === 'object' && result.type === 'node_add') {
+              write({
+                kind: 'node_add',
+                data: { node: result.node, message: result.message },
+              });
+              write({ kind: 'progress', content: `画布已更新: ${result.message ?? ''}` });
+            } else if (result && typeof result === 'object' && result.type === 'edge_add') {
+              write({
+                kind: 'edge_add',
+                data: { edge: result.edge, message: result.message },
+              });
+              write({ kind: 'progress', content: `画布已更新: ${result.message ?? ''}` });
+            } else if (result && typeof result === 'object' && result.type === 'canvas_update') {
               write({
                 kind: 'canvas_update',
                 data: { lfJson: result.lfJson, message: result.message },

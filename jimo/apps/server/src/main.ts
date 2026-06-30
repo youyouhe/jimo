@@ -22,7 +22,7 @@ async function bootstrap() {
       whitelist: true,
       transform: true,
       forbidNonWhitelisted: false,
-      skipMissingProperties: true,
+      skipMissingProperties: false,
     }),
   );
 

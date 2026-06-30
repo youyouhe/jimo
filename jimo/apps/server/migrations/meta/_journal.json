@@ -71,6 +71,13 @@
       "when": 1782351000000,
       "tag": "0009_add_bpm_process_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1782785000000,
+      "tag": "0010_add_dict_version_snapshot",
+      "breakpoints": true
     }
   ]
 }

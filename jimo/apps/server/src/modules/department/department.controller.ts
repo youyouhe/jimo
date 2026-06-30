@@ -16,6 +16,7 @@ import {
   ApiOperation,
   ApiResponse,
 } from '@nestjs/swagger';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { DepartmentService } from './department.service';
 import { CreateDepartmentDto } from './dto/create-department.dto';
 import { UpdateDepartmentDto } from './dto/update-department.dto';
@@ -25,21 +26,21 @@ import {
   ApiResponse as ApiResp,
   PaginatedResponse,
 } from '@jimo/shared';
-import { SysDepartment } from '../../db/schema/sys-departments';
+import { Departments } from '../../db/schema/departments';
 
-// Backed by the persistent sys_departments table (not an autocode lc_* table).
-// TODO: coordinate a frontend rename from /api/v1/lc/departments -> /api/v1/departments.
-@ApiTags('departments')
+@ApiTags('lc/departments')
 @ApiBearerAuth()
-@Controller('departments')
+@Controller('lc/departments')
 export class DepartmentController {
   constructor(private readonly departmentService: DepartmentService) {}
 
   @Get()
   @ApiOperation({ summary: 'Get paginated list of departments' })
   @ApiResponse({ status: 200, description: 'Returns paginated departments' })
-  async findAll(@Query() query: QueryDepartmentDto): Promise<PaginatedResponse<SysDepartment>> {
-    const data = await this.departmentService.findAll(query);
+  async findAll(@Query() query: QueryDepartmentDto, @CurrentUser() user: { sub: string; roles: string[] }): Promise<PaginatedResponse<Departments>> {
+    const roles = user?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('admin');
+    const data = await this.departmentService.findAll(query, user?.sub, isAdmin);
     return { code: 0, msg: 'success', data };
   }
 
@@ -47,8 +48,10 @@ export class DepartmentController {
   @ApiOperation({ summary: 'Get department by id' })
   @ApiResponse({ status: 200, description: 'Returns the department' })
   @ApiResponse({ status: 404, description: 'Department not found' })
-  async findOne(@Param('id') id: string): Promise<ApiResp<SysDepartment>> {
-    const data = await this.departmentService.findOne(id);
+  async findOne(@Param('id') id: string, @CurrentUser() user: { sub: string; roles: string[] }): Promise<ApiResp<Departments>> {
+    const roles = user?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('admin');
+    const data = await this.departmentService.findOne(id, user?.sub, isAdmin);
     return { code: 0, msg: 'success', data };
   }
 
@@ -57,8 +60,8 @@ export class DepartmentController {
   @ApiOperation({ summary: 'Create a new department' })
   @ApiResponse({ status: 201, description: 'Department created successfully' })
   @ApiResponse({ status: 409, description: 'Unique constraint conflict' })
-  async create(@Body() dto: CreateDepartmentDto): Promise<ApiResp<SysDepartment>> {
-    const data = await this.departmentService.create(dto);
+  async create(@Body() dto: CreateDepartmentDto, @CurrentUser() user: { sub: string }): Promise<ApiResp<Departments>> {
+    const data = await this.departmentService.create(dto, user?.sub);
     return { code: 0, msg: 'success', data };
   }
 
@@ -70,8 +73,11 @@ export class DepartmentController {
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateDepartmentDto,
-  ): Promise<ApiResp<SysDepartment>> {
-    const data = await this.departmentService.update(id, dto);
+    @CurrentUser() user: { sub: string; roles: string[] },
+  ): Promise<ApiResp<Departments>> {
+    const roles = user?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('admin');
+    const data = await this.departmentService.update(id, dto, user?.sub, isAdmin);
     return { code: 0, msg: 'success', data };
   }
 
@@ -79,8 +85,10 @@ export class DepartmentController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Batch delete departments by ids' })
   @ApiResponse({ status: 200, description: 'Departments deleted successfully' })
-  async batchRemove(@Body() dto: BatchDeleteDto): Promise<ApiResp<{ count: number }>> {
-    const data = await this.departmentService.batchRemove(dto.ids);
+  async batchRemove(@Body() dto: BatchDeleteDto, @CurrentUser() user: { sub: string; roles: string[] }): Promise<ApiResp<{ count: number }>> {
+    const roles = user?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('admin');
+    const data = await this.departmentService.batchRemove(dto.ids, user?.sub, isAdmin);
     return { code: 0, msg: 'success', data };
   }
 
@@ -89,8 +97,10 @@ export class DepartmentController {
   @ApiOperation({ summary: 'Delete department by id' })
   @ApiResponse({ status: 200, description: 'Department deleted successfully' })
   @ApiResponse({ status: 404, description: 'Department not found' })
-  async remove(@Param('id') id: string): Promise<ApiResp<null>> {
-    await this.departmentService.remove(id);
+  async remove(@Param('id') id: string, @CurrentUser() user: { sub: string; roles: string[] }): Promise<ApiResp<null>> {
+    const roles = user?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('admin');
+    await this.departmentService.remove(id, user?.sub, isAdmin);
     return { code: 0, msg: 'success', data: null };
   }
 }

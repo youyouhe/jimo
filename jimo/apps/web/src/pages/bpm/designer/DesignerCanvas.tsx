@@ -13,6 +13,8 @@ interface DesignerCanvasProps {
 
 export interface DesignerCanvasHandle {
   lf: LogicFlow | null;
+  /** Replace the entire canvas with new graph data and fit view. */
+  applyGraph: (graph: LfGraphData) => void;
 }
 
 const DesignerCanvas = forwardRef<DesignerCanvasHandle, DesignerCanvasProps>(
@@ -30,12 +32,26 @@ const DesignerCanvas = forwardRef<DesignerCanvasHandle, DesignerCanvasProps>(
     const removeNode = useBpmDesignerStore((s) => s.removeNode);
     const removeEdge = useBpmDesignerStore((s) => s.removeEdge);
 
-    useImperativeHandle(ref, () => ({ lf: lfRef.current }));
+    useImperativeHandle(ref, () => ({
+      lf: lfRef.current,
+      applyGraph: (graph: LfGraphData) => {
+        const lf = lfRef.current;
+        if (!lf) { console.warn('[DesignerCanvas] applyGraph: lf not ready'); return; }
+        try {
+          lf.clearData();
+          (graph.nodes || []).forEach((n) => lf.addNode(n as any));
+          (graph.edges || []).forEach((e) => lf.addEdge(e as any));
+          setTimeout(() => { try { lf.fitView(); } catch { /* ignore */ } }, 80);
+        } catch (err) {
+          console.error('[DesignerCanvas] applyGraph failed:', err);
+        }
+      },
+    }));
 
     const syncToStore = useCallback((lf: LogicFlow) => {
       try {
         const rawData = lf.getGraphRawData();
-        if (rawData) {
+        if (rawData != null) {
           const graph: LfGraphData = {
             nodes: (rawData.nodes || []).map((n: any) => ({
               id: n.id, type: n.type || '', x: n.x || 0, y: n.y || 0,
@@ -57,6 +73,9 @@ const DesignerCanvas = forwardRef<DesignerCanvasHandle, DesignerCanvasProps>(
       const container = containerRef.current;
       if (!container) return;
 
+      // Holds the Delete key handler so cleanup can remove it
+      let onKeyDown: ((e: KeyboardEvent) => void) | null = null;
+
       const init = () => {
         if (lfRef.current) return; // already initialized
         const { offsetWidth, offsetHeight } = container;
@@ -72,11 +91,74 @@ const DesignerCanvas = forwardRef<DesignerCanvasHandle, DesignerCanvasProps>(
           stopScrollGraph: false,
           stopZoomGraph: false,
           animation: true,
+          edgeType: 'bpmn:sequenceFlow',
           plugins: [BpmnAdapter, BPMNElements],
         });
 
         lfRef.current = lf;
-        lf.register(TaskNodeFactory('bpmn:scriptTask', icons.scriptTaskIcon));
+
+        // Re-register task nodes with per-type fill colors.
+        // TaskNodeFactory returns { type, view, model }; we extend model.getNodeStyle() for colors.
+        const coloredTask = (type: string, icon: string, fill: string, stroke: string) => {
+          const base = TaskNodeFactory(type, icon);
+          const BaseModel = base.model;
+          class ColoredModel extends BaseModel {
+            getNodeStyle() {
+              const style = super.getNodeStyle();
+              style.fill = fill;
+              style.stroke = stroke;
+              style.strokeWidth = 1.5;
+              return style;
+            }
+          }
+          return { ...base, model: ColoredModel };
+        };
+
+        lf.register(coloredTask('bpmn:userTask',    icons.userTaskIcon,    '#e8f4ff', '#1677ff') as any);
+        lf.register(coloredTask('bpmn:scriptTask',  icons.scriptTaskIcon,  '#fff7e6', '#fa8c16') as any);
+        lf.register(coloredTask('bpmn:serviceTask', icons.serviceTaskIcon, '#f6ffed', '#52c41a') as any);
+        lf.register(coloredTask('bpmn:manualTask',  icons.manualTaskIcon,  '#fff7e6', '#fa8c16') as any);
+
+        // callActivity: use serviceTaskIcon as placeholder; thick border per BPMN spec
+        const coloredCallActivity = (type: string, icon: string, fill: string, stroke: string) => {
+          const base = TaskNodeFactory(type, icon);
+          const BaseModel = base.model;
+          class CallActivityModel extends BaseModel {
+            getNodeStyle() {
+              const style = super.getNodeStyle();
+              style.fill = fill;
+              style.stroke = stroke;
+              style.strokeWidth = 2.5;
+              return style;
+            }
+          }
+          return { ...base, model: CallActivityModel };
+        };
+        lf.register(coloredCallActivity('bpmn:callActivity', icons.serviceTaskIcon, '#f9f0ff', '#722ed1') as any);
+
+        // Patch registered BPMN node model prototypes for per-type colors.
+        // setTheme() doesn't reach BPMNElements custom models, so we override getNodeStyle directly.
+        const patchNodeColor = (type: string, fill: string, stroke: string) => {
+          const registered = (lf as any).graphModel?.modelMap?.get(type);
+          if (!registered) return;
+          const orig = registered.prototype.getNodeStyle;
+          registered.prototype.getNodeStyle = function () {
+            const style = orig.call(this);
+            style.fill = fill;
+            style.stroke = stroke;
+            style.strokeWidth = 1.5;
+            return style;
+          };
+        };
+
+        patchNodeColor('bpmn:startEvent',              '#f6ffed', '#52c41a');
+        patchNodeColor('bpmn:endEvent',                '#fff1f0', '#ff4d4f');
+        patchNodeColor('bpmn:exclusiveGateway',        '#fffbe6', '#faad14');
+        patchNodeColor('bpmn:parallelGateway',         '#fffbe6', '#faad14');
+        patchNodeColor('bpmn:inclusiveGateway',        '#fffbe6', '#faad14');
+        patchNodeColor('bpmn:subProcess',              '#e6fffb', '#13c2c2');
+        patchNodeColor('bpmn:intermediateCatchEvent',  '#fffbe6', '#faad14');
+        patchNodeColor('bpmn:intermediateThrowEvent',  '#e6f4ff', '#1677ff');
 
         // Always call render() — LogicFlow 2.x requires it to initialize SVG (grid, canvas)
         const storedGraph = useBpmDesignerStore.getState().lfJson;
@@ -84,7 +166,13 @@ const DesignerCanvas = forwardRef<DesignerCanvasHandle, DesignerCanvasProps>(
           lf.render(storedGraph?.nodes?.length ? storedGraph as any : { nodes: [], edges: [] });
         } catch { /* ignore */ }
 
-        lf.on('node:click', ({ data }: any) => { if (data?.id) selectNode(data.id); });
+        lf.on('node:click', ({ data }: any) => {
+          if (data?.id) {
+            selectNode(data.id);
+            // Focus LF container so Delete/Backspace keys work immediately after click
+            (lf as any).container?.focus();
+          }
+        });
         lf.on('edge:click', ({ data }: any) => { if (data?.id) selectNode(data.id); });
         lf.on('blank:click', () => selectNode(null));
         lf.on('node:add', ({ data }: any) => {
@@ -92,19 +180,45 @@ const DesignerCanvas = forwardRef<DesignerCanvasHandle, DesignerCanvasProps>(
             addNode({ id: data.id, type: data.type || '', x: data.x || 0, y: data.y || 0, properties: { ...(data.properties || {}) }, text: data.text });
             selectNode(data.id);
           }
+          syncToStore(lf);
         });
-        lf.on('node:delete', ({ data }: any) => { if (data?.id) removeNode(data.id); });
+        lf.on('node:delete', ({ data }: any) => {
+          if (data?.id) removeNode(data.id);
+          syncToStore(lf);
+        });
         lf.on('edge:add', ({ data }: any) => {
           if (data?.id) addEdge({ id: data.id, type: data.type || '', sourceNodeId: data.sourceNodeId || '', targetNodeId: data.targetNodeId || '', properties: { ...(data.properties || {}) }, text: data.text });
+          syncToStore(lf);
         });
-        lf.on('edge:delete', ({ data }: any) => { if (data?.id) removeEdge(data.id); });
-        lf.on('properties:change', ({ data }: any) => { if (data?.id) updateNode(data.id, data.properties); });
-        lf.on('edge:properties:change', ({ data }: any) => { if (data?.id) updateEdge(data.id, data.properties); });
+        lf.on('edge:delete', ({ data }: any) => {
+          if (data?.id) removeEdge(data.id);
+          syncToStore(lf);
+        });
+        lf.on('node:dnd-drag', () => syncToStore(lf));
+        lf.on('node:mousemove', () => syncToStore(lf));
+        lf.on('properties:change', ({ data }: any) => { if (data?.id) updateNode(data.id, data.properties); syncToStore(lf); });
+        lf.on('edge:properties:change', ({ data }: any) => { if (data?.id) updateEdge(data.id, data.properties); syncToStore(lf); });
         lf.on('transform:change', () => syncToStore(lf));
+        lf.on('graph:updated', () => syncToStore(lf));
+
+        // Supplement Delete key — mousetrap maps 'delete' → 'del' but some
+        // browsers fire key='Delete' which mousetrap misses; handle it manually.
+        const lfContainer = (lf as any).container as HTMLElement | undefined;
+        onKeyDown = (e: KeyboardEvent) => {
+          if (e.key !== 'Delete') return;
+          if ((e.target as HTMLElement)?.tagName === 'INPUT' ||
+              (e.target as HTMLElement)?.tagName === 'TEXTAREA') return;
+          const selected = lf.getSelectElements(true);
+          lf.clearSelectElements();
+          selected.edges.forEach((edge: any) => edge.id && lf.deleteEdge(edge.id));
+          selected.nodes.forEach((node: any) => node.id && lf.deleteNode(node.id));
+        };
+        lfContainer?.addEventListener('keydown', onKeyDown);
 
         if (onLfReady) onLfReady(lf);
         setLfReady(true);
         observer.disconnect(); // stop watching once initialized
+
       };
 
       // Use ResizeObserver to wait for container to get actual size
@@ -127,6 +241,8 @@ const DesignerCanvas = forwardRef<DesignerCanvasHandle, DesignerCanvasProps>(
       return () => {
         observer.disconnect();
         if (lfRef.current) {
+          const c = (lfRef.current as any).container as HTMLElement | undefined;
+          if (onKeyDown) c?.removeEventListener('keydown', onKeyDown);
           try { lfRef.current.destroy(); } catch { /* ignore */ }
           lfRef.current = null;
         }
@@ -157,9 +273,18 @@ const DesignerCanvas = forwardRef<DesignerCanvasHandle, DesignerCanvasProps>(
       e.preventDefault();
       const lf = lfRef.current;
       if (!lf) return;
+      // Focus the LF container so keyboard shortcuts (Backspace/Del) work after drop
+      const lfContainer = (lf as any).container as HTMLElement | undefined;
+      lfContainer?.focus();
 
       const nodeType = e.dataTransfer.getData('application/bpmn-node-type');
       if (!nodeType) return;
+
+      const rawProps = e.dataTransfer.getData('application/bpmn-node-properties');
+      let extraProps: Record<string, unknown> = {};
+      if (rawProps) {
+        try { extraProps = JSON.parse(rawProps); } catch { /* ignore */ }
+      }
 
       const point = lf.getPointByClient({ x: e.clientX, y: e.clientY });
       const canvasPos = point?.canvasOverlayPosition || { x: e.clientX, y: e.clientY };
@@ -169,7 +294,7 @@ const DesignerCanvas = forwardRef<DesignerCanvasHandle, DesignerCanvasProps>(
         type: nodeType,
         x: canvasPos.x,
         y: canvasPos.y,
-        properties: { name: defaultName, nodeType },
+        properties: { name: defaultName, nodeType, ...extraProps },
         text: { x: canvasPos.x, y: canvasPos.y, value: defaultName },
       });
     }, []);
@@ -189,12 +314,19 @@ const DesignerCanvas = forwardRef<DesignerCanvasHandle, DesignerCanvasProps>(
 
 function nodeTypeToDefaultName(nodeType: string): string {
   const map: Record<string, string> = {
-    'bpmn:startEvent': 'Start',
-    'bpmn:endEvent': 'End',
-    'bpmn:userTask': 'User Task',
-    'bpmn:scriptTask': 'Script Task',
-    'bpmn:exclusiveGateway': 'Gateway',
-    'bpmn:parallelGateway': 'Gateway',
+    'bpmn:startEvent':             'Start',
+    'bpmn:endEvent':               'End',
+    'bpmn:userTask':               'User Task',
+    'bpmn:scriptTask':             'Script Task',
+    'bpmn:serviceTask':            'Service Task',
+    'bpmn:manualTask':             'Manual Task',
+    'bpmn:callActivity':           'Call Activity',
+    'bpmn:subProcess':             'Sub Process',
+    'bpmn:exclusiveGateway':       'Gateway',
+    'bpmn:parallelGateway':        'Gateway',
+    'bpmn:inclusiveGateway':       'Gateway',
+    'bpmn:intermediateCatchEvent': 'Timer Event',
+    'bpmn:intermediateThrowEvent': 'Throw Event',
   };
   return map[nodeType] || nodeType;
 }

@@ -11,7 +11,10 @@ const config: Config = {
   coverageDirectory: '../coverage',
   testEnvironment: 'node',
   moduleNameMapper: {
-    '^@jimo/shared$': '<rootDir>/../../packages/shared/src/index.ts',
+    '^@jimo/shared$': '<rootDir>/../../../packages/shared/src/index.ts',
+    // The codebase uses NodeNext-style `.js` relative imports; ts-jest transpiles
+    // in-memory (no emitted .js), so map them back to the .ts source.
+    '^(\\.{1,2}/.*)\\.js$': '$1',
   },
 };
 

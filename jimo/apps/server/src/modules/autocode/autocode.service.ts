@@ -8,54 +8,33 @@ import {
   Logger,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { promises as fs, existsSync } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import { eq, and, isNull, desc, sql, count, inArray, ilike, or } from 'drizzle-orm';
-import { isReservedTableName, RESERVED_TABLE_NAMES, addToReservedNames } from './reserved-names';
+import { eq, and, isNull, desc, sql, count, inArray } from 'drizzle-orm';
 import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
-import {
-  sysAutoCodeHistories,
-  type SysAutoCodeHistory,
-} from '../../db/schema/auto-code-histories';
-import {
-  sysAutoCodePackages,
-  type SysAutoCodePackage,
-} from '../../db/schema/auto-code-packages';
-import { sysMenus } from '../../db/schema/menus';
-import { sysRoleMenus } from '../../db/schema/role-menus';
-import { sysRoles } from '../../db/schema/roles';
-import { sysAuthorityBtns } from '../../db/schema/authority-btns';
-import { sysApis } from '../../db/schema/apis';
-import { sysApprovalFlows } from '../../db/schema/sys-approval-flows';
 import { CASBIN_SERVICE_TOKEN, ICasbinService } from '../role/role.service';
 import { DictionaryDetailService } from '../dictionary-detail/dictionary-detail.service';
 import { EncodingRuleService } from '../encoding-rule/encoding-rule.service';
-import { fakerZH_CN as faker } from '@faker-js/faker';
 import { AutoCodeDto, AutoCodeField } from './dto/autocode.dto';
 import { UpdateModuleDto } from './dto/update-module.dto';
 import { CreatePackageDto, UpdatePackageDto, SaveFromConfigDto } from './dto/package.dto';
 import { buildErGraph, type ErGraph, type ErHistoryInput } from './er-graph.util';
+import { resolveProjectRoot } from './autocode.utils';
 
-// Re-export job types for backward compatibility with autocode.controller.ts
+// Re-export job types for backward compatibility
 export type { GenerateJobStatus, GenerateStep, GenerateStepStatus } from './autocode-field-utils';
 
 // Pure helpers
 import {
   toKebabCase,
-  singularize,
   activeFields,
-  buildCreateTableSql,
   deriveNames,
-  generateMockValue,
-  isBusinessColumn,
-  type DerivedNames,
   type GenerateJobStatus,
   type GenerateStep,
   type GenerateStepStatus,
-  type MockCtx,
 } from './autocode-field-utils';
 
-// Backend code generators
+// Code generators
 import {
   generateSchema,
   generateCreateDto,
@@ -67,25 +46,36 @@ import {
   generateAgentService,
   generateAgentModule,
 } from './autocode-backend-generators';
+import { generateServiceContractSpec, generateHttpContractSpec } from './autocode-test-generators';
 
-// Frontend code generators
 import {
   generateFrontendService,
   generateFrontendPage,
   generateFrontendDocumentListPage,
   generateFrontendDocumentPage,
+  generateFrontendGridPage,
   generateFrontendMapPage,
 } from './autocode-frontend-generators';
+
+// Extracted services
+import { ReservedNamesService } from './reserved-names.service';
+import { MockDataService } from './mock-data.service';
+import { EntrypointService } from './entrypoint.service';
+import { MenuService } from './menu.service';
+import { PackageService } from './package.service';
+import { HistoryService } from './history.service';
+
+// Schema imports (for ER graph and approval flows)
+import { sysAutoCodeHistories, type SysAutoCodeHistory } from '../../db/schema/auto-code-histories';
+import { sysGenerateJobs } from '../../db/schema/generate-jobs';
+import { sysAutoCodePackages, type SysAutoCodePackage } from '../../db/schema/auto-code-packages';
+import { sysMenus } from '../../db/schema/menus';
+import { sysApprovalFlows } from '../../db/schema/sys-approval-flows';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * 从 description 中提取菜单显示名。
- * AI 生成的 description 格式约定为「中文名（备注）」，取括号前的部分。
- * 无括号时原样返回（兼容手动填写的 description）。
- */
 function extractMenuName(description: string | undefined, fallback: string): string {
   if (!description) return fallback;
   const paren = description.indexOf('（');
@@ -103,57 +93,74 @@ function extractMenuName(description: string | undefined, fallback: string): str
 export class AutocodeService {
   private readonly logger = new Logger(AutocodeService.name);
 
+  // Step definitions for progress reporting (kept here for async generate/update)
+  static readonly GENERATE_STEPS = [
+    { key: 'generate', label: '正在生成代码...' },
+    { key: 'write', label: '正在写入文件...' },
+    { key: 'schema-sync', label: '正在同步数据库表...' },
+    { key: 'mock-data', label: '正在生成 mock 数据...' },
+    { key: 'menu', label: '正在创建菜单...' },
+    { key: 'history', label: '正在保存历史记录...' },
+    { key: 'entrypoints', label: '正在更新入口文件...' },
+  ] as const;
+
+  static readonly UPDATE_STEPS = [
+    { key: 'generate', label: '正在生成代码...' },
+    { key: 'write', label: '正在覆盖文件...' },
+    { key: 'schema-sync', label: '正在同步数据库...' },
+    { key: 'history', label: '正在保存版本...' },
+    { key: 'entrypoints', label: '正在更新入口文件...' },
+  ] as const;
+
   constructor(
     @Inject(DATABASE_CONNECTION) private readonly db: DrizzleDb,
     @Inject(CASBIN_SERVICE_TOKEN) private readonly casbin: ICasbinService,
     private readonly dictionaryDetailService: DictionaryDetailService,
     private readonly encodingRuleService: EncodingRuleService,
+    // Extracted services
+    private readonly reservedNamesService: ReservedNamesService,
+    private readonly mockDataService: MockDataService,
+    private readonly entrypointService: EntrypointService,
+    private readonly menuService: MenuService,
+    private readonly packageService: PackageService,
+    private readonly historyService: HistoryService,
   ) {}
 
   // =========================================================================
-  // Public API
+  // Preview & Generate (sync)
   // =========================================================================
 
-  /**
-   * Preview: generate all files and return as a map of filepath -> content.
-   * Does NOT write anything to disk.
-   */
   preview(dto: AutoCodeDto): Record<string, string> {
     const n = deriveNames(dto.tableName);
     const files: Record<string, string> = {};
 
-    // For schema: keep removed fields as comments (preserves DB column)
     files[`release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`] = generateSchema(dto);
 
-    // For all business code: exclude removed fields
     const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
 
-    // DTOs
     files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`] = generateCreateDto(activeDto);
     files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`] = generateQueryDto(activeDto);
     files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`] = generateUpdateDto(activeDto);
-
-    // Service
     files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`] = generateService(activeDto);
-
-    // Controller
     files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`] = generateController(activeDto);
-
-    // Module
     files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`] = generateModule(activeDto);
 
-    // Agent service + module (only if agentConfig.enabled)
+    // Table-level L2 contract specs (auto-generated; gated by RUN_L2_DB=1 at runtime).
+    files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.contract.spec.ts`] = generateServiceContractSpec(activeDto);
+    files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.http.contract.spec.ts`] = generateHttpContractSpec(activeDto);
+
     if (dto.agentConfig?.enabled) {
       files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`] = generateAgentService(activeDto);
       files[`release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`] = generateAgentModule(activeDto);
     }
 
-    // Frontend files (only if generateWeb is true)
     if (dto.generateWeb) {
       files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto);
       if (dto.pageType === 'document') {
         files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto);
         files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto);
+      } else if (dto.pageType === 'grid') {
+        files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto);
       } else {
         files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto);
       }
@@ -165,10 +172,6 @@ export class AutocodeService {
     return files;
   }
 
-  /**
-   * Infer dict types for many-to-one relation display fields by querying history records.
-   * Returns a Map keyed by field.name to the dictType string (or null if not dict-backed).
-   */
   private async lookupRelationDisplayDictTypes(fields: AutoCodeField[]): Promise<Map<string, string | null>> {
     const result = new Map<string, string | null>();
     const relationFields = fields.filter((f) => f.type === 'relation' && (f.relationType === 'many-to-one' || f.relationType === 'many-to-many') && f.relationTable);
@@ -192,368 +195,6 @@ export class AutocodeService {
     return result;
   }
 
-  /**
-   * Insert `dto.mockData.count` mock business rows into lc_<tableName> via raw
-   * multi-VALUES INSERT (chunked, ON CONFLICT DO NOTHING). Throws to abort
-   * THIS table's mock when a required relation field has an empty parent
-   * table; callers must catch (the generate pipeline treats it as non-fatal).
-   */
-  private async insertMockData(dto: AutoCodeDto, userId?: string): Promise<void> {
-    const count = dto.mockData?.count ?? 0;
-    if (count <= 0 || !dto.mockData?.enabled) return;
-
-    const tableName = `lc_${dto.tableName}`;
-    const fields = activeFields(dto.fields).filter(
-      (f) => isBusinessColumn(f.name) && (f.type !== 'relation' || f.relationType === 'many-to-one'),
-    );
-
-    if (fields.length === 0) {
-      this.logger.log(` mock: no business columns for '${tableName}', skipping`);
-      return;
-    }
-
-    // 1) Pre-warm context.
-    const dictCache: Record<string, string[]> = {};
-    const parentIds: Record<string, string[]> = {};
-
-    // dict cache: per distinct dictType (status=1 filtered).
-    const dictTypes = new Set(
-      fields.filter((f) => f.type === 'dict' && f.dictType).map((f) => f.dictType!),
-    );
-    for (const dt of dictTypes) {
-      try {
-        const details = await this.dictionaryDetailService.findByDictType(dt);
-        dictCache[dt] = details
-          .filter((d: any) => (d.status ?? 1) === 1 && d.value != null)
-          .map((d: any) => String(d.value));
-      } catch (err: unknown) {
-        this.logger.warn(` mock: failed to load dict '${dt}': ${(err as Error).message}`);
-        dictCache[dt] = [];
-      }
-    }
-
-    // parent ids: per distinct many-to-one relationTable (deleted_at IS NULL).
-    const relTables = new Set(
-      fields
-        .filter((f) => f.type === 'relation' && f.relationType === 'many-to-one' && f.relationTable)
-        .map((f) => f.relationTable!),
-    );
-    for (const rt of relTables) {
-      try {
-        const res = await this.db.execute(
-          sql.raw(`SELECT id FROM "lc_${rt}" WHERE deleted_at IS NULL`),
-        );
-        parentIds[rt] = (res as unknown as any[])
-          .map((r) => r.id)
-          .filter((id): id is string => typeof id === 'string');
-      } catch (err: unknown) {
-        this.logger.warn(` mock: failed to load parent ids for 'lc_${rt}': ${(err as Error).message}`);
-        parentIds[rt] = [];
-      }
-    }
-
-    // Required relation field with empty parent -> abort THIS table's mock.
-    for (const f of fields) {
-      if (
-        f.type === 'relation' &&
-        f.relationType === 'many-to-one' &&
-        f.required &&
-        f.relationTable &&
-        (parentIds[f.relationTable] || []).length === 0
-      ) {
-        throw new Error(
-          `required relation field '${f.name}' has empty parent table 'lc_${f.relationTable}'`,
-        );
-      }
-    }
-
-    // mintCode: builds prefix+date+zero-padded random seq, batch-local unique
-    // via a Set. Does NOT touch sys_encoding_rule_sequences.
-    const codeRules: Record<
-      string,
-      {
-        prefix: string | null;
-        dateFormat: string | null;
-        separator: string;
-        sequenceDigits: number;
-        paddingChar: string;
-      }
-    > = {};
-    const codeUsed: Set<string> = new Set();
-    const mintCode = (field: AutoCodeField): string => {
-      // Try to honor the configured rule's format if ruleId resolves.
-      let prefix = '';
-      let dateFormat: string | null = null;
-      let separator = '';
-      let sequenceDigits = 4;
-      let paddingChar = '0';
-
-      // Synchronous best-effort: ruleId lookup must be done up-front by caller
-      // for true fidelity; here we keep it self-contained with a reasonable
-      // default shape (prefix 'CODE' if no ruleId) so the value always matches
-      // the documented /^<prefix>\d{8}\d+$/ format expectation.
-      if (field.ruleId) {
-        // EncodingRuleService.findOne is async; we cannot await inside this
-        // sync closure. Caller pre-warms resolved rule params below via the
-        // `codeRules` map when ruleId is present.
-        const cached = codeRules[field.ruleId];
-        if (cached) {
-          prefix = cached.prefix ?? '';
-          dateFormat = cached.dateFormat ?? null;
-          separator = cached.separator ?? '';
-          sequenceDigits = cached.sequenceDigits ?? 4;
-          paddingChar = cached.paddingChar ?? '0';
-        }
-      }
-
-      const now = new Date();
-      const yyyy = now.getFullYear();
-      const MM = String(now.getMonth() + 1).padStart(2, '0');
-      const dd = String(now.getDate()).padStart(2, '0');
-      let datePart = '';
-      if (dateFormat === 'yyyyMMdd') datePart = `${yyyy}${MM}${dd}`;
-      else if (dateFormat === 'yyyy') datePart = String(yyyy);
-      else if (dateFormat === 'yyMM') datePart = `${String(yyyy).slice(-2)}${MM}`;
-      else if (dateFormat === 'none' || !dateFormat) datePart = '';
-      else datePart = `${yyyy}${MM}${dd}`;
-
-      // Random sequence, retry on collision against batch-local Set.
-      let code = '';
-      let attempt = 0;
-      do {
-        const seq = faker.number.int({ min: 0, max: Math.pow(10, sequenceDigits) - 1 });
-        const seqPart = String(seq).padStart(sequenceDigits, paddingChar);
-        const parts: string[] = [];
-        if (prefix) parts.push(prefix);
-        if (datePart) parts.push(datePart);
-        parts.push(seqPart);
-        code = parts.join(separator);
-        attempt += 1;
-        if (attempt > 9999) break;
-      } while (codeUsed.has(code));
-      codeUsed.add(code);
-      return code;
-    };
-
-    // Pre-warm code rule params for all code fields (async, before mintCode).
-    const codeRuleIds = new Set(
-      fields.filter((f) => f.type === 'code' && f.ruleId).map((f) => f.ruleId!),
-    );
-    for (const rid of codeRuleIds) {
-      try {
-        const rule: any = await this.encodingRuleService.findOne(rid);
-        codeRules[rid] = {
-          prefix: rule.prefix ?? '',
-          dateFormat: rule.dateFormat ?? null,
-          separator: rule.separator ?? '',
-          sequenceDigits: rule.sequenceDigits ?? 4,
-          paddingChar: rule.paddingChar ?? '0',
-        };
-      } catch (err: unknown) {
-        this.logger.warn(` mock: failed to load encoding rule '${rid}': ${(err as Error).message}`);
-      }
-    }
-
-    const ctx: MockCtx = { dictCache, parentIds, mintCode, usedValues: {} };
-
-    // 2) Build rows.
-    const buildRow = (): Record<string, string | number | boolean | null> => {
-      const row: Record<string, string | number | boolean | null> = {};
-      for (const f of fields) {
-        row[f.name] = generateMockValue(f, ctx);
-      }
-      return row;
-    };
-
-    const rows: Record<string, string | number | boolean | null>[] = [];
-    for (let i = 0; i < count; i += 1) rows.push(buildRow());
-
-    // 3) Build escaped multi-VALUES INSERT, chunked at 100.
-    const cols = (userId
-      ? [...fields.map((f) => `"${f.name}"`), '"owner_id"', '"created_by"']
-      : fields.map((f) => `"${f.name}"`)
-    ).join(', ');
-    const CHUNK_SIZE = 100;
-    let inserted = 0;
-
-    const escapeValue = (v: string | number | boolean | null): string => {
-      if (v === null || v === undefined) return 'NULL';
-      if (typeof v === 'number') return String(v);
-      if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-      return `'${String(v).replace(/'/g, "''").replace(/\0/g, '')}'`;
-    };
-
-    for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
-      const chunk = rows.slice(i, i + CHUNK_SIZE);
-      const valuesSql = chunk
-        .map((row) => {
-          const vals = fields.map((f) => escapeValue(row[f.name] ?? null));
-          if (userId) {
-            vals.push(`'${userId}'::uuid`, `'${userId}'::uuid`);
-          }
-          return `(${vals.join(', ')})`;
-        })
-        .join(', ');
-      const insertSql = `INSERT INTO "${tableName}" (${cols}) VALUES ${valuesSql} ON CONFLICT DO NOTHING`;
-      try {
-        await this.db.execute(sql.raw(insertSql));
-        inserted += chunk.length;
-      } catch (err: unknown) {
-        this.logger.warn(` mock: chunk insert failed for '${tableName}': ${(err as Error).message}`);
-      }
-    }
-
-    // 4) Post-validate and log.
-    try {
-      const res = await this.db.execute(
-        sql.raw(`SELECT COUNT(*)::int AS c FROM "${tableName}" WHERE deleted_at IS NULL`),
-      );
-      const total = (res as unknown as any[])?.[0]?.c ?? '?';
-      this.logger.log(` mock: inserted ${inserted} rows (table '${tableName}' now has ${total} live rows)`);
-    } catch {
-      this.logger.log(` mock: inserted ${inserted} rows into '${tableName}'`);
-    }
-
-    // 5) One-to-many child (detail) tables — insert `count` detail rows per main row,
-    //    linked back via FK. Mirrors the main-table escaping/chunking.
-    const oneToManyFields = activeFields(dto.fields).filter(
-      (f) => f.type === 'relation' && f.relationType === 'one-to-many' && (f.detailFields || []).length > 0,
-    );
-    if (oneToManyFields.length > 0) {
-      // Fetch the main ids we just inserted (latest `count` rows) for FK linkage.
-      let mainIds: string[] = [];
-      try {
-        const idRes = await this.db.execute(
-          sql.raw(`SELECT id FROM "${tableName}" WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ${count}`),
-        );
-        mainIds = (idRes as unknown as any[]).map((r) => r.id);
-      } catch (err: unknown) {
-        this.logger.warn(` mock: failed to fetch main ids for child mock: ${(err as Error).message}`);
-      }
-
-      for (const f of oneToManyFields) {
-        const isExisting = !!(f.relationExistingTable && f.relationTable && f.relationFkColumn);
-        const singularMain = singularize(dto.tableName);
-        const singularField = singularize(f.name);
-        const childTable = isExisting ? `lc_${f.relationTable}` : `lc_${singularMain}_${singularField}`;
-        const fkColumn = isExisting ? (f.relationFkColumn || `${singularMain}_id`) : `${singularMain}_id`;
-        // Child business columns: detailFields minus system cols and the self-referential FK.
-        const childFields = (f.detailFields || []).filter(
-          (df) => isBusinessColumn(df.name) && !(df.type === 'relation' && df.relationTable === dto.tableName),
-        );
-        if (childFields.length === 0 || mainIds.length === 0) continue;
-
-        const childRows: Record<string, string | number | boolean | null>[] = [];
-        for (const mainId of mainIds) {
-          for (let j = 0; j < count; j += 1) {
-            const row: Record<string, string | number | boolean | null> = { [fkColumn]: mainId };
-            for (const cf of childFields) {
-              row[cf.name] = generateMockValue(cf, ctx);
-            }
-            childRows.push(row);
-          }
-        }
-
-        const childColNames = [fkColumn, ...childFields.map((cf) => cf.name)];
-        const childCols = (userId
-          ? [...childColNames.map((c) => `"${c}"`), '"owner_id"', '"created_by"']
-          : childColNames.map((c) => `"${c}"`)
-        ).join(', ');
-        let childInserted = 0;
-        for (let i = 0; i < childRows.length; i += CHUNK_SIZE) {
-          const chunk = childRows.slice(i, i + CHUNK_SIZE);
-          const valuesSql = chunk
-            .map((row) => {
-              const vals = childColNames.map((c) => escapeValue(row[c] ?? null));
-              if (userId) {
-                vals.push(`'${userId}'::uuid`, `'${userId}'::uuid`);
-              }
-              return `(${vals.join(', ')})`;
-            })
-            .join(', ');
-          const insertSql = `INSERT INTO "${childTable}" (${childCols}) VALUES ${valuesSql} ON CONFLICT DO NOTHING`;
-          try {
-            await this.db.execute(sql.raw(insertSql));
-            childInserted += chunk.length;
-          } catch (err: unknown) {
-            this.logger.warn(` mock: child chunk insert failed for '${childTable}': ${(err as Error).message}`);
-          }
-        }
-        this.logger.log(` mock: inserted ${childInserted} detail rows into '${childTable}' (${count} per main row)`);
-
-        // Grandchild (third-level) mock rows — one-to-many within child
-        if (!isExisting) {
-          // Collect inserted child IDs for FK linkage
-          let childIds: string[] = [];
-          try {
-            const childIdRes = await this.db.execute(
-              sql.raw(`SELECT id FROM "${childTable}" WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ${mainIds.length * count}`),
-            );
-            childIds = (childIdRes as unknown as any[]).map((r) => r.id);
-          } catch { /* ignore */ }
-
-          for (const gf of (f.detailFields || [])) {
-            if (gf.type !== 'relation' || gf.relationType !== 'one-to-many') continue;
-            if (!gf.detailFields || gf.detailFields.length === 0) continue;
-
-            const singularGrand = singularize(gf.name);
-            const grandTable = `lc_${singularMain}_${singularField}_${singularGrand}`;
-            const grandFkColumn = `${singularMain}_${singularField}_id`;
-            const grandFields = gf.detailFields.filter(
-              (gdf) => isBusinessColumn(gdf.name) && !(gdf.type === 'relation' && gdf.relationType === 'one-to-many'),
-            );
-            if (grandFields.length === 0 || childIds.length === 0) continue;
-
-            const grandRows: Record<string, string | number | boolean | null>[] = [];
-            for (const childId of childIds) {
-              for (let j = 0; j < count; j += 1) {
-                const row: Record<string, string | number | boolean | null> = { [grandFkColumn]: childId };
-                for (const gdf of grandFields) {
-                  row[gdf.name] = generateMockValue(gdf, ctx);
-                }
-                grandRows.push(row);
-              }
-            }
-
-            const grandColNames = [grandFkColumn, ...grandFields.map((gdf) => gdf.name)];
-            const grandCols = (userId
-              ? [...grandColNames.map((c) => `"${c}"`), '"owner_id"', '"created_by"']
-              : grandColNames.map((c) => `"${c}"`)
-            ).join(', ');
-            let grandInserted = 0;
-            for (let i = 0; i < grandRows.length; i += CHUNK_SIZE) {
-              const chunk = grandRows.slice(i, i + CHUNK_SIZE);
-              const valuesSql = chunk
-                .map((row) => {
-                  const vals = grandColNames.map((c) => escapeValue(row[c] ?? null));
-                  if (userId) {
-                    vals.push(`'${userId}'::uuid`, `'${userId}'::uuid`);
-                  }
-                  return `(${vals.join(', ')})`;
-                })
-                .join(', ');
-              const insertSql = `INSERT INTO "${grandTable}" (${grandCols}) VALUES ${valuesSql} ON CONFLICT DO NOTHING`;
-              try {
-                await this.db.execute(sql.raw(insertSql));
-                grandInserted += chunk.length;
-              } catch (err: unknown) {
-                this.logger.warn(` mock: grandchild chunk insert failed for '${grandTable}': ${(err as Error).message}`);
-              }
-            }
-            this.logger.log(` mock: inserted ${grandInserted} grandchild rows into '${grandTable}' (${count} per child row)`);
-          }
-        }
-      }
-    }
-  }
-
-  /**
-   * Guard: approval state is platform-managed (business_approvals table + BPM),
-   * it must NOT be modeled as a user field on the business table. Reject any
-   * approval-status field up front so the invariant holds even when the AI
-   * generator ignores its prompt guidance. Called from every code-gen entry
-   * point (generate / startGenerate / startUpdate).
-   */
   private assertNoApprovalStatusField(dto: {
     fields: { name?: string; removed?: boolean }[];
     approvalFlow?: { enabled?: boolean };
@@ -573,9 +214,9 @@ export class AutocodeService {
   async generate(dto: AutoCodeDto): Promise<{ createdFiles: string[] }> {
     this.assertNoApprovalStatusField(dto);
     const files = this.preview(dto);
-    const projectRoot = this.resolveProjectRoot();
+    const projectRoot = resolveProjectRoot();
 
-    // Infer dict types for many-to-one display fields and regenerate frontend files with dict-aware templates
+    // Infer dict types for many-to-one display fields
     if (dto.generateWeb) {
       const n = deriveNames(dto.tableName);
       const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
@@ -585,6 +226,8 @@ export class AutocodeService {
         if (dto.pageType === 'document') {
           files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto, relationDictTypes);
           files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto, relationDictTypes);
+        } else if (dto.pageType === 'grid') {
+          files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto, relationDictTypes);
         } else {
           files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
         }
@@ -595,52 +238,41 @@ export class AutocodeService {
     for (const [relativePath, content] of Object.entries(files)) {
       const absolutePath = path.join(projectRoot, relativePath);
       const dir = path.dirname(absolutePath);
-
       await fs.mkdir(dir, { recursive: true });
-
-      // Check if file already exists
       try {
         await fs.access(absolutePath);
         throw new ConflictException(
           `File already exists: ${relativePath}. Remove the existing file first or use a different table name.`,
         );
       } catch (err: unknown) {
-        if (err instanceof ConflictException) {
-          throw err;
-        }
-        // File does not exist, proceed
+        if (err instanceof ConflictException) throw err;
       }
-
       await fs.writeFile(absolutePath, content, 'utf-8');
       createdFiles.push(relativePath);
     }
 
     const hasPointFields = dto.generateWeb && dto.fields.some((f) => !f.removed && f.type === 'point');
 
-    // Update entry points
-    await this.updateSchemaIndex(dto, projectRoot);
-    await this.updateAppModule(dto, projectRoot);
+    await this.entrypointService.updateSchemaIndex(dto, projectRoot);
+    await this.entrypointService.updateAppModule(dto, projectRoot);
     if (dto.generateWeb) {
-      await this.updateUmiRoutes(dto, projectRoot);
+      await this.entrypointService.updateUmiRoutes(dto, projectRoot);
       if (hasPointFields) {
-        await this.updateUmiRoutesMap(dto, projectRoot);
+        await this.entrypointService.updateUmiRoutesMap(dto, projectRoot);
       }
     }
 
-    // Resolve package context (needed for both history and menu)
     let menuParentId: string | null = null;
     let packageName = '';
     if (dto.packageId) {
       try {
-        const pkg = await this.findOnePackage(dto.packageId);
+        const pkg = await this.packageService.findOnePackage(dto.packageId);
         menuParentId = pkg.menuId ?? null;
         packageName = pkg.name;
-      } catch { /* package not found — skip parent */ }
+      } catch { /* package not found */ }
     }
 
-    // Auto-save history record
     try {
-      // Build templates with agent config metadata when enabled
       const templates: Record<string, any> = { ...files };
       if (dto.agentConfig?.enabled) {
         templates.__agent = this.buildAgentConfigMetadata(dto);
@@ -655,45 +287,37 @@ export class AutocodeService {
         hasAgent: dto.agentConfig?.enabled ?? false,
       });
     } catch (historyErr: unknown) {
-      // History save failure should not block the generate result
       this.logger.error('[AutocodeService] Failed to save generation history:', historyErr);
     }
 
-    // Auto-sync schema to database via drizzle-kit push (patched with DRIZZLE_SILENT=1)
     try {
       const { exec } = await import('node:child_process');
       const { promisify } = await import('node:util');
       const execAsync = promisify(exec);
       const serverDir = path.join(projectRoot, 'release', 'jimo', 'apps', 'server');
       await execAsync('npx --no-install drizzle-kit push --force', {
-        cwd: serverDir,
-        timeout: 30000,
+        cwd: serverDir, timeout: 30000,
         env: { ...process.env, DRIZZLE_SILENT: '1' },
       });
-      this.logger.log(` drizzle-kit push (silent) completed for '${dto.tableName}'`);
+      this.logger.log(` drizzle-kit push completed for '${dto.tableName}'`);
     } catch (pushErr: unknown) {
       this.logger.error(` drizzle-kit push FAILED for '${dto.tableName}':`, pushErr);
     }
 
-    // 防线2: push 后校验物理表列是否与 schema 期望对齐(防止 push 静默跳过破坏性变更导致 schema↔DB 脱节)
     await this.verifyPhysicalSchema(dto.tableName, dto.fields);
 
-    // Auto-create menu record in sys_menus + assign to admin roles
     try {
-      const tableMenuId = await this.autoCreateMenu(dto, menuParentId);
+      await this.menuService.autoCreateMenu(dto, menuParentId);
       if (hasPointFields) {
-        await this.autoCreateMapMenu(dto, menuParentId);
+        await this.menuService.autoCreateMapMenu(dto, menuParentId);
       }
     } catch (menuErr: unknown) {
       this.logger.error(` Auto-create menu FAILED for '${dto.tableName}':`, menuErr);
     }
 
-    // If approval flow enabled, write the per-type chain config (sys_approval_flows)
     if (dto.approvalFlow?.enabled) {
       try {
         await this.upsertApprovalFlowConfig(dto.tableName, dto.approvalFlow.defaultChain ?? []);
-        const chain = dto.approvalFlow.defaultChain?.length ? dto.approvalFlow.defaultChain : ['deptHead'];
-        this.logger.log(` approval flow enabled for '${dto.tableName}' (chain=${chain.join(',')})`);
       } catch (afErr: unknown) {
         this.logger.error(` approval flow config write FAILED for '${dto.tableName}':`, afErr);
       }
@@ -702,1029 +326,100 @@ export class AutocodeService {
     return { createdFiles };
   }
 
-  /**
-   * Build agent config metadata for storage in history templates.
-   * Used by ai-generator.service.ts streamChatToRes to dynamically construct entity tools.
-   */
-  private buildAgentConfigMetadata(dto: AutoCodeDto): Record<string, any> {
-    const activeFieldsArray = activeFields(dto.fields);
-
-    // Build explicit FK map for sub-table uuid columns → referenced lc_ table.
-    // Schema: { [subLcTable]: { [fkColumn]: referencedLcTable } }
-    // Used by entity agent to inject read-only tools for referenced tables without guessing.
-    const subTableFkMap: Record<string, Record<string, string>> = {};
-    for (const f of activeFieldsArray) {
-      if (f.type !== 'relation' || f.relationType !== 'one-to-many') continue;
-      if (!f.detailFields || f.detailFields.length === 0) continue;
-      const singularMain = singularize(dto.tableName);
-      const singularField = singularize(f.name);
-      const subLcTable = (f.relationExistingTable && f.relationTable)
-        ? `lc_${f.relationTable}`
-        : `lc_${singularMain}_${singularField}`;
-      const fkMap: Record<string, string> = {};
-      // Parent FK: the column in the sub-table that points back to the master table.
-      // Stored explicitly so the entity agent never has to guess the column name.
-      const isExistingSubTable = !!(f.relationExistingTable && f.relationTable);
-      const parentFkCol = isExistingSubTable ? (f.relationFkColumn || `${singularMain}_id`) : `${singularMain}_id`;
-      fkMap[parentFkCol] = `lc_${dto.tableName}`;
-      for (const df of f.detailFields) {
-        if (df.type === 'relation' && (df.relationType === 'many-to-one' || df.relationType === 'many-to-many') && df.relationTable) {
-          // e.g. account_id → lc_accounts
-          fkMap[df.name] = `lc_${df.relationTable}`;
-        }
-      }
-      subTableFkMap[subLcTable] = fkMap;
-    }
-
-    return {
-      tableName: dto.tableName,
-      visibilityStrategy: dto.visibilityStrategy ?? 'private',
-      enabledTools: dto.agentConfig?.tools ?? ['query', 'create', 'update', 'delete', 'search', 'mock'],
-      systemPrompt: dto.agentConfig?.systemPrompt ?? '',
-      creatableFields: activeFieldsArray.filter(
-        (f) => f.creatable && !(f.type === 'relation' && f.relationType === 'one-to-many') && f.type !== 'code',
-      ),
-      editableFields: activeFieldsArray.filter(
-        (f) => f.editable && !(f.type === 'relation' && f.relationType === 'one-to-many'),
-      ),
-      searchableFields: activeFieldsArray.filter((f) => f.searchable),
-      subTableFkMap,
-    };
-  }
-
-  /** Upsert the per-business-type approval chain config (sys_approval_flows). */
-  private async upsertApprovalFlowConfig(tableName: string, defaultChain: string[]): Promise<void> {
-    const chain = defaultChain.length ? defaultChain : ['deptHead'];
-    const config = { defaultChain: chain };
-    const existing = await this.db
-      .select()
-      .from(sysApprovalFlows)
-      .where(and(eq(sysApprovalFlows.businessType, tableName), isNull(sysApprovalFlows.deletedAt)))
-      .limit(1);
-    if (existing.length > 0) {
-      await this.db
-        .update(sysApprovalFlows)
-        .set({ name: `${tableName} 审批`, config, enabled: true, updatedAt: new Date() })
-        .where(eq(sysApprovalFlows.id, existing[0]!.id));
-    } else {
-      await this.db
-        .insert(sysApprovalFlows)
-        .values({ businessType: tableName, name: `${tableName} 审批`, config, enabled: true });
-    }
-  }
-
   // =========================================================================
-  // Async generate with progress tracking
+  // Async generate / update
   // =========================================================================
 
-  /** Step definitions for progress reporting */
-  private static readonly GENERATE_STEPS = [
-    { key: 'generate', label: '正在生成代码...' },
-    { key: 'write', label: '正在写入文件...' },
-    { key: 'schema-sync', label: '正在同步数据库表...' },
-    { key: 'mock-data', label: '正在生成 mock 数据...' },
-    { key: 'menu', label: '正在创建菜单...' },
-    { key: 'history', label: '正在保存历史记录...' },
-    { key: 'entrypoints', label: '正在更新入口文件...' },
-  ] as const;
-
-  private static readonly DELETE_STEPS = [
-    { key: 'files', label: '正在删除文件...' },
-    { key: 'route', label: '正在移除路由...' },
-    { key: 'schema-export', label: '正在移除 Schema 导出...' },
-    { key: 'module-reg', label: '正在移除模块注册...' },
-    { key: 'menus', label: '正在删除菜单...' },
-    { key: 'drop-table', label: '正在删除数据库表...' },
-    { key: 'history', label: '正在清理历史记录...' },
-  ] as const;
-
-  private static readonly UPDATE_STEPS = [
-    { key: 'generate', label: '正在生成代码...' },
-    { key: 'write', label: '正在覆盖文件...' },
-    { key: 'schema-sync', label: '正在同步数据库...' },
-    { key: 'history', label: '正在保存版本...' },
-    { key: 'entrypoints', label: '正在更新入口文件...' },
-  ] as const;
-
-  /** Directory for persisting job status (survives nest --watch restarts) */
-  private get jobsDir(): string {
-    return path.join(this.resolveProjectRoot(), '.tmp', 'generate-jobs');
-  }
-
-  // =========================================================================
-  // Async delete with progress tracking
-  // =========================================================================
-
-  /**
-   * Enqueue entry-point file modifications (app.module.ts, schema/index.ts, .umirc.ts)
-   * to the cleanup-worker process. The worker runs outside NestJS and is immune to
-   * nest --watch restarts triggered by app.module.ts writes. NestJS marks Step 7 as
-   * 'running' then returns immediately; the worker writes 'completed' status when done.
-   */
-  private async enqueueEntrypointJob(
-    jobId: string,
-    dto: AutoCodeDto,
-    hasPointFields: boolean,
-    createdFiles: string[] = [],
-  ): Promise<void> {
-    // Cancel any stale cleanup jobs for this table name. A previous delete may
-    // have enqueued a cleanup job that hasn't been processed yet. If the worker
-    // picks it up after the new table is created, it will DROP the fresh table.
-    try {
-      await this.db.execute(sql`
-        UPDATE sys_cleanup_jobs
-        SET status = 'failed', finished_at = NOW(), error = 'Superseded by regenerate'
-        WHERE table_name = ${dto.tableName}
-          AND job_type = 'cleanup'
-          AND status IN ('pending', 'running')
-      `);
-    } catch { /* best-effort */ }
-
-    const n = deriveNames(dto.tableName);
-    const payload = {
-      jobId,
-      tableName: dto.tableName,
-      description: dto.description,
-      generateWeb: dto.generateWeb ?? true,
-      hasPointFields,
-      agentEnabled: dto.agentConfig?.enabled ?? false,
-      pageType: dto.pageType ?? 'list',
-      kebabName: n.kebabName,
-      kebabSingular: n.kebabSingular,
-      pascalSingular: n.pascalSingular,
-      routePath: n.routePath,
-      pageDir: n.pageDir,
-      pageComponentPath: n.pageComponentPath,
-      pageMapComponentPath: n.pageMapComponentPath,
-      createdFiles,
-    };
-
-    await this.db.execute(sql`
-      INSERT INTO sys_cleanup_jobs (id, table_name, status, job_type, payload)
-      VALUES (
-        gen_random_uuid(),
-        ${dto.tableName},
-        'pending',
-        'entrypoints',
-        ${JSON.stringify(payload)}::jsonb
-      )
-    `);
-
-    this.logger.log(`[AutocodeService] Enqueued entrypoints job for '${dto.tableName}' (jobId=${jobId})`);
-  }
-
-  /**
-   * Start async deletion with progress tracking.
-   * Enqueues a row in sys_cleanup_jobs and returns a jobId immediately.
-   * The cleanup-worker.mjs process picks it up independently of NestJS
-   * watch restarts, preventing TS compilation errors from aborting cleanup.
-   */
-  async startDeleteHistory(id: string, cascade = false): Promise<string> {
-    const history = await this.findOneHistory(id);
-    const jobId = randomUUID();
-
-    // Write initial "queued" status so the polling endpoint works immediately
-    const steps = AutocodeService.DELETE_STEPS.map((s) => ({
-      key: s.key,
-      label: s.label,
-      status: 'pending' as const,
-    }));
-    await this.writeJobStatus(jobId, {
-      jobId,
-      status: 'processing',
-      steps,
-      progress: 0,
-      currentStepLabel: '已加入清理队列，等待 cleanup-worker 处理...',
-    });
-
-    // Enqueue to sys_cleanup_jobs — worker picks this up within 2 s
-    await this.db.execute(sql`
-      INSERT INTO sys_cleanup_jobs (id, table_name, status, payload)
-      VALUES (
-        gen_random_uuid(),
-        ${history.tableName},
-        'pending',
-        ${JSON.stringify({ historyId: id, cascade, jobId })}::jsonb
-      )
-    `);
-
-    this.logger.log(`[Delete] Enqueued cleanup job for table="${history.tableName}" jobId=${jobId}`);
-    return jobId;
-  }
-
-  private async executeDeleteAsync(jobId: string, historyId: string, cascade = false): Promise<void> {
-    const totalSteps = AutocodeService.DELETE_STEPS.length;
-
-    const updateStep = async (
-      stepIndex: number,
-      stepStatus: GenerateStepStatus,
-      message?: string,
-    ) => {
-      const steps: GenerateStep[] = AutocodeService.DELETE_STEPS.map((s, i) => ({
-        key: s.key,
-        label: s.label,
-        status: i < stepIndex
-          ? 'completed' as const
-          : i === stepIndex
-            ? stepStatus
-            : 'pending' as const,
-      }));
-
-      const progress = stepStatus === 'completed'
-        ? Math.round(((stepIndex + 1) / totalSteps) * 100)
-        : Math.round(((stepIndex + 0.5) / totalSteps) * 100);
-
-      await this.writeJobStatus(jobId, {
-        jobId,
-        status: stepStatus === 'failed' ? 'failed' : 'processing',
-        steps,
-        progress,
-        currentStepLabel: message || AutocodeService.DELETE_STEPS[stepIndex]!.label,
-        error: stepStatus === 'failed' ? message : undefined,
-      });
-    };
-
-    try {
-      const history = await this.findOneHistory(historyId);
-      const tableName = history.tableName;
-      this.ensureNotReservedTable(tableName);
-      const n = deriveNames(tableName);
-      const projectRoot = this.resolveProjectRoot();
-      const dbTableName = `lc_${tableName}`;
-
-      // Parse fields to find one-to-many child tables for cascade drop
-      const historyFields: AutoCodeField[] = (history.fields as AutoCodeField[]) || [];
-      const oneToManyFields = historyFields.filter(
-        (f) => f.type === 'relation' && f.relationType === 'one-to-many'
-      );
-
-      const deletedFiles: string[] = [];
-      let droppedTable = false;
-      let removedMenus = 0;
-
-      // Step 1: Delete generated files on disk
-      await updateStep(0, 'running');
-      const expectedPaths = [
-        `release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`,
-        `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-        `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-        `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-        `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-        `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-        `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-        `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
-        `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
-        `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
-        `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
-      ];
-      for (const p of expectedPaths) {
-        const fullPath = path.join(projectRoot, p);
-        if (existsSync(fullPath)) {
-          await fs.rm(fullPath, { force: true });
-          deletedFiles.push(p);
-        }
-      }
-      // Remove module directory if empty
-      const moduleDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/${n.kebabSingular}`);
-      if (existsSync(moduleDir)) {
-        try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
-        try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
-      }
-      const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.pageDir}`);
-      if (existsSync(pageDir)) {
-        try { await fs.rmdir(pageDir); } catch { /* not empty */ }
-      }
-      await updateStep(0, 'completed');
-
-      // Step 2: Remove route from .umirc.ts
-      await updateStep(1, 'running');
-      await this.removeRouteFromUmirc(n);
-      await updateStep(1, 'completed');
-
-      // Step 3: Remove schema export from db/schema/index.ts
-      await updateStep(2, 'running');
-      await this.removeSchemaExport(n);
-      await this.removeDanglingSchemaImports(n);
-      await updateStep(2, 'completed');
-
-      // Step 4: Remove module registration from app.module.ts (triggers nest --watch restart)
-      await updateStep(3, 'running');
-      await this.removeModuleRegistration(n);
-      await updateStep(3, 'completed');
-
-      // Step 5: Remove menu entries (including button children)
-      await updateStep(4, 'running');
-      const componentPath = `${n.pageComponentPath}`;
-      // Also match legacy format (pre-lc/ migration: ./\${kebab}/index) for backward compat
-      const legacyComponentPath = `./${n.kebabName}/index`;
-      const menuRows = await this.db
-        .select({ id: sysMenus.id, name: sysMenus.name, path: sysMenus.path })
-        .from(sysMenus)
-        .where(and(
-          or(
-            eq(sysMenus.component, componentPath),
-            eq(sysMenus.component, legacyComponentPath),
-          ),
-          isNull(sysMenus.deletedAt),
-        ));
-      if (menuRows.length > 0) {
-        const pageMenuIds = menuRows.map((m) => m.id);
-        const btnChildren = await this.db
-          .select({ id: sysMenus.id })
-          .from(sysMenus)
-          .where(
-            and(
-              inArray(sysMenus.parentId, pageMenuIds),
-              eq(sysMenus.menuType, 3),
-              isNull(sysMenus.deletedAt),
-            ),
-          );
-        const allMenuIds = [...pageMenuIds, ...btnChildren.map((b) => b.id)];
-        await this.db
-          .delete(sysAuthorityBtns)
-          .where(inArray(sysAuthorityBtns.menuId, allMenuIds));
-        await this.db.delete(sysRoleMenus).where(inArray(sysRoleMenus.menuId, allMenuIds));
-        await this.db.delete(sysMenus).where(inArray(sysMenus.id, allMenuIds));
-        removedMenus = allMenuIds.length;
-
-        // Remove sys_apis entries and Casbin policies for this module
-        const apiGroup = `lc/${n.kebabName}`;
-        const apiRows = await this.db
-          .select({ path: sysApis.path, method: sysApis.method })
-          .from(sysApis)
-          .where(and(eq(sysApis.apiGroup, apiGroup), isNull(sysApis.deletedAt)));
-        for (const api of apiRows) {
-          await this.casbin.removeFilteredPolicy(1, api.path);
-        }
-        await this.db
-          .update(sysApis)
-          .set({ deletedAt: sql`NOW()` })
-          .where(and(eq(sysApis.apiGroup, apiGroup), isNull(sysApis.deletedAt)));
-      }
-      await updateStep(4, 'completed');
-
-      // Step 6: Drop the database table (potentially slow)
-      await updateStep(5, 'running', '正在删除数据库表...');
-      try {
-        const tableExists = await this.db.execute(sql`
-          SELECT COUNT(*) as cnt FROM information_schema.tables
-          WHERE table_schema = 'public' AND table_name = ${dbTableName}
-        `);
-        if ((tableExists[0] as any)?.cnt > 0) {
-          if (cascade) {
-            const fkRows = await this.db.execute(sql`
-              SELECT DISTINCT kcu.table_name
-              FROM information_schema.table_constraints tc
-              JOIN information_schema.key_column_usage kcu
-                ON tc.constraint_name = kcu.constraint_name
-                AND tc.table_schema = kcu.table_schema
-              JOIN information_schema.constraint_column_usage ccu
-                ON tc.constraint_name = ccu.constraint_name
-                AND tc.table_schema = ccu.table_schema
-              WHERE tc.constraint_type = 'FOREIGN KEY'
-                AND ccu.table_name = ${dbTableName}
-                AND tc.table_schema = 'public'
-            `);
-            const refTables = (fkRows as any[]).map((r: any) => r.table_name as string);
-            for (const refDbTable of refTables) {
-              const refTableName = refDbTable.startsWith('lc_') ? refDbTable.slice(3) : refDbTable;
-              try {
-                const result = await this.cleanupTableSoft(refTableName, projectRoot);
-                deletedFiles.push(...result.deletedFiles);
-                removedMenus += result.removedMenus;
-              } catch { /* continue with drop even if file cleanup fails */ }
-              try {
-                await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${refDbTable}" CASCADE`));
-              } catch { /* ignore drop failures */ }
-              try {
-                await this.db
-                  .delete(sysAutoCodeHistories)
-                  .where(eq(sysAutoCodeHistories.tableName, refTableName));
-              } catch { /* ignore */ }
-            }
-          }
-          // Drop child detail tables for one-to-many relations.
-          // Primary path: use fields from history record to enumerate child tables.
-          for (const field of oneToManyFields) {
-            const isExisting = !!(field.relationExistingTable && field.relationTable && field.relationFkColumn);
-            if (isExisting) continue;
-            const singularMain = singularize(tableName);
-            const singularField = singularize(field.name);
-            const childDbName = `lc_${singularMain}_${singularField}`;
-            // Drop grandchild tables first (one-to-many within child)
-            for (const gf of (field.detailFields || [])) {
-              if (gf.type !== 'relation' || gf.relationType !== 'one-to-many') continue;
-              const singularGrand = singularize(gf.name);
-              const grandDbName = `lc_${singularMain}_${singularField}_${singularGrand}`;
-              try {
-                await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${grandDbName}" CASCADE`));
-              } catch { /* Grandchild table may not exist, ignore */ }
-            }
-            try {
-              await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${childDbName}" CASCADE`));
-            } catch { /* Child table may not exist, ignore */ }
-          }
-          // Fallback path: when history.fields is null (old records), discover child tables
-          // from information_schema using the lc_<singular>_ prefix convention and drop them all.
-          if (oneToManyFields.length === 0) {
-            try {
-              const singularMain = singularize(tableName);
-              const childPrefix = `lc_${singularMain}_`;
-              const orphanRows = await this.db.execute(sql`
-                SELECT table_name FROM information_schema.tables
-                WHERE table_schema = 'public'
-                  AND table_name LIKE ${childPrefix + '%'}
-                  AND table_name != ${dbTableName}
-              `);
-              for (const row of orphanRows as any[]) {
-                await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${row.table_name}" CASCADE`));
-                this.logger.log(` fallback: dropped orphan child table '${row.table_name}'`);
-              }
-            } catch (err: unknown) {
-              this.logger.warn(` fallback child-table scan failed: ${(err as Error).message}`);
-            }
-          }
-          await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${dbTableName}" CASCADE`));
-          droppedTable = true;
-        }
-      } catch { /* Table may not exist or drop failed */ }
-      await updateStep(5, 'completed');
-
-      // Step 7: Delete all history records for this table
-      await updateStep(6, 'running');
-      await this.db
-        .delete(sysAutoCodeHistories)
-        .where(eq(sysAutoCodeHistories.tableName, tableName));
-      await updateStep(6, 'completed');
-
-      // Write final completed status
-      await this.writeJobStatus(jobId, {
-        jobId,
-        status: 'completed',
-        steps: AutocodeService.DELETE_STEPS.map((s) => ({
-          key: s.key,
-          label: s.label,
-          status: 'completed' as const,
-        })),
-        progress: 100,
-        currentStepLabel: '删除完成',
-        result: { deletedFiles, droppedTable, removedMenus },
-        completedAt: new Date().toISOString(),
-      });
-
-      setTimeout(() => this.deleteJobFile(jobId), 5 * 60 * 1000);
-    } catch (err: any) {
-      const errorMsg = err?.message || 'Unknown error during deletion';
-      this.logger.error(` Delete job ${jobId} FAILED:`, errorMsg);
-
-      await this.writeJobStatus(jobId, {
-        jobId,
-        status: 'failed',
-        steps: AutocodeService.DELETE_STEPS.map(() => ({
-          key: '',
-          label: '',
-          status: 'pending' as const,
-        })),
-        progress: 0,
-        currentStepLabel: `失败: ${errorMsg}`,
-        error: errorMsg,
-      });
-    }
-  }
-
-  /**
-   * Start async generation with progress tracking.
-   */
   async startGenerate(dto: AutoCodeDto): Promise<string> {
     this.assertNoApprovalStatusField(dto);
     const jobId = randomUUID();
     const steps = AutocodeService.GENERATE_STEPS.map((s) => ({
-      key: s.key,
-      label: s.label,
-      status: 'pending' as const,
+      key: s.key, label: s.label, status: 'pending' as const,
     }));
-
-    await this.writeJobStatus(jobId, {
-      jobId,
-      status: 'processing',
-      steps,
-      progress: 0,
-      currentStepLabel: '准备中...',
+    // Enqueue for the standalone generate-worker (runs outside the NestJS watch
+    // process, immune to dev watch restarts). The worker polls sys_generate_jobs.
+    await this.db.insert(sysGenerateJobs).values({
+      id: jobId,
+      tableName: dto.tableName,
+      status: 'pending',
+      jobType: 'generate',
+      payload: { dto, steps, progress: 0, currentStepLabel: '准备中...' },
     });
-
-    this.executeGenerateAsync(jobId, dto).catch((err) => {
-      this.logger.error(` Unhandled error in generate job ${jobId}:`, err);
-    });
-
     return jobId;
   }
 
-  /**
-   * Read current job status from disk.
-   */
-  async getJobStatus(jobId: string): Promise<GenerateJobStatus | null> {
-    return this.readJobStatus(jobId);
-  }
-
-  // =========================================================================
-  // Async update with progress tracking
-  // =========================================================================
-
-  /**
-   * Start async module update with progress tracking.
-   */
   async startUpdate(dto: UpdateModuleDto): Promise<string> {
     this.assertNoApprovalStatusField(dto);
-    const latest = await this.getLatestVersion(dto.tableName);
+    const latest = await this.historyService.getLatestVersion(dto.tableName);
     if (!latest) {
-      throw new NotFoundException(`No existing version found for table '${dto.tableName}'. Use generate to create it first.`);
+      throw new NotFoundException(`No existing version found for table '${dto.tableName}'.`);
     }
 
     const oldFields = (latest.fields as AutoCodeField[]) ?? [];
-    const hasChanges = this.hasStructuralChange(oldFields, dto.fields);
-
-    if (!hasChanges && !dto.force) {
-      throw new ConflictException(
-        '没有检测到表结构变更（仅修改了字段描述或表描述，不影响数据库和代码）。如需修改描述，可直接编辑代码文件。',
-      );
+    if (!this.historyService.hasStructuralChange(oldFields, dto.fields) && !dto.force) {
+      throw new ConflictException('没有检测到表结构变更。');
     }
 
-    const hardRemovedFields = this.getRemovedFields(oldFields, dto.fields);
+    const hardRemovedFields = this.historyService.getRemovedFields(oldFields, dto.fields);
     if (hardRemovedFields.length > 0 && !dto.force) {
       const fieldNames = hardRemovedFields.map((f) => `${f.name}(${f.type})`).join(', ');
-      throw new ConflictException(
-        `检测到字段硬删除: ${fieldNames}。硬删除将导致该列数据永久丢失！如确认删除，请勾选"确认删除字段"后重新提交。建议使用"停用"（软删除）替代。`,
-      );
+      throw new ConflictException(`检测到字段硬删除: ${fieldNames}。请勾选"确认删除字段"后重新提交。`);
     }
 
     const jobId = randomUUID();
     const steps = AutocodeService.UPDATE_STEPS.map((s) => ({
-      key: s.key,
-      label: s.label,
-      status: 'pending' as const,
+      key: s.key, label: s.label, status: 'pending' as const,
     }));
-
-    await this.writeJobStatus(jobId, {
-      jobId,
-      status: 'processing',
-      steps,
-      progress: 0,
-      currentStepLabel: '准备更新...',
+    // Enqueue for the standalone generate-worker (it dispatches job_type='update'
+    // to processUpdateJob). Runs outside the watch process, immune to watch restarts.
+    await this.db.insert(sysGenerateJobs).values({
+      id: jobId,
+      tableName: dto.tableName,
+      status: 'pending',
+      jobType: 'update',
+      payload: { dto, steps, progress: 0, currentStepLabel: '准备更新...' },
     });
-
-    this.executeUpdateAsync(jobId, dto).catch((err) => {
-      this.logger.error(` Unhandled error in update job ${jobId}:`, err);
-    });
-
     return jobId;
   }
 
-  private async executeUpdateAsync(jobId: string, dto: UpdateModuleDto): Promise<void> {
-    const totalSteps = AutocodeService.UPDATE_STEPS.length;
-    let createdFiles: string[] = [];
-    let files: Record<string, string> = {};
-    let projectRoot = '';
-
-    const updateStep = async (
-      stepIndex: number,
-      stepStatus: GenerateStepStatus,
-      message?: string,
-    ) => {
-      const steps: GenerateStep[] = AutocodeService.UPDATE_STEPS.map((s, i) => ({
-        key: s.key,
-        label: s.label,
-        status: i < stepIndex
-          ? 'completed' as const
-          : i === stepIndex
-            ? stepStatus
-            : 'pending' as const,
-      }));
-
-      const progress = stepStatus === 'completed'
-        ? Math.round(((stepIndex + 1) / totalSteps) * 100)
-        : Math.round(((stepIndex + 0.5) / totalSteps) * 100);
-
-      await this.writeJobStatus(jobId, {
-        jobId,
-        status: stepStatus === 'failed' ? 'failed' : 'processing',
-        steps,
-        progress,
-        currentStepLabel: message || AutocodeService.UPDATE_STEPS[stepIndex]!.label,
-        error: stepStatus === 'failed' ? message : undefined,
-      });
+  async getJobStatus(jobId: string): Promise<GenerateJobStatus | null> {
+    // Generate jobs now live in sys_generate_jobs (written by generate-worker).
+    const rows = await this.db
+      .select()
+      .from(sysGenerateJobs)
+      .where(eq(sysGenerateJobs.id, jobId))
+      .limit(1);
+    const job = rows[0];
+    if (!job) return this.readJobStatus(jobId); // fallback: update jobs still use .tmp files
+    const payload = (job.payload as any) ?? {};
+    // Worker writes steps into payload jsonb. Tolerate either an array or a
+    // JSON-encoded string (older worker versions double-encoded via ::jsonb).
+    const rawSteps = payload.steps;
+    let steps: GenerateStep[];
+    if (Array.isArray(rawSteps)) steps = rawSteps;
+    else if (typeof rawSteps === 'string') {
+      try { steps = JSON.parse(rawSteps) as GenerateStep[]; } catch { steps = []; }
+    } else {
+      steps = AutocodeService.GENERATE_STEPS.map((s) => ({ key: s.key, label: s.label, status: 'pending' as const }));
+    }
+    const completed = steps.filter((s) => s.status === 'completed').length;
+    const progress = Math.round((completed / steps.length) * 100);
+    const status = job.status === 'done' ? 'completed' : job.status === 'failed' ? 'failed' : 'processing';
+    return {
+      jobId,
+      status,
+      steps,
+      progress,
+      currentStepLabel: payload.currentStepLabel ?? '',
+      error: (job.error as string) ?? undefined,
+      completedAt: (job.finishedAt as Date | null)?.toISOString(),
     };
-
-    try {
-      const latest = await this.getLatestVersion(dto.tableName);
-      if (!latest) {
-        throw new Error(`Version record for '${dto.tableName}' not found`);
-      }
-
-      const oldFields = (latest.fields as AutoCodeField[]) ?? [];
-      const oldVersion = latest.version ?? 1;
-      const changeLog = this.computeChangeLog(oldFields, dto.fields);
-
-      const autoCodeDto: AutoCodeDto = {
-        tableName: dto.tableName,
-        description: dto.description || '',
-        fields: dto.fields,
-        generateWeb: dto.generateWeb ?? true,
-        pageType: dto.pageType ?? (latest as any).pageType ?? 'list',
-        approvalFlow: dto.approvalFlow ?? (latest.hasApprovalFlow ? { enabled: true } : undefined),
-        agentConfig: dto.agentConfig ?? (latest.hasAgent ? { enabled: true } : undefined),
-        visibilityStrategy: dto.visibilityStrategy ?? (latest.visibilityStrategy as 'private' | 'department' | 'shared' | 'public' | undefined) ?? 'private',
-        packageId: dto.packageId,
-        force: dto.force,
-      };
-
-      // Step 1: Generate code in memory
-      await updateStep(0, 'running');
-      files = this.preview(autoCodeDto);
-      projectRoot = this.resolveProjectRoot();
-
-      if (autoCodeDto.generateWeb) {
-        const n2 = deriveNames(autoCodeDto.tableName);
-        const activeDto2: AutoCodeDto = { ...autoCodeDto, fields: activeFields(autoCodeDto.fields) };
-        const relationDictTypes2 = await this.lookupRelationDisplayDictTypes(activeDto2.fields);
-        if ([...relationDictTypes2.values()].some((v) => v !== null)) {
-          files[`release/jimo/apps/web/src/services/${n2.serviceRelDir}.ts`] = generateFrontendService(activeDto2, relationDictTypes2);
-          if (autoCodeDto.pageType === 'document') {
-            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto2, relationDictTypes2);
-            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto2, relationDictTypes2);
-          } else {
-            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendPage(activeDto2, relationDictTypes2);
-          }
-        }
-      }
-
-      await updateStep(0, 'completed');
-
-      // Step 2: Write files to disk (overwrite existing)
-      await updateStep(1, 'running');
-      for (const [relativePath, content] of Object.entries(files)) {
-        const absolutePath = path.join(projectRoot, relativePath);
-        const dir = path.dirname(absolutePath);
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(absolutePath, content, 'utf-8');
-        createdFiles.push(relativePath);
-      }
-      await this.updateSchemaIndex(autoCodeDto, projectRoot);
-      await this.updateAppModule(autoCodeDto, projectRoot);
-      if (autoCodeDto.generateWeb) {
-        await this.updateUmiRoutes(autoCodeDto, projectRoot);
-      }
-      await updateStep(1, 'completed');
-
-      // Step 3: drizzle-kit push
-      await updateStep(2, 'running', '正在同步数据库...');
-      try {
-        const { exec } = await import('node:child_process');
-        const { promisify } = await import('node:util');
-        const execAsync = promisify(exec);
-        const serverDir = path.join(projectRoot, 'release', 'jimo', 'apps', 'server');
-        await execAsync('npx --no-install drizzle-kit push --force', {
-          cwd: serverDir, timeout: 60000,
-          env: { ...process.env, DRIZZLE_SILENT: '1' },
-        });
-        this.logger.log(` drizzle-kit push (silent) completed for update '${dto.tableName}'`);
-      } catch (pushErr: unknown) {
-        this.logger.error(` drizzle-kit push FAILED for update '${dto.tableName}':`, pushErr);
-      }
-      // 防线2: push 后校验物理表列是否与 schema 期望对齐
-      await this.verifyPhysicalSchema(dto.tableName, dto.fields);
-      await updateStep(2, 'completed');
-
-      // Step 4: Save version history
-      await updateStep(3, 'running');
-      const updatePackageName = (dto as any).packageId
-        ? await this.getPackageName((dto as any).packageId).catch(() => '')
-        : '';
-      try {
-        const updateTemplates: Record<string, any> = { ...files };
-        if (autoCodeDto.agentConfig?.enabled) {
-          updateTemplates.__agent = this.buildAgentConfigMetadata(autoCodeDto);
-        }
-        await this.db.insert(sysAutoCodeHistories).values({
-          packageName: updatePackageName,
-          tableName: dto.tableName,
-          businessDB: '',
-          templates: updateTemplates,
-          version: oldVersion + 1,
-          fields: dto.fields,
-          changeLog,
-          operation: 'update',
-          parentId: latest.id,
-          visibilityStrategy: dto.visibilityStrategy ?? latest.visibilityStrategy ?? 'private',
-          hasApprovalFlow: dto.approvalFlow?.enabled ?? latest.hasApprovalFlow ?? false,
-          hasAgent: dto.agentConfig?.enabled ?? latest.hasAgent ?? false,
-        });
-      } catch (historyErr: unknown) {
-        this.logger.error('[AutocodeService] Failed to save update history:', historyErr);
-      }
-      await updateStep(3, 'completed');
-
-      // Step 5: Enqueue entry-point file modifications to cleanup-worker.
-      await updateStep(4, 'running');
-      await this.enqueueEntrypointJob(jobId, autoCodeDto, false);
-    } catch (err: any) {
-      const errorMsg = err?.message || 'Unknown error during update';
-      this.logger.error(` Update job ${jobId} FAILED:`, errorMsg);
-
-      await this.writeJobStatus(jobId, {
-        jobId,
-        status: 'failed',
-        steps: AutocodeService.UPDATE_STEPS.map((s) => ({
-          key: s.key,
-          label: s.label,
-          status: 'pending' as const,
-        })),
-        progress: 0,
-        currentStepLabel: `失败: ${errorMsg}`,
-        error: errorMsg,
-      });
-    }
   }
 
-  /**
-   * Background execution of all generate steps with progress persistence.
-   */
-  private async executeGenerateAsync(jobId: string, dto: AutoCodeDto): Promise<void> {
-    const totalSteps = AutocodeService.GENERATE_STEPS.length;
-    let createdFiles: string[] = [];
-    let files: Record<string, string> = {};
-    let projectRoot = '';
+  // =========================================================================
+  // Tables / Templates / ER Graph
+  // =========================================================================
 
-    const updateStep = async (
-      stepIndex: number,
-      stepStatus: GenerateStepStatus,
-      message?: string,
-    ) => {
-      const steps: GenerateStep[] = AutocodeService.GENERATE_STEPS.map((s, i) => ({
-        key: s.key,
-        label: s.label,
-        status: i < stepIndex
-          ? 'completed' as const
-          : i === stepIndex
-            ? stepStatus
-            : 'pending' as const,
-      }));
-
-      const progress = stepStatus === 'completed'
-        ? Math.round(((stepIndex + 1) / totalSteps) * 100)
-        : Math.round(((stepIndex + 0.5) / totalSteps) * 100);
-
-      await this.writeJobStatus(jobId, {
-        jobId,
-        status: stepStatus === 'failed' ? 'failed' : 'processing',
-        steps,
-        progress,
-        currentStepLabel: message || AutocodeService.GENERATE_STEPS[stepIndex]!.label,
-        error: stepStatus === 'failed' ? message : undefined,
-      });
-    };
-
-    try {
-      // Step 0 (force mode): Clean up existing module files before regenerating
-      if (dto.force) {
-        this.ensureNotReservedTable(dto.tableName);
-        const n = deriveNames(dto.tableName);
-        const root = this.resolveProjectRoot();
-        const expectedPaths = [
-          `release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
-          `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
-          `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
-          `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
-        ];
-        for (const p of expectedPaths) {
-          const fullPath = path.join(root, p);
-          if (existsSync(fullPath)) {
-            await fs.rm(fullPath, { force: true });
-          }
-        }
-        const moduleDir = path.join(root, `release/jimo/apps/server/src/modules/${n.kebabSingular}`);
-        if (existsSync(moduleDir)) {
-          try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
-          try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
-        }
-        const pageDir = path.join(root, `release/jimo/apps/web/src/pages/${n.pageDir}`);
-        if (existsSync(pageDir)) {
-          try { await fs.rmdir(pageDir); } catch { /* not empty */ }
-        }
-        await this.removeSchemaExport(n);
-        await this.removeDanglingSchemaImports(n);
-        await this.removeModuleRegistration(n);
-        await this.removeRouteFromUmirc(n);
-        this.logger.log(` Force mode: cleaned up existing files for '${dto.tableName}'`);
-      }
-
-      // Step 1: Generate code in memory
-      await updateStep(0, 'running');
-      files = this.preview(dto);
-      projectRoot = this.resolveProjectRoot();
-
-      if (dto.generateWeb) {
-        const n = deriveNames(dto.tableName);
-        const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
-        const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
-        if ([...relationDictTypes.values()].some((v) => v !== null)) {
-          files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto, relationDictTypes);
-          if (dto.pageType === 'document') {
-            files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto, relationDictTypes);
-            files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto, relationDictTypes);
-          } else {
-            files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
-          }
-        }
-        if (activeDto.fields.some((f) => !f.removed && f.type === 'point')) {
-          files[`release/jimo/apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
-        }
-      }
-
-      await updateStep(0, 'completed');
-
-      // Step 2: Write files to disk
-      await updateStep(1, 'running');
-      for (const [relativePath, content] of Object.entries(files)) {
-        const absolutePath = path.join(projectRoot, relativePath);
-        const dir = path.dirname(absolutePath);
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(absolutePath, content, 'utf-8');
-        createdFiles.push(relativePath);
-      }
-      await this.updateSchemaIndex(dto, projectRoot);
-      await this.updateAppModule(dto, projectRoot);
-      if (dto.generateWeb) {
-        await this.updateUmiRoutes(dto, projectRoot);
-      }
-      await updateStep(1, 'completed');
-
-      // Step 3: drizzle-kit push
-      await updateStep(2, 'running', '正在同步数据库表...');
-      let pushSucceeded = false;
-      try {
-        const { exec } = await import('node:child_process');
-        const { promisify } = await import('node:util');
-        const execAsync = promisify(exec);
-        const serverDir = path.join(projectRoot, 'release', 'jimo', 'apps', 'server');
-        await execAsync('npx --no-install drizzle-kit push --force', {
-          cwd: serverDir, timeout: 60000,
-          env: { ...process.env, DRIZZLE_SILENT: '1' },
-        });
-        pushSucceeded = true;
-        this.logger.log(` drizzle-kit push (silent) completed for '${dto.tableName}'`);
-      } catch (pushErr: unknown) {
-        this.logger.error(` drizzle-kit push FAILED for '${dto.tableName}':`, pushErr);
-      }
-      await updateStep(2, 'completed');
-
-      // Step 4: Generate mock business data (NON-FATAL).
-      // Runs only when schema-sync succeeded and dto.mockData.enabled is set.
-      await updateStep(3, 'running');
-      try {
-        if (dto.mockData?.enabled && pushSucceeded) {
-          await this.insertMockData(dto);
-        }
-      } catch (mockErr: unknown) {
-        const msg = mockErr instanceof Error ? mockErr.message : String(mockErr);
-        this.logger.warn(` mock insert skipped for '${dto.tableName}': ${msg}`);
-      } finally {
-        await updateStep(3, 'completed');
-      }
-
-      // Step 5: Create menu
-      await updateStep(4, 'running');
-      const asyncHasPointFields = dto.generateWeb && dto.fields.some((f) => !f.removed && f.type === 'point');
-      let asyncMenuParentId: string | null = null;
-      let asyncPackageName = '';
-      if (dto.packageId) {
-        try {
-          const pkg = await this.findOnePackage(dto.packageId);
-          asyncMenuParentId = pkg.menuId ?? null;
-          asyncPackageName = pkg.name;
-        } catch { /* package not found — skip parent */ }
-      }
-      try {
-        const asyncTableMenuId = await this.autoCreateMenu(dto, asyncMenuParentId);
-        if (asyncHasPointFields) {
-          await this.autoCreateMapMenu(dto, asyncMenuParentId);
-        }
-      } catch (menuErr: unknown) {
-        this.logger.error(` Auto-create menu FAILED for '${dto.tableName}':`, menuErr);
-      }
-      // If approval flow enabled, write the per-type chain config (sys_approval_flows)
-      if (dto.approvalFlow?.enabled) {
-        try {
-          await this.upsertApprovalFlowConfig(dto.tableName, dto.approvalFlow.defaultChain ?? []);
-          this.logger.log(` approval flow enabled for '${dto.tableName}'`);
-        } catch (afErr: unknown) {
-          this.logger.error(` approval flow config write FAILED for '${dto.tableName}':`, afErr);
-        }
-      }
-      await updateStep(4, 'completed');
-
-      // Step 6: Save history
-      await updateStep(5, 'running');
-      try {
-        const existing = await this.getLatestVersion(dto.tableName);
-        const nextVersion = existing ? (existing.version ?? 1) + 1 : 1;
-
-        const asyncTemplates: Record<string, any> = { ...files };
-        if (dto.agentConfig?.enabled) {
-          asyncTemplates.__agent = this.buildAgentConfigMetadata(dto);
-        }
-
-        await this.db.insert(sysAutoCodeHistories).values({
-          packageName: asyncPackageName,
-          tableName: dto.tableName,
-          businessDB: (dto as any).businessDB || '',
-          templates: asyncTemplates,
-          version: nextVersion,
-          fields: dto.fields,
-          changeLog: dto.force ? '强制重新生成' : '初始创建',
-          operation: 'create',
-          parentId: existing?.id ?? null,
-          visibilityStrategy: dto.visibilityStrategy ?? existing?.visibilityStrategy ?? 'private',
-          hasApprovalFlow: dto.approvalFlow?.enabled ?? existing?.hasApprovalFlow ?? false,
-          hasAgent: dto.agentConfig?.enabled ?? existing?.hasAgent ?? false,
-        });
-      } catch (historyErr: unknown) {
-        this.logger.error('[AutocodeService] Failed to save generation history:', historyErr);
-      }
-      await updateStep(5, 'completed');
-
-      // Step 7: Enqueue entry-point file modifications to cleanup-worker.
-      // Worker runs outside NestJS and is immune to nest --watch restarts.
-      // This prevents EADDRINUSE port conflicts when app.module.ts is modified.
-      await updateStep(6, 'running');
-      await this.enqueueEntrypointJob(jobId, dto, asyncHasPointFields, createdFiles);
-    } catch (err: any) {
-      const errorMsg = err?.message || 'Unknown error during generation';
-      this.logger.error(` Generate job ${jobId} FAILED:`, errorMsg);
-
-      await this.writeJobStatus(jobId, {
-        jobId,
-        status: 'failed',
-        steps: AutocodeService.GENERATE_STEPS.map((s, i) => ({
-          key: s.key,
-          label: s.label,
-          status: i < AutocodeService.GENERATE_STEPS.findIndex(
-            (_, idx) => idx === AutocodeService.GENERATE_STEPS.findIndex(
-              (__) => __.key === err?.stepKey,
-            ),
-          ) ? 'completed' as const
-            : i === AutocodeService.GENERATE_STEPS.findIndex(
-              (__) => __.key === err?.stepKey,
-            ) ? 'failed' as const
-            : 'pending' as const,
-        })),
-        progress: 0,
-        currentStepLabel: `失败: ${errorMsg}`,
-        error: errorMsg,
-      });
-    }
-  }
-
-  // ── Job file persistence helpers ──
-
-  private async writeJobStatus(jobId: string, status: GenerateJobStatus): Promise<void> {
-    const dir = this.jobsDir;
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(
-      path.join(dir, `${jobId}.json`),
-      JSON.stringify(status, null, 2),
-      'utf-8',
-    );
-  }
-
-  private async readJobStatus(jobId: string): Promise<GenerateJobStatus | null> {
-    try {
-      const filePath = path.join(this.jobsDir, `${jobId}.json`);
-      const data = await fs.readFile(filePath, 'utf-8');
-      return JSON.parse(data) as GenerateJobStatus;
-    } catch {
-      return null;
-    }
-  }
-
-  private async deleteJobFile(jobId: string): Promise<void> {
-    try {
-      const filePath = path.join(this.jobsDir, `${jobId}.json`);
-      await fs.unlink(filePath);
-    } catch {
-      // Ignore — file might already be cleaned up
-    }
-  }
-
-  /**
-   * Get list of jimo-generated tables in the database.
-   */
   async getTables(): Promise<string[]> {
     const rows = await this.db
       .selectDistinct({ tableName: sysAutoCodeHistories.tableName })
@@ -1733,9 +428,6 @@ export class AutocodeService {
     return rows.map((r) => r.tableName);
   }
 
-  /**
-   * Get metadata about available field types and templates.
-   */
   getTemplates(): Record<string, unknown> {
     return {
       fieldTypes: [
@@ -1749,6 +441,10 @@ export class AutocodeService {
         { value: 'uuid', label: 'UUID (uuid)', tsType: 'string' },
         { value: 'image', label: 'Image (upload)', tsType: 'string', defaultLength: 512 },
         { value: 'file', label: 'Attachment (upload)', tsType: 'string', defaultLength: 512 },
+        { value: 'dict', label: 'Dictionary (dict)', tsType: 'string', defaultLength: 64 },
+        { value: 'code', label: 'Auto Code (code)', tsType: 'string', defaultLength: 100 },
+        { value: 'point', label: 'GIS Point (point)', tsType: 'string' },
+        { value: 'calculated', label: 'Calculated (formula)', tsType: 'string' },
         { value: 'relation', label: 'Relation (foreign key)', tsType: 'string', relationTypes: ['many-to-one', 'many-to-many'] },
       ],
       files: [
@@ -1765,608 +461,11 @@ export class AutocodeService {
     };
   }
 
-  // =========================================================================
-  // History CRUD — generation history with rollback support
-  // =========================================================================
-
-  async findAllHistory(params: { page?: number; pageSize?: number; tableName?: string }): Promise<{ list: SysAutoCodeHistory[]; total: number; page: number; pageSize: number }> {
-    const page = params.page ?? 1;
-    const pageSize = params.pageSize ?? 10;
-    const offset = (page - 1) * pageSize;
-
-    const conditions = [];
-    if (params.tableName) {
-      conditions.push(eq(sysAutoCodeHistories.tableName, params.tableName));
-    }
-
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-    const [rows, totalRows] = await Promise.all([
-      this.db
-        .select()
-        .from(sysAutoCodeHistories)
-        .where(whereClause)
-        .orderBy(desc(sysAutoCodeHistories.createdAt))
-        .limit(pageSize)
-        .offset(offset),
-      this.db
-        .select({ count: count() })
-        .from(sysAutoCodeHistories)
-        .where(whereClause),
-    ]);
-
-    const total = totalRows[0]?.count ?? 0;
-
-    return { list: rows, total, page, pageSize };
-  }
-
-  async findOneHistory(id: string): Promise<SysAutoCodeHistory> {
-    const rows = await this.db
-      .select()
-      .from(sysAutoCodeHistories)
-      .where(eq(sysAutoCodeHistories.id, id))
-      .limit(1);
-
-    if (rows.length === 0) {
-      throw new NotFoundException('History record not found');
-    }
-
-    return rows[0]!;
-  }
-
-  async rollbackHistory(id: string): Promise<{ restoredFiles: string[] }> {
-    const history = await this.findOneHistory(id);
-    const templates = history.templates as Record<string, string>;
-    const projectRoot = this.resolveProjectRoot();
-    const restoredFiles: string[] = [];
-
-    for (const [relativePath, content] of Object.entries(templates)) {
-      const absolutePath = path.join(projectRoot, relativePath);
-      const dir = path.dirname(absolutePath);
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(absolutePath, content, 'utf-8');
-      restoredFiles.push(relativePath);
-    }
-
-    try {
-      const latest = await this.getLatestVersion(history.tableName);
-      const currentVersion = latest?.version ?? 1;
-      const rollbackVersion = (history.version ?? 1);
-
-      await this.db.insert(sysAutoCodeHistories).values({
-        packageName: history.packageName,
-        tableName: history.tableName,
-        businessDB: history.businessDB,
-        templates: history.templates,
-        version: currentVersion + 1,
-        fields: history.fields,
-        changeLog: `回滚到版本 v${rollbackVersion}`,
-        operation: 'rollback',
-        parentId: latest?.id ?? null,
-        visibilityStrategy: history.visibilityStrategy ?? 'private',
-        hasApprovalFlow: history.hasApprovalFlow ?? false,
-        hasAgent: history.hasAgent ?? false,
-      });
-    } catch (historyErr: unknown) {
-      this.logger.error('[AutocodeService] Failed to save rollback history:', historyErr);
-    }
-
-    return { restoredFiles };
-  }
-
-  async deleteHistory(id: string): Promise<{ deletedFiles: string[]; droppedTable: boolean; removedMenus: number }> {
-    const history = await this.findOneHistory(id);
-    const tableName = history.tableName;
-    this.ensureNotReservedTable(tableName);
-    const n = deriveNames(tableName);
-    const projectRoot = this.resolveProjectRoot();
-
-    const deletedFiles: string[] = [];
-    let droppedTable = false;
-    let removedMenus = 0;
-
-    const expectedPaths = [
-      `release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
-      `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
-      `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
-    ];
-    for (const p of expectedPaths) {
-      const fullPath = path.join(projectRoot, p);
-      if (existsSync(fullPath)) {
-        await fs.rm(fullPath, { force: true });
-        deletedFiles.push(p);
-      }
-    }
-    const moduleDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/${n.kebabSingular}`);
-    if (existsSync(moduleDir)) {
-      try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
-      try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
-    }
-    const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.pageDir}`);
-    if (existsSync(pageDir)) {
-      try { await fs.rmdir(pageDir); } catch { /* not empty */ }
-    }
-
-    await this.removeRouteFromUmirc(n);
-    await this.removeSchemaExport(n);
-    await this.removeDanglingSchemaImports(n);
-    await this.removeModuleRegistration(n);
-
-    const dbTableName = `lc_${tableName}`;
-    const componentPath = `${n.pageComponentPath}`;
-    const menuRows = await this.db
-      .select({ id: sysMenus.id, name: sysMenus.name, path: sysMenus.path })
-      .from(sysMenus)
-      .where(and(eq(sysMenus.component, componentPath), isNull(sysMenus.deletedAt)));
-    if (menuRows.length > 0) {
-      const pageMenuIds = menuRows.map((m) => m.id);
-      const btnChildren = await this.db
-        .select({ id: sysMenus.id })
-        .from(sysMenus)
-        .where(
-          and(
-            inArray(sysMenus.parentId, pageMenuIds),
-            eq(sysMenus.menuType, 3),
-            isNull(sysMenus.deletedAt),
-          ),
-        );
-      const allMenuIds = [...pageMenuIds, ...btnChildren.map((b) => b.id)];
-      await this.db.delete(sysAuthorityBtns).where(inArray(sysAuthorityBtns.menuId, allMenuIds));
-      await this.db.delete(sysRoleMenus).where(inArray(sysRoleMenus.menuId, allMenuIds));
-      await this.db.delete(sysMenus).where(inArray(sysMenus.id, allMenuIds));
-      removedMenus = allMenuIds.length;
-    }
-
-    try {
-      const tableExists = await this.db.execute(sql`
-        SELECT COUNT(*) as cnt FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name = ${dbTableName}
-      `);
-      if ((tableExists[0] as any)?.cnt > 0) {
-        await this.db.execute(sql.raw(`DROP TABLE IF EXISTS "${dbTableName}" CASCADE`));
-        droppedTable = true;
-      }
-    } catch { /* Table may not exist or drop failed */ }
-
-    await this.db
-      .delete(sysAutoCodeHistories)
-      .where(eq(sysAutoCodeHistories.tableName, tableName));
-
-    return { deletedFiles, droppedTable, removedMenus };
-  }
-
-  // =========================================================================
-  // Soft cleanup helper
-  // =========================================================================
-
-  private async cleanupTableSoft(
-    tableName: string,
-    projectRoot: string,
-  ): Promise<{ deletedFiles: string[]; removedMenus: number }> {
-    this.ensureNotReservedTable(tableName);
-    const n = deriveNames(tableName);
-    const deletedFiles: string[] = [];
-    let removedMenus = 0;
-
-    const expectedPaths = [
-      `release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
-      `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
-      `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
-    ];
-    for (const p of expectedPaths) {
-      const fullPath = path.join(projectRoot, p);
-      if (existsSync(fullPath)) {
-        await fs.rm(fullPath, { force: true });
-        deletedFiles.push(p);
-      }
-    }
-    const moduleDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/${n.kebabSingular}`);
-    if (existsSync(moduleDir)) {
-      try { await fs.rmdir(path.join(moduleDir, 'dto')); } catch { /* not empty */ }
-      try { await fs.rmdir(moduleDir); } catch { /* not empty */ }
-    }
-    const pageDir = path.join(projectRoot, `release/jimo/apps/web/src/pages/${n.pageDir}`);
-    if (existsSync(pageDir)) {
-      try { await fs.rmdir(pageDir); } catch { /* not empty */ }
-    }
-
-    await this.removeRouteFromUmirc(n);
-    await this.removeSchemaExport(n);
-    await this.removeDanglingSchemaImports(n);
-    await this.removeModuleRegistration(n);
-
-    const componentPath = `${n.pageComponentPath}`;
-    const menuRows = await this.db
-      .select({ id: sysMenus.id, name: sysMenus.name })
-      .from(sysMenus)
-      .where(and(eq(sysMenus.component, componentPath), isNull(sysMenus.deletedAt)));
-    if (menuRows.length > 0) {
-      const pageMenuIds = menuRows.map((m) => m.id);
-      const btnChildren = await this.db
-        .select({ id: sysMenus.id })
-        .from(sysMenus)
-        .where(and(inArray(sysMenus.parentId, pageMenuIds), eq(sysMenus.menuType, 3), isNull(sysMenus.deletedAt)));
-      const allMenuIds = [...pageMenuIds, ...btnChildren.map((b) => b.id)];
-      await this.db.delete(sysAuthorityBtns).where(inArray(sysAuthorityBtns.menuId, allMenuIds));
-      await this.db.delete(sysRoleMenus).where(inArray(sysRoleMenus.menuId, allMenuIds));
-      await this.db.delete(sysMenus).where(inArray(sysMenus.id, allMenuIds));
-      removedMenus = allMenuIds.length;
-
-      const apiGroup = `lc/${n.kebabName}`;
-      const apiRows = await this.db
-        .select({ path: sysApis.path, method: sysApis.method })
-        .from(sysApis)
-        .where(and(eq(sysApis.apiGroup, apiGroup), isNull(sysApis.deletedAt)));
-      for (const api of apiRows) {
-        await this.casbin.removeFilteredPolicy(1, api.path);
-      }
-      await this.db
-        .update(sysApis)
-        .set({ deletedAt: sql`NOW()` })
-        .where(and(eq(sysApis.apiGroup, apiGroup), isNull(sysApis.deletedAt)));
-    }
-
-    return { deletedFiles, removedMenus };
-  }
-
-  // =========================================================================
-  // Impact analysis
-  // =========================================================================
-
-  async analyzeImpact(
-    tableName: string,
-    cascade = false,
-  ): Promise<{
-    tableName: string;
-    dbTableName: string;
-    recordCount: number;
-    referencedBy: Array<{ table: string; column: string; constraint: string }>;
-    menus: Array<{ id: string; name: string; path: string }>;
-    roleMenuCount: number;
-    files: string[];
-    hasHistory: boolean;
-    cascadeChain?: Array<{
-      autocodeTable: string;
-      dbTable: string;
-      recordCount: number;
-      files: string[];
-      menus: Array<{ id: string; name: string; path: string }>;
-      hasHistory: boolean;
-    }>;
-  }> {
-    const impact = await this.computeSingleTableImpact(tableName);
-
-    if (!cascade) return impact;
-
-    const visited = new Set<string>([impact.dbTableName]);
-    const cascadeChain: Array<{
-      autocodeTable: string;
-      dbTable: string;
-      recordCount: number;
-      files: string[];
-      menus: Array<{ id: string; name: string; path: string }>;
-      hasHistory: boolean;
-    }> = [];
-
-    for (const ref of impact.referencedBy) {
-      if (visited.has(ref.table)) continue;
-      visited.add(ref.table);
-
-      const autocodeTable = ref.table.startsWith('lc_') ? ref.table.slice(3) : ref.table;
-
-      try {
-        const childImpact = await this.computeSingleTableImpact(autocodeTable);
-        cascadeChain.push({
-          autocodeTable,
-          dbTable: ref.table,
-          recordCount: childImpact.recordCount,
-          files: childImpact.files,
-          menus: childImpact.menus,
-          hasHistory: childImpact.hasHistory,
-        });
-      } catch {
-        cascadeChain.push({
-          autocodeTable,
-          dbTable: ref.table,
-          recordCount: 0,
-          files: [],
-          menus: [],
-          hasHistory: false,
-        });
-      }
-    }
-
-    return { ...impact, cascadeChain };
-  }
-
-  private async computeSingleTableImpact(tableName: string): Promise<{
-    tableName: string;
-    dbTableName: string;
-    recordCount: number;
-    referencedBy: Array<{ table: string; column: string; constraint: string }>;
-    menus: Array<{ id: string; name: string; path: string }>;
-    roleMenuCount: number;
-    files: string[];
-    hasHistory: boolean;
-  }> {
-    const dbTableName = `lc_${tableName}`;
-    const n = deriveNames(tableName);
-
-    let recordCount = 0;
-    try {
-      const countRows = await this.db.execute(sql`
-        SELECT COUNT(*) as cnt FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name = ${dbTableName}
-      `);
-      if ((countRows[0] as any)?.cnt > 0) {
-        const cnt = await this.db.execute(sql.raw(`SELECT COUNT(*) as cnt FROM "${dbTableName}"`));
-        recordCount = Number((cnt[0] as any)?.cnt ?? 0);
-      }
-    } catch { /* Table doesn't exist */ }
-
-    let referencedBy: Array<{ table: string; column: string; constraint: string }> = [];
-    try {
-      const fkRows = await this.db.execute(sql`
-        SELECT
-          kcu.table_name,
-          kcu.column_name,
-          tc.constraint_name
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-          ON tc.constraint_name = kcu.constraint_name
-          AND tc.table_schema = kcu.table_schema
-        JOIN information_schema.constraint_column_usage ccu
-          ON tc.constraint_name = ccu.constraint_name
-          AND tc.table_schema = ccu.table_schema
-        WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND ccu.table_name = ${dbTableName}
-          AND tc.table_schema = 'public'
-        ORDER BY kcu.table_name, kcu.column_name
-      `);
-      referencedBy = fkRows.map((r: any) => ({
-        table: r.table_name as string,
-        column: r.column_name as string,
-        constraint: r.constraint_name as string,
-      }));
-    } catch { /* No foreign keys or query failed */ }
-
-    const componentPath = `${n.pageComponentPath}`;
-    const menuRows = await this.db
-      .select({ id: sysMenus.id, name: sysMenus.name, path: sysMenus.path })
-      .from(sysMenus)
-      .where(and(eq(sysMenus.component, componentPath), isNull(sysMenus.deletedAt)));
-    const menus = menuRows.map((m) => ({ id: m.id, name: m.name, path: m.path ?? '' }));
-
-    let roleMenuCount = 0;
-    if (menus.length > 0) {
-      const menuIds = menus.map((m) => m.id);
-      const rmRows = await this.db
-        .select({ count: sql<number>`COUNT(*)` })
-        .from(sysRoleMenus)
-        .where(inArray(sysRoleMenus.menuId, menuIds));
-      roleMenuCount = Number((rmRows[0] as any)?.count ?? 0);
-    }
-
-    const projectRoot = this.resolveProjectRoot();
-    const files: string[] = [];
-    const expectedPaths = [
-      `release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
-      `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
-      `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
-    ];
-    for (const p of expectedPaths) {
-      if (existsSync(path.join(projectRoot, p))) {
-        files.push(p);
-      }
-    }
-
-    const hasHistory = (await this.db
-      .select({ id: sysAutoCodeHistories.id })
-      .from(sysAutoCodeHistories)
-      .where(eq(sysAutoCodeHistories.tableName, tableName))
-      .limit(1)).length > 0;
-
-    return { tableName, dbTableName, recordCount, referencedBy, menus, roleMenuCount, files, hasHistory };
-  }
-
-  // =========================================================================
-  // Version management helpers
-  // =========================================================================
-
-  computeChangeLog(oldFields: AutoCodeField[], newFields: AutoCodeField[]): string {
-    const changes: string[] = [];
-    const oldMap = new Map(oldFields.map((f) => [f.name, f]));
-    const newMap = new Map(newFields.map((f) => [f.name, f]));
-
-    for (const f of newFields) {
-      if (!oldMap.has(f.name)) changes.push(`新增字段 ${f.name}(${f.type})`);
-    }
-    for (const f of oldFields) {
-      if (!newMap.has(f.name)) changes.push(`移除字段 ${f.name}(${f.type})`);
-    }
-    for (const f of newFields) {
-      const old = oldMap.get(f.name);
-      if (old && old.type !== f.type) changes.push(`修改字段 ${f.name}: ${old.type} → ${f.type}`);
-    }
-    for (const f of newFields) {
-      const old = oldMap.get(f.name);
-      if (old && !old.removed && f.removed) changes.push(`停用字段 ${f.name}(${f.type})`);
-      if (old && old.removed && !f.removed) changes.push(`恢复字段 ${f.name}(${f.type})`);
-    }
-
-    return changes.length > 0 ? changes.join('; ') : '无变更';
-  }
-
-  hasStructuralChange(oldFields: AutoCodeField[], newFields: AutoCodeField[]): boolean {
-    const oldMap = new Map(oldFields.map((f) => [f.name, f]));
-    const newMap = new Map(newFields.map((f) => [f.name, f]));
-
-    if (oldMap.size !== newMap.size) return true;
-
-    for (const f of newFields) {
-      if (!oldMap.has(f.name)) return true;
-    }
-    for (const f of oldFields) {
-      if (!newMap.has(f.name)) return true;
-    }
-
-    for (const f of newFields) {
-      const old = oldMap.get(f.name);
-      if (!old) return true;
-      if (
-        old.type !== f.type ||
-        old.required !== f.required ||
-        old.unique !== f.unique ||
-        old.length !== f.length ||
-        old.relationType !== f.relationType ||
-        old.relationTable !== f.relationTable ||
-        old.removed !== f.removed
-      ) return true;
-    }
-
-    return false;
-  }
-
-  getRemovedFields(oldFields: AutoCodeField[], newFields: AutoCodeField[]): AutoCodeField[] {
-    const newNames = new Set(newFields.map((f) => f.name));
-    return oldFields.filter((f) => !newNames.has(f.name));
-  }
-
-  async getLatestVersion(tableName: string): Promise<SysAutoCodeHistory & { menuName?: string } | null> {
-    const rows = await this.db
-      .select()
-      .from(sysAutoCodeHistories)
-      .where(eq(sysAutoCodeHistories.tableName, tableName))
-      .orderBy(desc(sysAutoCodeHistories.version), desc(sysAutoCodeHistories.createdAt))
-      .limit(1);
-
-    const record = rows[0] ?? null;
-
-    if (record && !record.fields) {
-      const parsed = await this.parseFieldsFromSchema(tableName);
-      if (parsed.length > 0) {
-        (record as any).fields = parsed;
-      }
-    }
-
-    if (record) {
-      const n = deriveNames(tableName);
-      const componentPath = `${n.pageComponentPath}`;
-      const menuRows = await this.db
-        .select({ name: sysMenus.name })
-        .from(sysMenus)
-        .where(and(eq(sysMenus.component, componentPath), isNull(sysMenus.deletedAt)))
-        .limit(1);
-      if (menuRows.length > 0) {
-        (record as any).menuName = menuRows[0]!.name;
-      }
-    }
-
-    return record;
-  }
-
-  private async parseFieldsFromSchema(tableName: string): Promise<AutoCodeField[]> {
-    try {
-      const n = deriveNames(tableName);
-      const projectRoot = this.resolveProjectRoot();
-      const schemaPath = path.join(projectRoot, 'release/jimo/apps/server/src/db/schema', `${n.kebabName}.ts`);
-
-      if (!existsSync(schemaPath)) return [];
-
-      const content = await fs.readFile(schemaPath, 'utf-8');
-      const fields: AutoCodeField[] = [];
-
-      const columnPattern = /^\s+(\w+):\s+(\w+)\('(\w+)'(?:,\s*\{[^}]*\})?\)(\.notNull\(\))?(\.default\([^)]*\))?(\.references\([^)]*\))?/gm;
-      let match: RegExpExecArray | null;
-
-      while ((match = columnPattern.exec(content)) !== null) {
-        const colName = match[3]!;
-
-        if (['id', 'created_at', 'updated_at', 'deleted_at', 'created_by', 'updated_by'].includes(colName)) {
-          continue;
-        }
-
-        const drizzleType = match[2]!;
-        const isNotNull = !!match[4];
-
-        let fieldType: AutoCodeField['type'] = 'varchar';
-        switch (drizzleType) {
-          case 'varchar': fieldType = 'varchar'; break;
-          case 'text': fieldType = 'text'; break;
-          case 'integer': fieldType = 'integer'; break;
-          case 'bigint': fieldType = 'bigint'; break;
-          case 'numeric': fieldType = 'decimal'; break;
-          case 'boolean': fieldType = 'boolean'; break;
-          case 'timestamp': fieldType = 'timestamp'; break;
-          case 'uuid':
-            if (match[6]) { fieldType = 'relation'; } else { fieldType = 'uuid'; }
-            break;
-        }
-
-        fields.push({
-          name: colName,
-          type: fieldType,
-          required: isNotNull,
-          unique: false,
-          description: colName,
-          searchable: true,
-          listable: true,
-          creatable: true,
-          editable: true,
-        });
-      }
-
-      return fields;
-    } catch {
-      return [];
-    }
-  }
-
-  async getHistoryVersions(tableName: string): Promise<SysAutoCodeHistory[]> {
-    return this.db
-      .select()
-      .from(sysAutoCodeHistories)
-      .where(eq(sysAutoCodeHistories.tableName, tableName))
-      .orderBy(desc(sysAutoCodeHistories.version), desc(sysAutoCodeHistories.createdAt));
-  }
-
-  // =========================================================================
-  // ER Graph
-  // =========================================================================
-
   async getErGraph(packageId?: string): Promise<ErGraph> {
     const rows = await this.db
       .select()
       .from(sysAutoCodeHistories)
-      .orderBy(
-        desc(sysAutoCodeHistories.tableName),
-        desc(sysAutoCodeHistories.version),
-        desc(sysAutoCodeHistories.createdAt),
-      );
+      .orderBy(desc(sysAutoCodeHistories.tableName), desc(sysAutoCodeHistories.version), desc(sysAutoCodeHistories.createdAt));
 
     const latestByTable = new Map<string, SysAutoCodeHistory>();
     for (const row of rows) {
@@ -2380,22 +479,13 @@ export class AutocodeService {
 
     if (packageId) {
       let pkgName: string | undefined;
-      try {
-        const pkg = await this.findOnePackage(packageId);
-        pkgName = pkg.name;
-      } catch { /* package not found */ }
-      histories = pkgName
-        ? histories.filter((h) => h.packageName === pkgName)
-        : [];
+      try { const pkg = await this.packageService.findOnePackage(packageId); pkgName = pkg.name; } catch { /* not found */ }
+      histories = pkgName ? histories.filter((h) => h.packageName === pkgName) : [];
     }
 
-    if (histories.length === 0) {
-      return { nodes: [], edges: [] };
-    }
+    if (histories.length === 0) return { nodes: [], edges: [] };
 
-    const componentPaths = histories.map(
-      (h) => `./${deriveNames(h.tableName!).kebabName}/index`,
-    );
+    const componentPaths = histories.map((h) => `./${deriveNames(h.tableName!).kebabName}/index`);
     const menuRows = await this.db
       .select({ component: sysMenus.component, name: sysMenus.name })
       .from(sysMenus)
@@ -2416,630 +506,24 @@ export class AutocodeService {
   }
 
   // =========================================================================
-  // Package CRUD
+  // Package delegates
   // =========================================================================
 
-  async findAllPackages(params: { page?: number; pageSize?: number; name?: string; includeDeleted?: boolean }): Promise<{ list: SysAutoCodePackage[]; total: number; page: number; pageSize: number }> {
-    const page = params.page ?? 1;
-    const pageSize = params.pageSize ?? 10;
-    const offset = (page - 1) * pageSize;
-
-    const conditions = params.includeDeleted ? [] : [isNull(sysAutoCodePackages.deletedAt)];
-    if (params.name) {
-      conditions.push(ilike(sysAutoCodePackages.name, `%${params.name}%`));
-    }
-
-    const whereClause = and(...conditions);
-
-    const [rows, totalRows] = await Promise.all([
-      this.db
-        .select()
-        .from(sysAutoCodePackages)
-        .where(whereClause)
-        .orderBy(desc(sysAutoCodePackages.createdAt))
-        .limit(pageSize)
-        .offset(offset),
-      this.db
-        .select({ count: count() })
-        .from(sysAutoCodePackages)
-        .where(whereClause),
-    ]);
-
-    const total = totalRows[0]?.count ?? 0;
-
-    return { list: rows, total, page, pageSize };
+  async findAllPackages(params: { page?: number; pageSize?: number; name?: string; includeDeleted?: boolean }) {
+    return this.packageService.findAllPackages(params);
   }
 
-  async createPackage(dto: CreatePackageDto): Promise<SysAutoCodePackage> {
-    const menuId = await this.ensureDirectoryMenu(dto.name);
-
-    const rows = await this.db
-      .insert(sysAutoCodePackages)
-      .values({
-        name: dto.name,
-        description: dto.description ?? '',
-        templates: dto.templates ?? {},
-        tableName: dto.tableName ?? '',
-        fields: dto.fields ?? null,
-        generateWeb: dto.generateWeb ?? true,
-        menuId,
-      })
-      .returning();
-
-    return rows[0]!;
-  }
-
-  async findOnePackage(id: string): Promise<SysAutoCodePackage> {
-    const rows = await this.db
-      .select()
-      .from(sysAutoCodePackages)
-      .where(and(eq(sysAutoCodePackages.id, id), isNull(sysAutoCodePackages.deletedAt)))
-      .limit(1);
-
-    if (rows.length === 0) {
-      throw new NotFoundException('Package not found');
-    }
-
-    return rows[0]!;
-  }
-
-  async updatePackage(id: string, dto: UpdatePackageDto): Promise<SysAutoCodePackage> {
-    await this.findOnePackage(id);
-
-    const updateData: Record<string, unknown> = { updatedAt: new Date() };
-    if (dto.name !== undefined) updateData.name = dto.name;
-    if (dto.description !== undefined) updateData.description = dto.description;
-    if (dto.templates !== undefined) updateData.templates = dto.templates;
-    if (dto.tableName !== undefined) updateData.tableName = dto.tableName;
-    if (dto.fields !== undefined) updateData.fields = dto.fields;
-    if (dto.generateWeb !== undefined) updateData.generateWeb = dto.generateWeb;
-
-    const rows = await this.db
-      .update(sysAutoCodePackages)
-      .set(updateData)
-      .where(and(eq(sysAutoCodePackages.id, id), isNull(sysAutoCodePackages.deletedAt)))
-      .returning();
-
-    if (rows.length === 0) {
-      throw new NotFoundException('Package not found');
-    }
-
-    return rows[0]!;
-  }
-
-  async deletePackage(id: string): Promise<void> {
-    const pkg = await this.findOnePackage(id);
-
-    if (pkg.menuId) {
-      const children = await this.db
-        .select({ id: sysMenus.id })
-        .from(sysMenus)
-        .where(eq(sysMenus.parentId, pkg.menuId));
-
-      const childIds = children.map((c) => c.id);
-
-      let btnIds: string[] = [];
-      if (childIds.length > 0) {
-        const btnRows = await this.db
-          .select({ id: sysMenus.id })
-          .from(sysMenus)
-          .where(
-            and(
-              inArray(sysMenus.parentId, childIds),
-              eq(sysMenus.menuType, 3),
-              isNull(sysMenus.deletedAt),
-            ),
-          );
-        btnIds = btnRows.map((b) => b.id);
-      }
-
-      const allMenuIds = [pkg.menuId, ...childIds, ...btnIds];
-
-      await this.db.delete(sysAuthorityBtns).where(inArray(sysAuthorityBtns.menuId, allMenuIds));
-      await this.db.delete(sysRoleMenus).where(inArray(sysRoleMenus.menuId, allMenuIds));
-      if (btnIds.length > 0) {
-        await this.db.delete(sysMenus).where(inArray(sysMenus.id, btnIds));
-      }
-      if (childIds.length > 0) {
-        await this.db.delete(sysMenus).where(inArray(sysMenus.id, childIds));
-      }
-      await this.db.delete(sysMenus).where(eq(sysMenus.id, pkg.menuId));
-    }
-
-    await this.db
-      .update(sysAutoCodePackages)
-      .set({ deletedAt: sql<Date>`NOW()` })
-      .where(and(eq(sysAutoCodePackages.id, id), isNull(sysAutoCodePackages.deletedAt)));
-  }
-
-  /** 查询所有 package 及其下已生成的实体列表（按 packageName 匹配） */
-  async listMenusByPackage(): Promise<{ id: string; name: string; tables: string[] }[]> {
-    const pkgs = await this.db
-      .select({ id: sysAutoCodePackages.id, name: sysAutoCodePackages.name })
-      .from(sysAutoCodePackages)
-      .where(isNull(sysAutoCodePackages.deletedAt));
-
-    // Get latest packageName per tableName via raw SQL subquery
-    const rawRows = await this.db.execute<{ table_name: string; package_name: string }>(
-      sql`SELECT DISTINCT ON (table_name) table_name, package_name
-          FROM sys_auto_code_histories
-          ORDER BY table_name, created_at DESC`,
-    );
-    const histories = Array.isArray(rawRows) ? rawRows : (rawRows as any).rows ?? [];
-
-    const result = pkgs.map((pkg) => ({
-      id: pkg.id,
-      name: pkg.name,
-      tables: histories
-        .filter((h: any) => h.package_name === pkg.name)
-        .map((h: any) => h.table_name as string),
-    }));
-
-    const unassigned = histories
-      .filter((h: any) => !h.package_name)
-      .map((h: any) => h.table_name as string);
-    if (unassigned.length > 0) {
-      result.push({ id: '', name: '(未分类)', tables: unassigned });
-    }
-
-    return result;
-  }
-
-  /** 将一张实体表重新归属到指定 package（更新菜单 parentId + 所有 history.packageName） */
-  async assignToPackage(tableName: string, packageId: string): Promise<{ ok: boolean; movedMenu: boolean }> {
-    let pkg = await this.findOnePackage(packageId);
-
-    // If package has no menuId or its menuId is the shared "untitled" directory, rebuild a proper one
-    let targetMenuId = pkg.menuId;
-    if (!targetMenuId) {
-      targetMenuId = await this.ensureDirectoryMenu(pkg.name);
-      await this.db
-        .update(sysAutoCodePackages)
-        .set({ menuId: targetMenuId, updatedAt: new Date() })
-        .where(eq(sysAutoCodePackages.id, packageId));
-    } else {
-      // Verify the directory menu is not shared (same path = multiple packages pointing to it)
-      const dirMenu = await this.db
-        .select({ path: sysMenus.path })
-        .from(sysMenus)
-        .where(eq(sysMenus.id, targetMenuId))
-        .limit(1);
-      if (dirMenu.length > 0 && dirMenu[0]!.path === '/pkg/untitled') {
-        // The menu is the broken shared fallback — create a proper one
-        targetMenuId = await this.ensureDirectoryMenu(pkg.name);
-        await this.db
-          .update(sysAutoCodePackages)
-          .set({ menuId: targetMenuId, updatedAt: new Date() })
-          .where(eq(sysAutoCodePackages.id, packageId));
-      }
-    }
-
-    const n = deriveNames(tableName);
-    const componentPath = `${n.pageComponentPath}`;
-
-    // Update menu parentId
-    let movedMenu = false;
-    const menuRows = await this.db
-      .select({ id: sysMenus.id })
-      .from(sysMenus)
-      .where(and(eq(sysMenus.component, componentPath), isNull(sysMenus.deletedAt)))
-      .limit(1);
-
-    if (menuRows.length > 0) {
-      await this.db
-        .update(sysMenus)
-        .set({ parentId: targetMenuId })
-        .where(eq(sysMenus.id, menuRows[0]!.id));
-      // Ensure this entity menu is visible to admin roles
-      const adminRoles = await this.db
-        .select({ id: sysRoles.id })
-        .from(sysRoles)
-        .where(inArray(sysRoles.code, ['super_admin', 'admin']));
-      if (adminRoles.length > 0) {
-        await this.db
-          .insert(sysRoleMenus)
-          .values(adminRoles.map((role) => ({ roleId: role.id, menuId: menuRows[0]!.id })))
-          .onConflictDoNothing();
-        // Also ensure the parent directory menu is accessible
-        await this.db
-          .insert(sysRoleMenus)
-          .values(adminRoles.map((role) => ({ roleId: role.id, menuId: targetMenuId! })))
-          .onConflictDoNothing();
-      }
-      movedMenu = true;
-    }
-
-    // Update all history records for this tableName
-    await this.db
-      .update(sysAutoCodeHistories)
-      .set({ packageName: pkg.name })
-      .where(eq(sysAutoCodeHistories.tableName, tableName));
-
-    return { ok: true, movedMenu };
-  }
-
-  // =========================================================================
-  // Menu auto-creation
-  // =========================================================================
-
-  private static readonly CRUD_DEFS: { name: string; desc: string; method: string; suffix: string }[] = [
-    { name: 'query',       desc: '查询',     method: 'GET',    suffix: '' },
-    { name: 'add',         desc: '新增',     method: 'POST',   suffix: '' },
-    { name: 'edit',        desc: '编辑',     method: 'PATCH',  suffix: '/:id' },
-    { name: 'delete',      desc: '删除',     method: 'DELETE', suffix: '/:id' },
-    { name: 'batchDelete', desc: '批量删除', method: 'DELETE', suffix: '/batch' },
-  ];
-
-  private async syncTablesToDB(dto: AutoCodeDto): Promise<void> {
-    const n = deriveNames(dto.tableName);
-    const mainSql = buildCreateTableSql(n.tableName, dto.fields);
-    await this.db.execute(sql.raw(mainSql));
-
-    for (const f of dto.fields) {
-      if (f.type === 'relation' && f.relationType === 'one-to-many' && f.detailFields?.length) {
-        const singularMain = singularize(n.tableName.replace(/^lc_/, ''));
-        const childTable = `lc_${singularMain}_${singularize(f.name)}`;
-        const fkCol = `${singularMain}_id`;
-        const childSql = buildCreateTableSql(childTable, f.detailFields, fkCol, n.tableName);
-        await this.db.execute(sql.raw(childSql));
-
-        // Grandchild tables (one-to-many within child)
-        for (const gf of f.detailFields) {
-          if (gf.type === 'relation' && gf.relationType === 'one-to-many' && gf.detailFields?.length) {
-            const singularChild = singularize(f.name);
-            const singularGrand = singularize(gf.name);
-            const grandTable = `lc_${singularMain}_${singularChild}_${singularGrand}`;
-            const grandFkCol = `${singularMain}_${singularChild}_id`;
-            const grandSql = buildCreateTableSql(grandTable, gf.detailFields, grandFkCol, childTable);
-            await this.db.execute(sql.raw(grandSql));
-          }
-        }
-      }
-    }
-  }
-
-  private async autoCreateMenu(dto: AutoCodeDto, parentMenuId?: string | null): Promise<string> {
-    const n = deriveNames(dto.tableName);
-    const componentName = `${n.pageComponentPath}`;
-
-    // Entity menu path is always the canonical /lc/<kebab> route registered in .umirc.ts.
-    // parentMenuId only sets the sidebar hierarchy (parentId), never the URL path.
-    const menuPath = n.routePath;
-
-    const existing = await this.db
-      .select({ id: sysMenus.id })
-      .from(sysMenus)
-      .where(and(eq(sysMenus.path, menuPath), isNull(sysMenus.deletedAt)))
-      .limit(1);
-
-    let menuId: string;
-
-    if (existing.length > 0) {
-      // Menu already exists — reuse it but still fall through to ensure all
-      // button sub-menus are present (guards against partial creation on prior run).
-      menuId = existing[0].id;
-    } else {
-      const sortWhere = parentMenuId
-        ? eq(sysMenus.parentId, parentMenuId)
-        : isNull(sysMenus.parentId);
-      const maxSortRows = await this.db
-        .select({ maxSort: sql<number>`COALESCE(MAX(${sysMenus.sort}), -1)` })
-        .from(sysMenus)
-        .where(sortWhere);
-      const nextSort = (maxSortRows[0]?.maxSort ?? -1) + 1;
-
-      const menuRows = await this.db
-        .insert(sysMenus)
-        .values({
-          name: extractMenuName(dto.description, n.pascalName),
-          path: menuPath,
-          component: componentName,
-          icon: 'TableOutlined',
-          parentId: parentMenuId ?? null,
-          sort: nextSort,
-          isVisible: 1,
-          menuType: 2,
-        })
-        .returning();
-
-      menuId = menuRows[0]!.id;
-    }
-
-    // Roles that get the page menu + CRUD button sub-menus + per-API Casbin
-    // policies for this generated table. editor is included so editors can CRUD
-    // generated tables by default (consistent with Casbin's /api/v1/lc/* grant);
-    // viewer stays read-only (no menu, no buttons).
-    const adminRoles = await this.db
-      .select({ id: sysRoles.id, code: sysRoles.code })
-      .from(sysRoles)
-      .where(inArray(sysRoles.code, ['super_admin', 'admin', 'editor']));
-
-    if (adminRoles.length > 0) {
-      await this.db
-        .insert(sysRoleMenus)
-        .values(adminRoles.map((role) => ({ roleId: role.id, menuId })))
-        .onConflictDoNothing();
-    }
-
-    // Clean up old button-style entries first
-    const oldBtnChildren = await this.db
-      .select({ id: sysMenus.id })
-      .from(sysMenus)
-      .where(
-        and(
-          eq(sysMenus.parentId, menuId),
-          eq(sysMenus.menuType, 3),
-          isNull(sysMenus.deletedAt),
-        ),
-      );
-    if (oldBtnChildren.length > 0) {
-      const oldIds = oldBtnChildren.map((r) => r.id);
-      await this.db.delete(sysAuthorityBtns).where(inArray(sysAuthorityBtns.menuId, [menuId, ...oldIds]));
-      await this.db.delete(sysRoleMenus).where(inArray(sysRoleMenus.menuId, oldIds));
-      await this.db.delete(sysMenus).where(inArray(sysMenus.id, oldIds));
-    }
-
-    const apiPrefix = '/api/v1/lc';
-    const apiGroup = `lc/${n.kebabName}`;
-
-    let crudCount = 0;
-    for (let sort = 0; sort < AutocodeService.CRUD_DEFS.length; sort++) {
-      const def = AutocodeService.CRUD_DEFS[sort]!;
-      const permission = `lc:${n.kebabName}:${def.name}`;
-      const apiPath = `${apiPrefix}/${n.kebabName}${def.suffix}`;
-
-      const existingSub = await this.db
-        .select({ id: sysMenus.id })
-        .from(sysMenus)
-        .where(
-          and(
-            eq(sysMenus.parentId, menuId),
-            eq(sysMenus.name, def.name),
-            eq(sysMenus.menuType, 3),
-            isNull(sysMenus.deletedAt),
-          ),
-        )
-        .limit(1);
-
-      if (existingSub.length > 0) {
-        crudCount++;
-        continue;
-      }
-
-      const subRows = await this.db
-        .insert(sysMenus)
-        .values({
-          name: def.name,
-          path: null,
-          component: null,
-          icon: null,
-          parentId: menuId,
-          sort,
-          isVisible: 1,
-          permission,
-          menuType: 3,
-        })
-        .returning();
-
-      const subMenuId = subRows[0]!.id;
-      crudCount++;
-
-      const apiPaths = def.suffix === ''
-        ? [apiPath, `${apiPath}/:id`]
-        : [apiPath];
-
-      for (const p of apiPaths) {
-        const existingApi = await this.db
-          .select({ id: sysApis.id })
-          .from(sysApis)
-          .where(
-            and(
-              eq(sysApis.method, def.method),
-              eq(sysApis.path, p),
-              isNull(sysApis.deletedAt),
-            ),
-          )
-          .limit(1);
-
-        if (existingApi.length === 0) {
-          await this.db.insert(sysApis).values({
-            method: def.method,
-            path: p,
-            permission,
-            description: `${def.desc}${extractMenuName(dto.description, n.pascalName)}`,
-            apiGroup,
-          });
-        }
-      }
-
-      if (adminRoles.length > 0) {
-        await this.db
-          .insert(sysRoleMenus)
-          .values(adminRoles.map((role) => ({ roleId: role.id, menuId: subMenuId })))
-          .onConflictDoNothing();
-
-        for (const role of adminRoles) {
-          for (const p of apiPaths) {
-            await this.casbin.addPolicy(role.code, p, def.method);
-          }
-        }
-      }
-    }
-
-    // Tree endpoint permission for self-referential tables (GET /lc/{name}/tree)
-    const hasSelfRef = dto.fields.some(
-      (f) => f.type === 'relation' && f.relationType === 'many-to-one' && f.relationTable === dto.tableName,
-    );
-    if (hasSelfRef) {
-      const treePath = `${apiPrefix}/${n.kebabName}/tree`;
-      const treePermission = `lc:${n.kebabName}:query`;
-      const existingTreeApi = await this.db
-        .select({ id: sysApis.id })
-        .from(sysApis)
-        .where(and(eq(sysApis.method, 'GET'), eq(sysApis.path, treePath), isNull(sysApis.deletedAt)))
-        .limit(1);
-      if (existingTreeApi.length === 0) {
-        await this.db.insert(sysApis).values({
-          method: 'GET',
-          path: treePath,
-          permission: treePermission,
-          description: `查询${extractMenuName(dto.description, n.pascalName)}树形结构`,
-          apiGroup,
-        });
-      }
-      for (const role of adminRoles) {
-        await this.casbin.addPolicy(role.code, treePath, 'GET');
-      }
-    }
-
-    // Agent button permission for entity-agent-enabled tables
-    if (dto.agentConfig?.enabled) {
-      const AGENT_PERMISSION = 'autocode:ai-chat';
-      const existingAgentBtn = await this.db
-        .select({ id: sysMenus.id })
-        .from(sysMenus)
-        .where(
-          and(
-            eq(sysMenus.parentId, menuId),
-            eq(sysMenus.name, 'agent'),
-            eq(sysMenus.menuType, 3),
-            isNull(sysMenus.deletedAt),
-          ),
-        )
-        .limit(1);
-
-      if (existingAgentBtn.length === 0) {
-        const agentBtnRows = await this.db
-          .insert(sysMenus)
-          .values({
-            name: 'agent',
-            path: null,
-            component: null,
-            icon: null,
-            parentId: menuId,
-            sort: AutocodeService.CRUD_DEFS.length,
-            isVisible: 1,
-            permission: AGENT_PERMISSION,
-            menuType: 3,
-          })
-          .returning();
-        const agentBtnId = agentBtnRows[0]!.id;
-
-        if (adminRoles.length > 0) {
-          await this.db
-            .insert(sysRoleMenus)
-            .values(adminRoles.map((role) => ({ roleId: role.id, menuId: agentBtnId })))
-            .onConflictDoNothing();
-        }
-      }
-
-      // Ensure sys_apis entry for ai-chat (shared by all entity agents)
-      const apiExists = await this.db
-        .select({ id: sysApis.id })
-        .from(sysApis)
-        .where(and(eq(sysApis.path, '/api/v1/autocode/ai-chat'), eq(sysApis.method, 'POST'), isNull(sysApis.deletedAt)))
-        .limit(1);
-      if (apiExists.length === 0) {
-        await this.db.insert(sysApis).values({
-          method: 'POST',
-          path: '/api/v1/autocode/ai-chat',
-          permission: AGENT_PERMISSION,
-          description: '实体伴随Agent对话(SSE)',
-          apiGroup: 'autocode',
-        });
-      }
-
-      // Also ensure ai-test entry
-      const testApiExists = await this.db
-        .select({ id: sysApis.id })
-        .from(sysApis)
-        .where(and(eq(sysApis.path, '/api/v1/autocode/ai-test'), eq(sysApis.method, 'POST'), isNull(sysApis.deletedAt)))
-        .limit(1);
-      if (testApiExists.length === 0) {
-        await this.db.insert(sysApis).values({
-          method: 'POST',
-          path: '/api/v1/autocode/ai-test',
-          permission: AGENT_PERMISSION,
-          description: 'AI配置连通性测试',
-          apiGroup: 'autocode',
-        });
-      }
-    }
-
-    this.logger.log(
-      `[AutocodeService] Auto-created menu '${extractMenuName(dto.description, n.pascalName)}' (${menuPath}), ` +
-      `parent=${parentMenuId ?? 'root'}, assigned to ${adminRoles.length} roles, ` +
-      `${crudCount} CRUD permissions`,
-    );
-    return menuId;
-  }
-
-  // =========================================================================
-  // Package ↔ Generation integration
-  // =========================================================================
-
-  private async ensureDirectoryMenu(packageName: string): Promise<string> {
-    // Look up by name first — handles Chinese names that would otherwise all collapse to 'untitled'
-    const existingByName = await this.db
-      .select({ id: sysMenus.id })
-      .from(sysMenus)
-      .where(and(
-        eq(sysMenus.name, packageName),
-        eq(sysMenus.menuType, 1),
-        isNull(sysMenus.parentId),
-        isNull(sysMenus.deletedAt),
-      ))
-      .limit(1);
-
-    if (existingByName.length > 0) {
-      return existingByName[0]!.id;
-    }
-
-    // Build a unique path: ASCII kebab + short uuid suffix to avoid collisions
-    const kebabPart = toKebabCase(packageName).replace(/[^a-z0-9-]/g, '') || 'pkg';
-    const shortId = crypto.randomUUID().slice(0, 8);
-    const dirPath = `/pkg/${kebabPart}-${shortId}`;
-
-    const maxSortRows = await this.db
-      .select({ maxSort: sql<number>`COALESCE(MAX(${sysMenus.sort}), -1)` })
-      .from(sysMenus)
-      .where(isNull(sysMenus.parentId));
-    const nextSort = (maxSortRows[0]?.maxSort ?? -1) + 1;
-
-    const menuRows = await this.db
-      .insert(sysMenus)
-      .values({
-        name: packageName,
-        path: dirPath,
-        component: null,
-        icon: 'AppstoreOutlined',
-        parentId: null,
-        sort: nextSort,
-        isVisible: 1,
-        menuType: 1,
-      })
-      .returning();
-
-    const menuId = menuRows[0]!.id;
-
-    const adminRoles = await this.db
-      .select({ id: sysRoles.id })
-      .from(sysRoles)
-      .where(inArray(sysRoles.code, ['super_admin', 'admin']));
-
-    if (adminRoles.length > 0) {
-      await this.db
-        .insert(sysRoleMenus)
-        .values(adminRoles.map((role) => ({ roleId: role.id, menuId })))
-        .onConflictDoNothing();
-    }
-
-    this.logger.log(` Created directory menu '${packageName}' at ${dirPath}`);
-    return menuId;
-  }
+  async createPackage(dto: CreatePackageDto) { return this.packageService.createPackage(dto); }
+  async findOnePackage(id: string) { return this.packageService.findOnePackage(id); }
+  async updatePackage(id: string, dto: UpdatePackageDto) { return this.packageService.updatePackage(id, dto); }
+  async deletePackage(id: string) { return this.packageService.deletePackage(id); }
+  async listMenusByPackage() { return this.packageService.listMenusByPackage(); }
+  async assignToPackage(tableName: string, packageId: string) { return this.packageService.assignToPackage(tableName, packageId); }
+  async getPackageConfig(id: string) { return this.packageService.getPackageConfig(id); }
+  async listAllPackages() { return this.packageService.listAllPackages(); }
 
   async saveFromConfig(dto: SaveFromConfigDto): Promise<SysAutoCodePackage> {
-    const menuId = await this.ensureDirectoryMenu(dto.name);
+    const menuId = await this.menuService.ensureDirectoryMenu(dto.name);
     let templates: Record<string, string> = {};
     if (dto.generateTemplates) {
       const autoCodeDto: AutoCodeDto = {
@@ -3069,136 +553,35 @@ export class AutocodeService {
     return rows[0]!;
   }
 
-  /**
-   * 防线: 拒绝对系统保留表名执行删文件操作。
-   * deleteEntity 等删文件函数用 deriveNames(tableName) 推导路径,
-   * 若 tableName 撞系统保留名(如 departments),会误删系统页面/服务/模块
-   * (见 2026-06-23 departments 事故)。此处兜底拦截,防 history 脏数据或绕过工具直接调 service。
-   */
-  private ensureNotReservedTable(tableName: string): void {
-    if (isReservedTableName(tableName)) {
-      throw new Error(
-        `拒绝删除:表 '${tableName}' 是系统保留名,不会处理其系统文件(保护平台自带资产)。`,
-      );
-    }
+  // =========================================================================
+  // History delegates
+  // =========================================================================
+
+  async findAllHistory(params: { page?: number; pageSize?: number; tableName?: string }) {
+    return this.historyService.findAllHistory(params);
   }
-
-  /**
-   * 防线2: 校验 drizzle-kit push 后物理表列是否与代码 schema 期望对齐。
-   * push 在 silent 模式下遇到破坏性变更(删/改列)会静默跳过,导致 schema↔DB 脱节——
-   * 运行时 drizzle 按代码 schema 发查询却撞上结构不符的物理表 → 500。
-   * 本方法在生成/更新后主动比对期望列与实际列,缺列即抛错,把故障挡在生成阶段。
-   */
-  private async verifyPhysicalSchema(
-    tableName: string,
-    fields: { name: string; type: string; relationType?: string; removed?: boolean }[],
-  ): Promise<void> {
-    const lcTable = `lc_${tableName}`;
-    // 系统字段(生成器 generateSchema 无条件注入) + dto 字段映射的物理列
-    const SYSTEM_COLS = [
-      'id', 'created_at', 'updated_at', 'deleted_at',
-      'created_by', 'updated_by', 'owner_id', 'shared_with',
-    ];
-    const expected = new Set<string>(SYSTEM_COLS);
-    for (const f of fields) {
-      if (f.type === 'relation' && f.relationType === 'one-to-many') continue; // 子表,不在主表产列
-      if (f.removed) continue; // 注释掉的非实际列
-      if (f.name === 'id') continue;
-      expected.add(f.name);
-    }
-
-    let actual: string[] = [];
-    try {
-      const res = await this.db.execute(
-        sql`SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ${lcTable} ORDER BY ordinal_position`,
-      );
-      actual = Array.from(res as any[]).map((r: any) => String(r.column_name));
-    } catch (e: any) {
-      // 读取失败不阻塞生成(避免环境问题误伤),仅告警
-      this.logger.warn(`[AutocodeService] verifyPhysicalSchema: 读取 ${lcTable} 列失败,跳过校验: ${e?.message}`);
-      return;
-    }
-
-    if (actual.length === 0) {
-      throw new InternalServerErrorException(
-        `drizzle-kit push 后物理表 ${lcTable} 不存在,生成未能同步到数据库。请检查 push 输出,或在 server 目录手动执行 npx drizzle-kit push --force 后重试。`,
-      );
-    }
-
-    const actualSet = new Set(actual);
-    const missing = [...expected].filter((c) => !actualSet.has(c));
-    const extra = actual.filter((c) => !expected.has(c));
-
-    if (missing.length > 0) {
-      throw new InternalServerErrorException(
-        `drizzle-kit push 未将对齐物理表 ${lcTable}: 缺少期望列 [${missing.join(', ')}]` +
-          (extra.length > 0 ? `;同时存在残留列 [${extra.join(', ')}]` : '') +
-          `。通常是物理表为历史遗留结构、push 静默跳过了破坏性变更所致。` +
-          `建议确认数据可丢弃后手动执行 DROP TABLE ${lcTable},再重新触发生成(将按当前 schema 重建)。`,
-      );
-    }
-    if (extra.length > 0) {
-      // 多余列:可能为历史残留或合理的手动列,仅告警不阻塞
-      this.logger.warn(
-        `[AutocodeService] 物理表 ${lcTable} 存在 schema 未声明的列 [${extra.join(', ')}](可能为历史残留,已忽略)。`,
-      );
-    }
-  }
-
-  private async getPackageName(packageId: string): Promise<string> {
-    const rows = await this.db
-      .select({ name: sysAutoCodePackages.name })
-      .from(sysAutoCodePackages)
-      .where(and(eq(sysAutoCodePackages.id, packageId), isNull(sysAutoCodePackages.deletedAt)))
-      .limit(1);
-    return rows[0]?.name ?? '';
-  }
-
-  async getPackageConfig(id: string): Promise<{
-    tableName: string;
-    description: string;
-    fields: AutoCodeField[];
-    generateWeb: boolean;
-    name: string;
-    menuId: string | null;
-  }> {
-    const pkg = await this.findOnePackage(id);
-    return {
-      tableName: pkg.tableName ?? '',
-      description: pkg.description ?? '',
-      fields: (pkg.fields as AutoCodeField[]) ?? [],
-      generateWeb: pkg.generateWeb ?? true,
-      name: pkg.name,
-      menuId: pkg.menuId ?? null,
-    };
-  }
-
-  async listAllPackages(): Promise<Array<{ id: string; name: string; tableName: string; description: string }>> {
-    const rows = await this.db
-      .select({
-        id: sysAutoCodePackages.id,
-        name: sysAutoCodePackages.name,
-        tableName: sysAutoCodePackages.tableName,
-        description: sysAutoCodePackages.description,
-      })
-      .from(sysAutoCodePackages)
-      .where(isNull(sysAutoCodePackages.deletedAt))
-      .orderBy(desc(sysAutoCodePackages.createdAt));
-
-    return rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      tableName: r.tableName ?? '',
-      description: r.description ?? '',
-    }));
-  }
+  async findOneHistory(id: string) { return this.historyService.findOneHistory(id); }
+  async rollbackHistory(id: string) { return this.historyService.rollbackHistory(id); }
+  async deleteHistory(id: string) { return this.historyService.deleteHistory(id); }
+  async startDeleteHistory(id: string, cascade = false) { return this.historyService.startDeleteHistory(id, cascade); }
+  async analyzeImpact(tableName: string, cascade = false) { return this.historyService.analyzeImpact(tableName, cascade); }
+  async getLatestVersion(tableName: string) { return this.historyService.getLatestVersion(tableName); }
+  async getHistoryVersions(tableName: string) { return this.historyService.getHistoryVersions(tableName); }
+  async computeChangeLog(oldFields: AutoCodeField[], newFields: AutoCodeField[]) { return this.historyService.computeChangeLog(oldFields, newFields); }
 
   // =========================================================================
-  // Mock data (public, for AI tool)
+  // Reserved names delegates
+  // =========================================================================
+
+  async getReservedNames() { return this.reservedNamesService.getReservedNames(); }
+  async addReservedNames(names: string[]) { return this.reservedNamesService.addReservedNames(names); }
+
+  // =========================================================================
+  // Mock data
   // =========================================================================
 
   async generateMockForTable(tableName: string, count: number, userId?: string): Promise<{ inserted: number }> {
-    const latest = await this.getLatestVersion(tableName);
+    const latest = await this.historyService.getLatestVersion(tableName);
     if (!latest) throw new Error(`表 '${tableName}' 不存在（无生成历史）`);
     const fields = (latest.fields as any[]) ?? [];
     if (fields.length === 0) throw new Error(`表 '${tableName}' 无字段信息，无法生成 mock 数据`);
@@ -3210,382 +593,466 @@ export class AutocodeService {
       generateWeb: false,
       mockData: { enabled: true, count },
     };
-    await this.insertMockData(dto as any, userId);
+    await this.mockDataService.insertMockData(dto as any, userId);
     return { inserted: count };
   }
 
   // =========================================================================
-  // Entry point updaters
+  // Private: async generate execution
   // =========================================================================
 
-  private resolveProjectRoot(): string {
-    let dir = process.cwd();
-    const root = path.parse(dir).root;
-    while (dir !== root) {
-      if (existsSync(path.join(dir, 'release', 'jimo', 'apps', 'server', 'src'))) {
-        return dir;
-      }
-      dir = path.resolve(dir, '..');
-    }
-    throw new Error(`Cannot resolve project root from cwd=${process.cwd()}`);
-  }
+  private async executeGenerateAsync(jobId: string, dto: AutoCodeDto): Promise<void> {
+    const totalSteps = AutocodeService.GENERATE_STEPS.length;
+    let createdFiles: string[] = [];
+    let files: Record<string, string> = {};
+    let projectRoot = '';
 
-  private async updateSchemaIndex(dto: AutoCodeDto, projectRoot: string): Promise<void> {
-    const n = deriveNames(dto.tableName);
-    const indexPath = path.join(projectRoot, 'release/jimo/apps/server/src/db/schema/index.ts');
-    const exportLine = `export * from './${n.kebabName}.js';`;
+    const updateStep = async (stepIndex: number, stepStatus: string, message?: string) => {
+      const steps: GenerateStep[] = AutocodeService.GENERATE_STEPS.map((s, i) => ({
+        key: s.key, label: s.label,
+        status: i < stepIndex ? 'completed' as const : i === stepIndex ? stepStatus as any : 'pending' as const,
+      }));
+      const progress = stepStatus === 'completed' ? Math.round(((stepIndex + 1) / totalSteps) * 100) : Math.round(((stepIndex + 0.5) / totalSteps) * 100);
+      await this.writeJobStatus(jobId, { jobId, status: stepStatus === 'failed' ? 'failed' : 'processing', steps, progress, currentStepLabel: message || AutocodeService.GENERATE_STEPS[stepIndex]!.label, error: stepStatus === 'failed' ? message : undefined });
+    };
 
-    let content = await fs.readFile(indexPath, 'utf-8');
-    if (content.includes(exportLine)) return;
-
-    content = content.trimEnd() + '\n' + exportLine + '\n';
-    await fs.writeFile(indexPath, content, 'utf-8');
-  }
-
-  private async updateAppModule(dto: AutoCodeDto, projectRoot: string): Promise<void> {
-    const n = deriveNames(dto.tableName);
-    const modulePath = path.join(projectRoot, 'release/jimo/apps/server/src/app.module.ts');
-
-    let content = await fs.readFile(modulePath, 'utf-8');
-
-    const importLine = `import { ${n.pascalSingular}Module } from './modules/${n.kebabSingular}/${n.kebabSingular}.module';`;
-    const moduleLine = `    ${n.pascalSingular}Module,`;
-
-    if (!content.includes(importLine)) {
-      const lastImportMatch = content.match(/^import .+;$/gm);
-      if (lastImportMatch && lastImportMatch.length > 0) {
-        const lastImport = lastImportMatch[lastImportMatch.length - 1]!;
-        content = content.replace(lastImport, `${lastImport}\n${importLine}`);
-      }
-
-      content = content.replace(
-        /(\s+)(OperationRecordModule,)/,
-        `$1$2\n${moduleLine}`,
-      );
-    }
-
-    // Register agent module when enabled
-    if (dto.agentConfig?.enabled) {
-      const agentImportLine = `import { ${n.pascalSingular}AgentModule } from './modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module';`;
-      const agentModuleLine = `    ${n.pascalSingular}AgentModule,`;
-
-      if (!content.includes(agentImportLine)) {
-        const lastImportMatch2 = content.match(/^import .+;$/gm);
-        if (lastImportMatch2 && lastImportMatch2.length > 0) {
-          const lastImport2 = lastImportMatch2[lastImportMatch2.length - 1]!;
-          content = content.replace(lastImport2, `${lastImport2}\n${agentImportLine}`);
+    try {
+      // Force mode cleanup
+      if (dto.force) {
+        this.historyService.ensureNotReservedTable(dto.tableName);
+        const n = deriveNames(dto.tableName);
+        const root = resolveProjectRoot();
+        const expectedPaths = [
+          `release/jimo/apps/server/src/db/schema/${n.kebabName}.ts`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.ts`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.controller.ts`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.module.ts`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/create-${n.kebabSingular}.dto.ts`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/query-${n.kebabSingular}.dto.ts`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/dto/update-${n.kebabSingular}.dto.ts`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.service.ts`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module.ts`,
+          `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
+          `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.service.contract.spec.ts`,
+          `release/jimo/apps/server/src/modules/${n.kebabSingular}/${n.kebabSingular}.http.contract.spec.ts`,
+        ];
+        const { existsSync } = await import('node:fs');
+        for (const p of expectedPaths) {
+          const fullPath = path.join(root, p);
+          if (existsSync(fullPath)) await fs.rm(fullPath, { force: true });
         }
-
-        content = content.replace(
-          /(\s+)(${n.pascalSingular}Module,)/,
-          `$1$2\n${agentModuleLine}`,
-        );
+        // Remove module dir (including agent/ and dto/ subdirs)
+        const moduleDir = path.join(root, `release/jimo/apps/server/src/modules/${n.kebabSingular}`);
+        if (existsSync(moduleDir)) {
+          try { await fs.rm(path.join(moduleDir, 'dto'), { recursive: true, force: true }); } catch { /* */ }
+          try { await fs.rm(path.join(moduleDir, 'agent'), { recursive: true, force: true }); } catch { /* */ }
+          try { await fs.rmdir(moduleDir); } catch { /* */ }
+        }
+        const pageDir = path.join(root, `release/jimo/apps/web/src/pages/${n.pageDir}`);
+        if (existsSync(pageDir)) { try { await fs.rm(pageDir, { recursive: true, force: true }); } catch { /* */ } }
+        await this.entrypointService.removeSchemaExport(n);
+        await this.entrypointService.removeDanglingSchemaImports(n);
+        await this.entrypointService.removeModuleRegistration(n);
+        await this.entrypointService.removeRouteFromUmirc(n);
+        this.logger.log(` Force mode: cleaned up existing files for '${dto.tableName}'`);
       }
+
+      // Step 1: Generate code
+      await updateStep(0, 'running');
+      files = this.preview(dto);
+      projectRoot = resolveProjectRoot();
+
+      if (dto.generateWeb) {
+        const n = deriveNames(dto.tableName);
+        const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
+        const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
+        if ([...relationDictTypes.values()].some((v) => v !== null)) {
+          files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto, relationDictTypes);
+          if (dto.pageType === 'document') {
+            files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto, relationDictTypes);
+            files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto, relationDictTypes);
+          } else if (dto.pageType === 'grid') {
+            files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto, relationDictTypes);
+          } else {
+            files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
+          }
+        }
+        if (activeDto.fields.some((f) => !f.removed && f.type === 'point')) {
+          files[`release/jimo/apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
+        }
+      }
+      await updateStep(0, 'completed');
+
+      // Step 2: Write files
+      await updateStep(1, 'running');
+      for (const [relativePath, content] of Object.entries(files)) {
+        const absolutePath = path.join(projectRoot, relativePath);
+        const dir = path.dirname(absolutePath);
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(absolutePath, content, 'utf-8');
+        createdFiles.push(relativePath);
+      }
+      await this.entrypointService.updateSchemaIndex(dto, projectRoot);
+      await this.entrypointService.updateAppModule(dto, projectRoot);
+      if (dto.generateWeb) await this.entrypointService.updateUmiRoutes(dto, projectRoot);
+      await updateStep(1, 'completed');
+
+      // Step 3: drizzle-kit push
+      await updateStep(2, 'running', '正在同步数据库表...');
+      let pushSucceeded = false;
+      try {
+        const { exec } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execAsync = promisify(exec);
+        const serverDir = path.join(projectRoot, 'release', 'jimo', 'apps', 'server');
+        await execAsync('npx --no-install drizzle-kit push --force', {
+          cwd: serverDir, timeout: 60000,
+          env: { ...process.env, DRIZZLE_SILENT: '1' },
+        });
+        pushSucceeded = true;
+        this.logger.log(` drizzle-kit push completed for '${dto.tableName}'`);
+      } catch (pushErr: unknown) {
+        this.logger.error(` drizzle-kit push FAILED for '${dto.tableName}':`, pushErr);
+      }
+      await updateStep(2, 'completed');
+
+      // Step 4: Mock data
+      await updateStep(3, 'running');
+      try {
+        if (dto.mockData?.enabled && pushSucceeded) {
+          await this.mockDataService.insertMockData(dto);
+        }
+      } catch (mockErr: unknown) {
+        const msg = mockErr instanceof Error ? mockErr.message : String(mockErr);
+        this.logger.warn(` mock insert skipped for '${dto.tableName}': ${msg}`);
+      } finally {
+        await updateStep(3, 'completed');
+      }
+
+      // Step 5: Create menu
+      await updateStep(4, 'running');
+      const asyncHasPointFields = dto.generateWeb && dto.fields.some((f) => !f.removed && f.type === 'point');
+      let asyncMenuParentId: string | null = null;
+      let asyncPackageName = '';
+      if (dto.packageId) {
+        try {
+          const pkg = await this.packageService.findOnePackage(dto.packageId);
+          asyncMenuParentId = pkg.menuId ?? null;
+          asyncPackageName = pkg.name;
+        } catch { /* */ }
+      }
+      try {
+        await this.menuService.autoCreateMenu(dto, asyncMenuParentId);
+        if (asyncHasPointFields) await this.menuService.autoCreateMapMenu(dto, asyncMenuParentId);
+      } catch (menuErr: unknown) {
+        this.logger.error(` Auto-create menu FAILED for '${dto.tableName}':`, menuErr);
+      }
+      if (dto.approvalFlow?.enabled) {
+        try {
+          await this.upsertApprovalFlowConfig(dto.tableName, dto.approvalFlow.defaultChain ?? []);
+        } catch (afErr: unknown) {
+          this.logger.error(` approval flow config write FAILED for '${dto.tableName}':`, afErr);
+        }
+      }
+      await updateStep(4, 'completed');
+
+      // Step 6: Save history
+      await updateStep(5, 'running');
+      try {
+        const existing = await this.historyService.getLatestVersion(dto.tableName);
+        const nextVersion = existing ? (existing.version ?? 1) + 1 : 1;
+        const asyncTemplates: Record<string, any> = { ...files };
+        if (dto.agentConfig?.enabled) asyncTemplates.__agent = this.buildAgentConfigMetadata(dto);
+        await this.db.insert(sysAutoCodeHistories).values({
+          packageName: asyncPackageName,
+          tableName: dto.tableName,
+          businessDB: (dto as any).businessDB || '',
+          templates: asyncTemplates,
+          version: nextVersion,
+          fields: dto.fields,
+          changeLog: dto.force ? '强制重新生成' : '初始创建',
+          operation: 'create',
+          parentId: existing?.id ?? null,
+          visibilityStrategy: dto.visibilityStrategy ?? existing?.visibilityStrategy ?? 'private',
+          hasApprovalFlow: dto.approvalFlow?.enabled ?? existing?.hasApprovalFlow ?? false,
+          hasAgent: dto.agentConfig?.enabled ?? existing?.hasAgent ?? false,
+        });
+      } catch (historyErr: unknown) {
+        this.logger.error('[AutocodeService] Failed to save generation history:', historyErr);
+      }
+      await updateStep(5, 'completed');
+
+      // Step 7: Enqueue entrypoints
+      await updateStep(6, 'running');
+      await this.entrypointService.enqueueEntrypointJob(jobId, dto, asyncHasPointFields, createdFiles);
+    } catch (err: any) {
+      const errorMsg = err?.message || 'Unknown error during generation';
+      this.logger.error(` Generate job ${jobId} FAILED:`, errorMsg);
+      await this.writeJobStatus(jobId, {
+        jobId, status: 'failed',
+        steps: AutocodeService.GENERATE_STEPS.map(() => ({ key: '', label: '', status: 'pending' as const })),
+        progress: 0, currentStepLabel: `失败: ${errorMsg}`, error: errorMsg,
+      });
     }
-
-    await fs.writeFile(modulePath, content, 'utf-8');
   }
 
-  private async updateUmiRoutesMap(dto: AutoCodeDto, projectRoot: string): Promise<void> {
-    const n = deriveNames(dto.tableName);
-    const mapRoutePath = `${n.routePath}-map`;
-    const umircPath = path.join(projectRoot, 'release/jimo/apps/web/.umirc.ts');
-    let content = await fs.readFile(umircPath, 'utf-8');
+  private async executeUpdateAsync(jobId: string, dto: UpdateModuleDto): Promise<void> {
+    const totalSteps = AutocodeService.UPDATE_STEPS.length;
+    let files: Record<string, string> = {};
+    let projectRoot = '';
 
-    // Upsert: remove existing map route block then re-insert.
-    const escapedPath = mapRoutePath.replace(/\//g, '\\/');
-    const existingBlock = new RegExp(
-      `\\s*\\{[^{}]*path:\\s*'${escapedPath}'[^{}]*\\},?`,
-      'gs',
-    );
-    content = content.replace(existingBlock, '');
+    const updateStep = async (stepIndex: number, stepStatus: string, message?: string) => {
+      const steps: GenerateStep[] = AutocodeService.UPDATE_STEPS.map((s, i) => ({
+        key: s.key, label: s.label,
+        status: i < stepIndex ? 'completed' as const : i === stepIndex ? stepStatus as any : 'pending' as const,
+      }));
+      const progress = stepStatus === 'completed' ? Math.round(((stepIndex + 1) / totalSteps) * 100) : Math.round(((stepIndex + 0.5) / totalSteps) * 100);
+      await this.writeJobStatus(jobId, { jobId, status: stepStatus === 'failed' ? 'failed' : 'processing', steps, progress, currentStepLabel: message || AutocodeService.UPDATE_STEPS[stepIndex]!.label, error: stepStatus === 'failed' ? message : undefined });
+    };
 
-    const routeEntry = `    {
-      path: '${mapRoutePath}',
-      name: '${extractMenuName(dto.description, n.pascalName)}地图',
-      icon: 'EnvironmentOutlined',
-      component: '${n.pageMapComponentPath}',
-    },`;
-    content = content.replace(
-      /    \{ path: '\/\*', redirect: '\/dashboard' \},?/,
-      `${routeEntry}\n    { path: '/*', redirect: '/dashboard' },`,
-    );
-    await fs.writeFile(umircPath, content, 'utf-8');
-  }
+    try {
+      const latest = await this.historyService.getLatestVersion(dto.tableName);
+      if (!latest) throw new Error(`Version record for '${dto.tableName}' not found`);
 
-  private async autoCreateMapMenu(dto: AutoCodeDto, parentMenuId: string | null): Promise<void> {
-    const n = deriveNames(dto.tableName);
-    const mapRoutePath = `${n.routePath}-map`;
-    const existing = await this.db
-      .select({ id: sysMenus.id })
-      .from(sysMenus)
-      .where(and(eq(sysMenus.path, mapRoutePath), isNull(sysMenus.deletedAt)))
-      .limit(1);
-    if (existing.length > 0) return;
+      const oldFields = (latest.fields as AutoCodeField[]) ?? [];
+      const oldVersion = latest.version ?? 1;
+      const changeLog = this.historyService.computeChangeLog(oldFields, dto.fields);
 
-    const sortWhere = parentMenuId
-      ? eq(sysMenus.parentId, parentMenuId)
-      : isNull(sysMenus.parentId);
-    const maxSortRows = await this.db
-      .select({ maxSort: sql<number>`COALESCE(MAX(${sysMenus.sort}), -1)` })
-      .from(sysMenus)
-      .where(sortWhere);
-    const nextSort = (maxSortRows[0]?.maxSort ?? -1) + 1;
+      const autoCodeDto: AutoCodeDto = {
+        tableName: dto.tableName,
+        description: dto.description || '',
+        fields: dto.fields,
+        generateWeb: dto.generateWeb ?? true,
+        pageType: dto.pageType ?? (latest as any).pageType ?? 'list',
+        approvalFlow: dto.approvalFlow ?? (latest.hasApprovalFlow ? { enabled: true } : undefined),
+        agentConfig: dto.agentConfig ?? (latest.hasAgent ? { enabled: true } : undefined),
+        visibilityStrategy: dto.visibilityStrategy ?? (latest.visibilityStrategy as any) ?? 'private',
+        packageId: dto.packageId,
+        force: dto.force,
+      };
 
-    const menuRows = await this.db
-      .insert(sysMenus)
-      .values({
-        name: `${extractMenuName(dto.description, n.pascalName)}地图`,
-        path: mapRoutePath,
-        component: `${n.pageMapComponentPath}`,
-        icon: 'EnvironmentOutlined',
-        parentId: parentMenuId ?? null,
-        sort: nextSort,
-        isVisible: 1,
-        menuType: 2,
-      })
-      .returning();
+      // Step 1: Generate
+      await updateStep(0, 'running');
+      files = this.preview(autoCodeDto);
+      projectRoot = resolveProjectRoot();
 
-    const mapMenuId = menuRows[0]!.id;
-    const adminRoles = await this.db
-      .select({ id: sysRoles.id })
-      .from(sysRoles)
-      .where(inArray(sysRoles.code, ['super_admin', 'admin']));
-    if (adminRoles.length > 0) {
-      await this.db
-        .insert(sysRoleMenus)
-        .values(adminRoles.map((role) => ({ roleId: role.id, menuId: mapMenuId })))
-        .onConflictDoNothing();
-    }
-  }
-
-  private async updateUmiRoutes(dto: AutoCodeDto, projectRoot: string): Promise<void> {
-    const n = deriveNames(dto.tableName);
-    const umircPath = path.join(projectRoot, 'release/jimo/apps/web/.umirc.ts');
-    let content = await fs.readFile(umircPath, 'utf-8');
-
-    // Upsert: remove any existing block for this route, then re-insert fresh.
-    // This ensures re-generation after a delete always produces a correct entry.
-    const routePath = n.routePath;
-    const escapedPath = routePath.replace(/\//g, '\\/');
-    const existingBlock = new RegExp(
-      `\\s*\\{[^{}]*path:\\s*'${escapedPath}'[^{}]*\\},?`,
-      'gs',
-    );
-    content = content.replace(existingBlock, '');
-
-    let routeEntry: string;
-    if (dto.pageType === 'document') {
-      // Document mode: list + create + :id detail as nested routes
-      routeEntry = `    {
-      path: '${routePath}',
-      name: '${extractMenuName(dto.description, n.pascalName)}',
-      icon: 'TableOutlined',
-      component: '${n.pageComponentPath}',
-    },
-    {
-      path: '${routePath}/create',
-      component: '${n.pageDir}/detail',
-      layout: false,
-    },
-    {
-      path: '${routePath}/:id',
-      component: '${n.pageDir}/detail',
-      layout: false,
-    },`;
-    } else {
-      routeEntry = `    {
-      path: '${routePath}',
-      name: '${extractMenuName(dto.description, n.pascalName)}',
-      icon: 'TableOutlined',
-      component: '${n.pageComponentPath}',
-    },`;
-    }
-
-    content = content.replace(
-      /    \{ path: '\/\*', redirect: '\/dashboard' \},?/,
-      `${routeEntry}\n    { path: '/*', redirect: '/dashboard' },`,
-    );
-
-    await fs.writeFile(umircPath, content, 'utf-8');
-  }
-
-  // =========================================================================
-  // Delete helpers — remove generated artifacts
-  // =========================================================================
-
-  private async removeRouteFromUmirc(n: DerivedNames): Promise<void> {
-    const projectRoot = this.resolveProjectRoot();
-    const umircPath = path.join(projectRoot, 'release/jimo/apps/web/.umirc.ts');
-    if (!existsSync(umircPath)) return;
-
-    let content = await fs.readFile(umircPath, 'utf-8');
-    const routePath = n.routePath;
-    const componentPath = `${n.pageComponentPath}`;
-
-    const flatBlockRegex = new RegExp(
-      `\\s*\\{[^{}]*path:\\s*'${routePath.replace(/\//g, '\\/')}'[^{}]*component:\\s*'${componentPath.replace(/\//g, '\\/')}'[^{}]*\\},?`,
-      'gs',
-    );
-    if (flatBlockRegex.test(content)) {
-      content = content.replace(flatBlockRegex, '');
-    } else {
-      const lines = content.split('\n');
-      content = lines.filter((line) => !line.includes(`component: '${componentPath}'`)).join('\n');
-    }
-
-    content = content.replace(
-      /    \{\n      path: '\/pkg\/[^']+',\n      name: '[^']+',\n      icon: '[^']+',\n      routes: \[\s*\],\n    \},\n?/g,
-      '',
-    );
-
-    await fs.writeFile(umircPath, content, 'utf-8');
-  }
-
-  private async removeSchemaExport(n: DerivedNames): Promise<void> {
-    const projectRoot = this.resolveProjectRoot();
-    const indexPath = path.join(projectRoot, 'release/jimo/apps/server/src/db/schema/index.ts');
-    if (!existsSync(indexPath)) return;
-
-    let content = await fs.readFile(indexPath, 'utf-8');
-
-    const exportPattern = new RegExp(
-      `export \\* from '\\.\\/${n.kebabName}\\.js';\\n?`,
-    );
-    content = content.replace(exportPattern, '');
-
-    await fs.writeFile(indexPath, content, 'utf-8');
-  }
-
-  /**
-   * After deleting a schema file, scan all remaining .ts files under
-   * apps/server/src and remove any import lines that reference the deleted
-   * module.  This prevents TS compilation failures like
-   * "Cannot find module './departments'" that block the nest --watch restart.
-   */
-  private async removeDanglingSchemaImports(n: DerivedNames): Promise<void> {
-    const projectRoot = this.resolveProjectRoot();
-    const serverSrc = path.join(projectRoot, 'release/jimo/apps/server/src');
-    if (!existsSync(serverSrc)) return;
-
-    // Patterns that reference the deleted schema module
-    const patterns = [
-      // relative schema import: import { ... } from './departments';
-      new RegExp(`^import\\s+\\{[^}]*\\}\\s+from\\s+'\\.\\.?\\/(?:[\\w-]+\\/)*${n.kebabName}';\n?`, 'gm'),
-      // absolute-ish import: import { ... } from '../../db/schema/departments';
-      new RegExp(`^import\\s+\\{[^}]*\\}\\s+from\\s+'[^']*db\\/schema\\/${n.kebabName}';\n?`, 'gm'),
-    ];
-
-    const walk = async (dir: string): Promise<void> => {
-      let entries: string[];
-      try { entries = await fs.readdir(dir); } catch { return; }
-      for (const entry of entries) {
-        const full = path.join(dir, entry);
-        let stat: any;
-        try { stat = await fs.stat(full); } catch { continue; }
-        if (stat.isDirectory()) {
-          await walk(full);
-        } else if (entry.endsWith('.ts') || entry.endsWith('.tsx')) {
-          let content: string;
-          try { content = await fs.readFile(full, 'utf-8'); } catch { continue; }
-          let changed = content;
-          for (const re of patterns) { changed = changed.replace(re, ''); }
-          if (changed !== content) {
-            await fs.writeFile(full, changed, 'utf-8');
+      if (autoCodeDto.generateWeb) {
+        const n2 = deriveNames(autoCodeDto.tableName);
+        const activeDto2: AutoCodeDto = { ...autoCodeDto, fields: activeFields(autoCodeDto.fields) };
+        const relationDictTypes2 = await this.lookupRelationDisplayDictTypes(activeDto2.fields);
+        if ([...relationDictTypes2.values()].some((v) => v !== null)) {
+          files[`release/jimo/apps/web/src/services/${n2.serviceRelDir}.ts`] = generateFrontendService(activeDto2, relationDictTypes2);
+          if (autoCodeDto.pageType === 'document') {
+            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto2, relationDictTypes2);
+            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto2, relationDictTypes2);
+          } else if (autoCodeDto.pageType === 'grid') {
+            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto2, relationDictTypes2);
+          } else {
+            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendPage(activeDto2, relationDictTypes2);
           }
         }
       }
-    };
+      await updateStep(0, 'completed');
 
-    await walk(serverSrc);
-  }
+      // Step 2: Write
+      await updateStep(1, 'running');
+      for (const [relativePath, content] of Object.entries(files)) {
+        const absolutePath = path.join(projectRoot, relativePath);
+        const dir = path.dirname(absolutePath);
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(absolutePath, content, 'utf-8');
+      }
+      await this.entrypointService.updateSchemaIndex(autoCodeDto, projectRoot);
+      await this.entrypointService.updateAppModule(autoCodeDto, projectRoot);
+      if (autoCodeDto.generateWeb) await this.entrypointService.updateUmiRoutes(autoCodeDto, projectRoot);
+      await updateStep(1, 'completed');
 
-  private async removeModuleRegistration(n: DerivedNames): Promise<void> {
-    const projectRoot = this.resolveProjectRoot();
-    const modulePath = path.join(projectRoot, 'release/jimo/apps/server/src/app.module.ts');
-    if (!existsSync(modulePath)) return;
+      // Step 3: drizzle-kit push
+      await updateStep(2, 'running', '正在同步数据库...');
+      try {
+        const { exec } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execAsync = promisify(exec);
+        const serverDir = path.join(projectRoot, 'release', 'jimo', 'apps', 'server');
+        await execAsync('npx --no-install drizzle-kit push --force', {
+          cwd: serverDir, timeout: 60000,
+          env: { ...process.env, DRIZZLE_SILENT: '1' },
+        });
+      } catch (pushErr: unknown) {
+        this.logger.error(` drizzle-kit push FAILED for update '${dto.tableName}':`, pushErr);
+      }
+      await this.verifyPhysicalSchema(dto.tableName, dto.fields);
+      await updateStep(2, 'completed');
 
-    let content = await fs.readFile(modulePath, 'utf-8');
+      // Step 4: Save version history
+      await updateStep(3, 'running');
+      const updatePackageName = (dto as any).packageId
+        ? await this.packageService.getPackageName((dto as any).packageId).catch(() => '')
+        : '';
+      try {
+        const updateTemplates: Record<string, any> = { ...files };
+        if (autoCodeDto.agentConfig?.enabled) updateTemplates.__agent = this.buildAgentConfigMetadata(autoCodeDto);
+        await this.db.insert(sysAutoCodeHistories).values({
+          packageName: updatePackageName,
+          tableName: dto.tableName,
+          businessDB: '',
+          templates: updateTemplates,
+          version: oldVersion + 1,
+          fields: dto.fields,
+          changeLog,
+          operation: 'update',
+          parentId: latest.id,
+          visibilityStrategy: dto.visibilityStrategy ?? latest.visibilityStrategy ?? 'private',
+          hasApprovalFlow: dto.approvalFlow?.enabled ?? latest.hasApprovalFlow ?? false,
+          hasAgent: dto.agentConfig?.enabled ?? latest.hasAgent ?? false,
+        });
+      } catch (historyErr: unknown) {
+        this.logger.error('[AutocodeService] Failed to save update history:', historyErr);
+      }
+      await updateStep(3, 'completed');
 
-    const importPattern = new RegExp(
-      `import \\{ ${n.pascalSingular}Module \\} from '\\./modules/${n.kebabSingular}/${n.kebabSingular}\\.module';\\n?`,
-    );
-    content = content.replace(importPattern, '');
-
-    const moduleArrayPattern = new RegExp(
-      `\\s*${n.pascalSingular}Module,\\n?`,
-    );
-    content = content.replace(moduleArrayPattern, '');
-
-    // Also remove agent module registration if present
-    const agentImportPattern = new RegExp(
-      `import \\{ ${n.pascalSingular}AgentModule \\} from '\\./modules/${n.kebabSingular}/agent/${n.kebabSingular}\\.agent\\.module';\\n?`,
-    );
-    content = content.replace(agentImportPattern, '');
-
-    const agentModulePattern = new RegExp(
-      `\\s*${n.pascalSingular}AgentModule,\\n?`,
-    );
-    content = content.replace(agentModulePattern, '');
-
-    await fs.writeFile(modulePath, content, 'utf-8');
+      // Step 5: Enqueue entrypoints
+      await updateStep(4, 'running');
+      await this.entrypointService.enqueueEntrypointJob(jobId, autoCodeDto, false);
+    } catch (err: any) {
+      const errorMsg = err?.message || 'Unknown error during update';
+      this.logger.error(` Update job ${jobId} FAILED:`, errorMsg);
+      await this.writeJobStatus(jobId, {
+        jobId, status: 'failed',
+        steps: AutocodeService.UPDATE_STEPS.map(() => ({ key: '', label: '', status: 'pending' as const })),
+        progress: 0, currentStepLabel: `失败: ${errorMsg}`, error: errorMsg,
+      });
+    }
   }
 
   // =========================================================================
-  // Reserved names management
+  // Private: helpers
   // =========================================================================
 
-  /**
-   * Return current reserved list + scan pages/ directory for names that are
-   * present on disk but missing from the reserved set.
-   */
-  async getReservedNames(): Promise<{
-    reserved: string[];
-    pagesOnDisk: string[];
-    missing: string[];
-  }> {
-    const projectRoot = this.resolveProjectRoot();
-    const pagesDir = path.join(projectRoot, 'release/jimo/apps/web/src/pages');
-
-    let entries: string[] = [];
-    try {
-      const dirents = await fs.readdir(pagesDir, { withFileTypes: true });
-      entries = dirents
-        .filter((d) => d.isDirectory())
-        .map((d) => d.name)
-        // skip lc/ (business modules) and hidden dirs
-        .filter((n) => !n.startsWith('.') && n !== 'lc');
-    } catch {
-      // pages dir unreadable — return what we have
+  private buildAgentConfigMetadata(dto: AutoCodeDto): Record<string, any> {
+    const activeFieldsArray = activeFields(dto.fields);
+    const subTableFkMap: Record<string, Record<string, string>> = {};
+    for (const f of activeFieldsArray) {
+      if (f.type !== 'relation' || f.relationType !== 'one-to-many') continue;
+      if (!f.detailFields || f.detailFields.length === 0) continue;
+      const singularMain = toKebabCase(dto.tableName);
+      const singularField = toKebabCase(f.name);
+      const subLcTable = (f.relationExistingTable && f.relationTable)
+        ? `lc_${f.relationTable}`
+        : `lc_${singularMain}_${singularField}`;
+      const fkMap: Record<string, string> = {};
+      const isExistingSubTable = !!(f.relationExistingTable && f.relationTable);
+      const parentFkCol = isExistingSubTable ? (f.relationFkColumn || `${singularMain}_id`) : `${singularMain}_id`;
+      fkMap[parentFkCol] = `lc_${dto.tableName}`;
+      for (const df of f.detailFields) {
+        if (df.type === 'relation' && (df.relationType === 'many-to-one' || df.relationType === 'many-to-many') && df.relationTable) {
+          fkMap[df.name] = `lc_${df.relationTable}`;
+        }
+      }
+      subTableFkMap[subLcTable] = fkMap;
     }
 
-    const reserved = Array.from(RESERVED_TABLE_NAMES).sort();
-    const missing = entries.filter((n) => !RESERVED_TABLE_NAMES.has(n)).sort();
-
-    return { reserved, pagesOnDisk: entries.sort(), missing };
+    return {
+      tableName: dto.tableName,
+      visibilityStrategy: dto.visibilityStrategy ?? 'private',
+      enabledTools: dto.agentConfig?.tools ?? ['query', 'create', 'update', 'delete', 'search', 'mock'],
+      systemPrompt: dto.agentConfig?.systemPrompt ?? '',
+      // 'code' is server-auto-generated; 'calculated' is virtual (computed on
+      // read). Neither is ever user/agent-settable, so exclude them from the
+      // agent's create/update/search field sets — otherwise the agent would
+      // advertise computed fields as inputs and try to assign them (the values
+      // get silently stripped by the DTO, but the behavior model would be wrong).
+      creatableFields: activeFieldsArray.filter((f) => f.creatable && !(f.type === 'relation' && f.relationType === 'one-to-many') && f.type !== 'code' && f.type !== 'calculated'),
+      editableFields: activeFieldsArray.filter((f) => f.editable && !(f.type === 'relation' && f.relationType === 'one-to-many') && f.type !== 'code' && f.type !== 'calculated'),
+      searchableFields: activeFieldsArray.filter((f) => f.searchable && f.type !== 'calculated'),
+      subTableFkMap,
+    };
   }
 
-  /**
-   * Append the given names to the RESERVED set literal in reserved-names.ts.
-   * Only names not already reserved are written.
-   */
-  async addReservedNames(names: string[]): Promise<{ added: string[] }> {
-    const projectRoot = this.resolveProjectRoot();
-    const reservedFile = path.join(
-      projectRoot,
-      'release/jimo/apps/server/src/modules/autocode/reserved-names.ts',
-    );
+  private async upsertApprovalFlowConfig(tableName: string, defaultChain: string[]): Promise<void> {
+    const chain = defaultChain.length ? defaultChain : ['deptHead'];
+    const config = { defaultChain: chain };
+    const existing = await this.db
+      .select()
+      .from(sysApprovalFlows)
+      .where(and(eq(sysApprovalFlows.businessType, tableName), isNull(sysApprovalFlows.deletedAt)))
+      .limit(1);
+    if (existing.length > 0) {
+      await this.db
+        .update(sysApprovalFlows)
+        .set({ name: `${tableName} 审批`, config, enabled: true, updatedAt: new Date() })
+        .where(eq(sysApprovalFlows.id, existing[0]!.id));
+    } else {
+      await this.db
+        .insert(sysApprovalFlows)
+        .values({ businessType: tableName, name: `${tableName} 审批`, config, enabled: true });
+    }
+  }
 
-    const toAdd = names.filter((n) => n && !RESERVED_TABLE_NAMES.has(n));
-    if (toAdd.length === 0) return { added: [] };
+  private async verifyPhysicalSchema(
+    tableName: string,
+    fields: { name: string; type: string; relationType?: string; removed?: boolean }[],
+  ): Promise<void> {
+    const lcTable = `lc_${tableName}`;
+    const SYSTEM_COLS = ['id', 'created_at', 'updated_at', 'deleted_at', 'created_by', 'updated_by', 'owner_id', 'shared_with'];
+    const expected = new Set<string>(SYSTEM_COLS);
+    for (const f of fields) {
+      if (f.type === 'relation' && f.relationType === 'one-to-many') continue;
+      if (f.removed) continue;
+      if (f.name === 'id') continue;
+      expected.add(f.name);
+    }
 
-    let content = await fs.readFile(reservedFile, 'utf-8');
-    // Insert before the closing ]); of the RESERVED Set literal
-    const insertLine = toAdd.map((n) => `  '${n}',`).join('\n');
-    content = content.replace(/^(\]);/m, `${insertLine}\n$1`);
-    await fs.writeFile(reservedFile, content, 'utf-8');
-    addToReservedNames(toAdd);
+    let actual: string[] = [];
+    try {
+      const res = await this.db.execute(
+        sql`SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ${lcTable} ORDER BY ordinal_position`,
+      );
+      actual = Array.from(res as any[]).map((r: any) => String(r.column_name));
+    } catch (e: any) {
+      this.logger.warn(` verifyPhysicalSchema: 读取 ${lcTable} 列失败,跳过校验: ${e?.message}`);
+      return;
+    }
 
-    return { added: toAdd };
+    if (actual.length === 0) {
+      throw new InternalServerErrorException(
+        `drizzle-kit push 后物理表 ${lcTable} 不存在。请检查 push 输出,或在 server 目录手动执行 npx drizzle-kit push --force 后重试。`,
+      );
+    }
+
+    const actualSet = new Set(actual);
+    const missing = [...expected].filter((c) => !actualSet.has(c));
+    const extra = actual.filter((c) => !expected.has(c));
+
+    if (missing.length > 0) {
+      throw new InternalServerErrorException(
+        `drizzle-kit push 未将对齐物理表 ${lcTable}: 缺少期望列 [${missing.join(', ')}]` +
+          (extra.length > 0 ? `;同时存在残留列 [${extra.join(', ')}]` : '') +
+          `。建议确认数据可丢弃后手动执行 DROP TABLE ${lcTable},再重新触发生成。`,
+      );
+    }
+    if (extra.length > 0) {
+      this.logger.warn(` 物理表 ${lcTable} 存在 schema 未声明的列 [${extra.join(', ')}](可能为历史残留,已忽略)。`);
+    }
+  }
+
+  // ── Job file persistence ──
+
+  private get jobsDir(): string {
+    return path.join(resolveProjectRoot(), '.tmp', 'generate-jobs');
+  }
+
+  private async writeJobStatus(jobId: string, status: GenerateJobStatus): Promise<void> {
+    const dir = this.jobsDir;
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, `${jobId}.json`), JSON.stringify(status, null, 2), 'utf-8');
+  }
+
+  private async readJobStatus(jobId: string): Promise<GenerateJobStatus | null> {
+    try {
+      const data = await fs.readFile(path.join(this.jobsDir, `${jobId}.json`), 'utf-8');
+      return JSON.parse(data) as GenerateJobStatus;
+    } catch { return null; }
   }
 }

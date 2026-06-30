@@ -2,7 +2,10 @@ import request from './request';
 
 export interface AutoCodeField {
   name: string;
-  type: 'varchar' | 'text' | 'integer' | 'bigint' | 'decimal' | 'boolean' | 'timestamp' | 'uuid' | 'image' | 'file' | 'relation';
+  type:
+    | 'varchar' | 'text' | 'integer' | 'bigint' | 'decimal'
+    | 'boolean' | 'timestamp' | 'uuid' | 'image' | 'file'
+    | 'relation' | 'dict' | 'code' | 'point' | 'calculated';
   length?: number;
   required: boolean;
   unique: boolean;
@@ -23,6 +26,15 @@ export interface AutoCodeField {
   relationExistingTable?: boolean;
   // One-to-many with existing table: FK column name on the child table
   relationFkColumn?: string;
+  // Dict-specific: dictionary type key (type === 'dict')
+  dictType?: string;
+  // Code-specific: encoding rule id (type === 'code')
+  ruleId?: string;
+  // Point (GIS) config (type === 'point')
+  geoConfig?: { coordinateSystem?: string; mapProvider?: string };
+  // Calculated (virtual) field — computed on read, never stored (type === 'calculated')
+  formula?: string;
+  resultType?: 'number' | 'string';
   // Soft-remove marker
   removed?: boolean;
 }

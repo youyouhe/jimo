@@ -51,10 +51,13 @@ mkdir -p "$PID_DIR" "$LOG_DIR"
 backend_pid_file="$PID_DIR/backend.pid"
 frontend_pid_file="$PID_DIR/frontend.pid"
 worker_pid_file="$PID_DIR/worker.pid"
+gen_worker_pid_file="$PID_DIR/generate-worker.pid"
 backend_log="$LOG_DIR/backend.log"
 frontend_log="$LOG_DIR/frontend.log"
 worker_log="$LOG_DIR/worker.log"
+gen_worker_log="$LOG_DIR/generate-worker.log"
 WORKER_SCRIPT="$PROJECT_ROOT/tools/cleanup-worker.mjs"
+GEN_WORKER_SCRIPT="$PROJECT_ROOT/tools/generate-worker.ts"
 
 # ── 检查端口占用 ──
 check_port() {
@@ -218,11 +221,12 @@ start_backend() {
   local bg_pid=$!
   echo "$bg_pid" > "$backend_pid_file"
 
-  if wait_for_port "$BACKEND_PORT" "backend" 20; then
+  if wait_for_port "$BACKEND_PORT" "backend" 60; then
     log "后端就绪 ✓  (PID: $bg_pid)"
   else
-    err "后端启动超时，查看日志: $backend_log"
-    return 1
+    # nest --watch 全量编译可能较慢；后台继续编译，不阻塞 worker/frontend 启动。
+    # 用 `dev.sh status` 确认最终状态。
+    warn "后端编译中（watch），后台继续；稍后 'dev.sh status' 确认。日志: $backend_log"
   fi
 }
 
@@ -423,10 +427,39 @@ start_worker() {
 # ── 停止 cleanup worker ──
 stop_worker() { stop_service "cleanup-worker" "$worker_pid_file"; }
 
+# ── 启动 generate worker (tsx, runs outside watch) ──
+start_generate_worker() {
+  local pid
+  if pid=$(read_pid "$gen_worker_pid_file"); then
+    warn "generate-worker 已在运行 (PID: $pid)"
+    return 0
+  fi
+  if [ ! -f "$GEN_WORKER_SCRIPT" ]; then
+    warn "generate-worker 脚本不存在: $GEN_WORKER_SCRIPT，跳过启动"
+    return 0
+  fi
+  load_env 2>/dev/null || true
+  log "启动 generate-worker..."
+  nohup "$PROJECT_ROOT/apps/server/node_modules/.bin/tsx" "$GEN_WORKER_SCRIPT" > "$gen_worker_log" 2>&1 &
+  local bg_pid=$!
+  echo "$bg_pid" > "$gen_worker_pid_file"
+  sleep 1
+  if kill -0 "$bg_pid" 2>/dev/null; then
+    log "generate-worker 已启动 ✓  (PID: $bg_pid)"
+  else
+    warn "generate-worker 启动后立即退出，查看日志: $gen_worker_log"
+    rm -f "$gen_worker_pid_file"
+  fi
+}
+
+# ── 停止 generate worker ──
+stop_generate_worker() { stop_service "generate-worker" "$gen_worker_pid_file"; }
+
 stop_all()      {
   stop_frontend
   stop_backend
   stop_worker
+  stop_generate_worker
   # stop 完后彻底清理可能残留的僵尸进程并释放端口
   cleanup_zombies --with-ports
 }
@@ -523,7 +556,8 @@ main() {
         backend|b)   start_backend ;;
         frontend|f)  start_frontend ;;
         worker|w)    start_worker ;;
-        all)         start_backend; start_worker; start_frontend ;;
+        generate|gw) start_generate_worker ;;
+        all)         start_backend; start_worker; start_generate_worker; start_frontend ;;
         *)           err "未知目标: $target"; show_help; exit 1 ;;
       esac
       ;;
@@ -532,6 +566,7 @@ main() {
         backend|b)   stop_backend ;;
         frontend|f)  stop_frontend ;;
         worker|w)    stop_worker ;;
+        generate|gw) stop_generate_worker ;;
         all)         stop_all ;;
         *)           err "未知目标: $target"; show_help; exit 1 ;;
       esac
@@ -541,7 +576,8 @@ main() {
         backend|b)   stop_backend;  start_backend ;;
         frontend|f)  stop_frontend; start_frontend ;;
         worker|w)    stop_worker;   start_worker ;;
-        all)         stop_all; start_backend; start_worker; start_frontend ;;
+        generate|gw) stop_generate_worker; start_generate_worker ;;
+        all)         stop_all; start_backend; start_worker; start_generate_worker; start_frontend ;;
         *)           err "未知目标: $target"; show_help; exit 1 ;;
       esac
       ;;

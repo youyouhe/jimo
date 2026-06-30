@@ -12,7 +12,7 @@ const FIELD_SCHEMA = {
       type: 'string',
       enum: [
         'varchar', 'text', 'integer', 'bigint', 'decimal',
-        'boolean', 'timestamp', 'uuid', 'image', 'file', 'relation', 'dict', 'point',
+        'boolean', 'timestamp', 'uuid', 'image', 'file', 'relation', 'dict', 'point', 'calculated',
       ],
     },
     length: { type: 'number', description: 'varchar 长度(可选)' },
@@ -45,7 +45,7 @@ const FIELD_SCHEMA = {
             type: 'string',
             enum: [
               'varchar', 'text', 'integer', 'bigint', 'decimal',
-              'boolean', 'timestamp', 'uuid', 'image', 'file', 'relation', 'dict', 'point',
+              'boolean', 'timestamp', 'uuid', 'image', 'file', 'relation', 'dict', 'point', 'calculated',
             ],
           },
           length: { type: 'number' },
@@ -82,6 +82,17 @@ const FIELD_SCHEMA = {
           enum: ['leaflet', 'amap'],
         },
       },
+    },
+    // calculated 字段（虚拟：读取时按 formula 计算，不落库、不可编辑、不可搜索）
+    formula: {
+      type: 'string',
+      description:
+        "计算字段公式（仅 calculated 类型）。引用同行字段名 + 受限函数库(ROUND/ABS/IF/DATE_DIFF/LEN/UPPER/LOWER/COALESCE)，算术 +-*/%，字符串拼接用 ||。例：'quantity * unit_price'、'ROUND(quantity * unit_price, 2)'、\"first_name || ' ' || last_name\"。虚拟字段：不落库、不写入、读取时计算。",
+    },
+    resultType: {
+      type: 'string',
+      enum: ['number', 'string'],
+      description: '计算字段结果类型（默认 string）',
     },
   },
   required: ['name', 'type', 'required', 'unique', 'description'],
@@ -153,6 +164,25 @@ export const PROPOSE_ENTITY_TOOL = {
   },
 };
 
+export const DELETE_DICT_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'delete_dict',
+    description:
+      '删除一个字典大类及其所有明细项（软删除）。调用前先用 list_dicts 确认 type 存在。此操作会级联删除该字典下所有明细项，不可逆。',
+    parameters: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          description: '字典类型 key（snake_case），如 gender、material_category',
+        },
+      },
+      required: ['type'],
+    },
+  },
+};
+
 export const CREATE_DICT_TOOL = {
   type: 'function' as const,
   function: {
@@ -172,12 +202,25 @@ export const CREATE_DICT_TOOL = {
         },
         items: {
           type: 'array',
-          description: '字典明细项列表',
+          description: '字典明细项列表，支持嵌套 children 实现级联（如省市区）',
           items: {
             type: 'object',
             properties: {
-              label: { type: 'string', description: '项显示名，如 男' },
-              value: { type: 'string', description: '项值，如 male' },
+              label: { type: 'string', description: '项显示名，如 浙江省' },
+              value: { type: 'string', description: '项值，如 zhejiang' },
+              children: {
+                type: 'array',
+                description: '子级明细项，parent_id 自动指向父项。可多层嵌套',
+                items: {
+                  type: 'object',
+                  properties: {
+                    label: { type: 'string' },
+                    value: { type: 'string' },
+                    children: { type: 'array', items: { type: 'object' } },
+                  },
+                  required: ['label', 'value'],
+                },
+              },
             },
             required: ['label', 'value'],
           },
@@ -454,6 +497,42 @@ export const REMOVE_CUSTOM_BTN_TOOL = {
   },
 };
 
+export const LIST_SYSTEM_TABLES_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'list_system_tables',
+    description:
+      '查询 jimo 平台自身的系统表（无 lc_ 前缀，如 sys_users、sys_roles、sys_menus）。' +
+      '当用户需要引用平台内置数据（用户、角色、菜单、字典等）作为关联字段时，先调用此工具确认表名和表是否存在，再用 describe_system_table 查看字段结构。' +
+      '不要将系统表与 list_tables 返回的业务表混淆——系统表只能被引用，不能被代码生成器修改。',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+export const DESCRIBE_SYSTEM_TABLE_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'describe_system_table',
+    description:
+      '查询一张 jimo 平台系统表（无 lc_ 前缀）的字段结构，用于了解可引用的字段（如 sys_users.id、sys_roles.code）。' +
+      '调用前先用 list_system_tables 确认表名存在。tableName 不含任何前缀，直接传物理表名，如 sys_users。',
+    parameters: {
+      type: 'object',
+      properties: {
+        tableName: {
+          type: 'string',
+          description: '系统表名（snake_case，无任何前缀），如 sys_users、sys_roles、sys_menus',
+        },
+      },
+      required: ['tableName'],
+    },
+  },
+};
+
 export const DROP_ORPHAN_TABLES_TOOL = {
   type: 'function' as const,
   function: {
@@ -491,4 +570,7 @@ export const ALL_TOOLS = [
   LIST_BTN_PERMS_TOOL,
   ADD_CUSTOM_BTN_TOOL,
   REMOVE_CUSTOM_BTN_TOOL,
+  LIST_SYSTEM_TABLES_TOOL,
+  DESCRIBE_SYSTEM_TABLE_TOOL,
+  DELETE_DICT_TOOL,
 ];

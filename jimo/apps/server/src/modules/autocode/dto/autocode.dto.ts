@@ -32,6 +32,7 @@ const FIELD_TYPES = [
   'dict',
   'code',
   'point',
+  'calculated',
 ] as const;
 
 export type AutoCodeFieldType = (typeof FIELD_TYPES)[number];
@@ -73,7 +74,7 @@ export class AutoCodeField {
   })
   @IsNotEmpty()
   @IsString()
-  @IsIn(FIELD_TYPES, { message: 'type must be one of: varchar, text, integer, bigint, decimal, boolean, timestamp, uuid, image, file, relation, dict, code, point' })
+  @IsIn(FIELD_TYPES, { message: 'type must be one of: varchar, text, integer, bigint, decimal, boolean, timestamp, uuid, image, file, relation, dict, code, point, calculated' })
   type: AutoCodeFieldType = 'varchar';
 
   @ApiPropertyOptional({ description: 'Max length for varchar columns', example: 128 })
@@ -168,6 +169,29 @@ export class AutoCodeField {
   @IsUUID()
   @IsNotEmpty({ message: 'ruleId must be a valid UUID when field type is code' })
   ruleId?: string;
+
+  // ── Calculated-specific fields (only used when type === 'calculated') ──
+  // Calculated fields are VIRTUAL: no DB column, excluded from create/update
+  // DTOs, computed on read by the generated service via the shared evaluator.
+
+  @ApiPropertyOptional({
+    description:
+      'Formula expression for calculated fields. References same-row fields by name and a curated function set (ROUND, ABS, IF, DATE_DIFF, LEN, UPPER, LOWER, COALESCE). Required when type=calculated. Example: "ROUND(quantity * unit_price, 2)".',
+    example: 'quantity * unit_price',
+  })
+  @IsOptional()
+  @IsString()
+  formula?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Result type of a calculated field, used for rendering/validation. Defaults to "string".',
+    enum: ['number', 'string'],
+    default: 'string',
+  })
+  @IsOptional()
+  @IsIn(['number', 'string'])
+  resultType?: 'number' | 'string';
 
   // ── One-to-many: detail fields for the child table ──
 
@@ -389,11 +413,11 @@ export class AutoCodeDto {
   agentConfig?: AgentConfigDto;
 
   @ApiPropertyOptional({
-    description: '前端页面类型：list=标准列表弹窗编辑（默认），document=单据页（列表+独立详情页）',
-    enum: ['list', 'document'],
+    description: '前端页面类型：list=标准列表弹窗编辑（默认），document=单据页（列表+独立详情页），grid=Excel式可编辑表格（单元格直编）',
+    enum: ['list', 'document', 'grid'],
     default: 'list',
   })
   @IsOptional()
-  @IsIn(['list', 'document'])
-  pageType?: 'list' | 'document';
+  @IsIn(['list', 'document', 'grid'])
+  pageType?: 'list' | 'document' | 'grid';
 }

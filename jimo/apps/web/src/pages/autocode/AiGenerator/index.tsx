@@ -11,7 +11,7 @@ import type { AiMessage } from './types';
 import { getProposeItems } from './types';
 import { getTables } from '../../../services/autocode';
 import type { AutoCodeDto } from '../../../services/autocode';
-import { streamAiChat } from './sse';
+import { streamAiChat, type AiChatContext } from './sse';
 import { loadAiConfig, isConfigured } from './key-config';
 import { KeySettingModal } from './KeySettingModal';
 import { MessageBubble } from './MessageBubble';
@@ -32,6 +32,7 @@ interface Props {
   onGenerate: (dto: AutoCodeDto) => void;
   onGenerateBatch?: (dtos: AutoCodeDto[]) => void;
   onFillForm: (dto: AutoCodeDto) => void;
+  context?: AiChatContext;
 }
 
 function newId(): string {
@@ -54,7 +55,7 @@ function formatTime(ts: number): string {
     ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-export function AiGeneratorPanel({ onGenerate, onGenerateBatch, onFillForm }: Props) {
+export function AiGeneratorPanel({ onGenerate, onGenerateBatch, onFillForm, context }: Props) {
   // ── History bootstrap ───────────────────────────────────────────────────
   useEffect(() => { migrateIfNeeded(); }, []);
 
@@ -223,7 +224,7 @@ export function AiGeneratorPanel({ onGenerate, onGenerateBatch, onFillForm }: Pr
           prev.map((m) => (m.id === aiMsg.id ? { ...m, streaming: false } : m)),
         );
       },
-    }, ctrl.signal);
+    }, ctrl.signal, context);
 
     setLoading(false);
     abortRef.current = null;

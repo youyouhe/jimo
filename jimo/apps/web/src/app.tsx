@@ -71,6 +71,10 @@ if (typeof window !== 'undefined') {
     .jimo-header-hidden .ant-pro-layout-content {
       margin-top: 0 !important;
     }
+    .jimo-header-hidden .ant-pro-sider,
+    .jimo-header-hidden .ant-layout-sider {
+      top: 0 !important;
+    }
 
     /* Lock the page to the viewport so window-level scroll never happens.
        Content pages scroll inside the WorkspaceTabs content area instead. */

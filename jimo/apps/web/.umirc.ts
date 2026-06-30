@@ -101,12 +101,6 @@ export default defineConfig({
     // code-generation time.  patchClientRoutes filters them at runtime
     // against the DB menu tree for role-based access control.
     {
-      path: '/lc/accounts',
-      name: '会计科目表',
-      icon: 'TableOutlined',
-      component: './lc/accounts/index',
-    },
-    {
       path: '/lc/vouchers/create',
       component: 'lc/vouchers/detail',
       layout: false,
@@ -155,12 +149,6 @@ export default defineConfig({
       path: '/lc/vouchers/:id',
       component: 'lc/vouchers/detail',
       layout: false,
-    },
-    {
-      path: '/lc/vouchers',
-      name: '凭证表',
-      icon: 'TableOutlined',
-      component: './lc/vouchers/index',
     },
     {
       path: '/lc/vouchers/create',
@@ -181,12 +169,6 @@ export default defineConfig({
       path: '/lc/materials/:id',
       component: 'lc/materials/detail',
       layout: false,
-    },
-    {
-      path: '/lc/materials',
-      name: '物料表',
-      icon: 'TableOutlined',
-      component: './lc/materials/index',
     },
     {
       path: '/lc/materials/create',
@@ -229,12 +211,6 @@ export default defineConfig({
       layout: false,
     },
     {
-      path: '/lc/regions',
-      name: '地区表',
-      icon: 'TableOutlined',
-      component: './lc/regions/index',
-    },
-    {
       path: '/lc/regions/create',
       component: 'lc/regions/detail',
       layout: false,
@@ -243,12 +219,6 @@ export default defineConfig({
       path: '/lc/regions/:id',
       component: 'lc/regions/detail',
       layout: false,
-    },
-    {
-      path: '/lc/suppliers',
-      name: '供应商表',
-      icon: 'TableOutlined',
-      component: './lc/suppliers/index',
     },
     {
       path: '/lc/purchase-orders/create',
@@ -409,12 +379,6 @@ export default defineConfig({
       path: '/lc/chart-of-accounts/:id',
       component: 'lc/chart-of-accounts/detail',
       layout: false,
-    },
-    {
-      path: '/lc/chart-of-accounts',
-      name: '会计科目表',
-      icon: 'TableOutlined',
-      component: './lc/chart-of-accounts/index',
     },
     {
       path: '/lc/chart-of-accounts/create',
@@ -437,10 +401,24 @@ export default defineConfig({
       layout: false,
     },
     {
-      path: '/lc/org-units',
-      name: '组织单元表',
-      icon: 'TableOutlined',
-      component: './lc/org-units/index',
+      path: '/lc/org-units/create',
+      component: 'lc/org-units/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/org-units/:id',
+      component: 'lc/org-units/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/org-units/create',
+      component: 'lc/org-units/detail',
+      layout: false,
+    },
+    {
+      path: '/lc/org-units/:id',
+      component: 'lc/org-units/detail',
+      layout: false,
     },
     {
       path: '/lc/org-units/create',

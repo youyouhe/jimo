@@ -11,12 +11,36 @@ import {
   getValidatorDecorators,
   getSwaggerProp,
   deriveNames,
+  enforceUniqueRequired,
 } from './autocode-field-utils';
+
+/**
+ * System tables have their `sys_` prefix stripped in the schema directory:
+ *   sys_users → users.ts, sys_roles → roles.ts, etc.
+ * Use this map when generating cross-table import paths.
+ */
+const SYSTEM_SCHEMA_FILE_MAP: Record<string, string> = {
+  sys_users: 'users',
+  sys_roles: 'roles',
+  sys_menus: 'menus',
+  sys_departments: 'departments',
+  sys_api: 'apis',
+};
+
+function resolveSchemaFileName(tableName: string): string {
+  return SYSTEM_SCHEMA_FILE_MAP[tableName] ?? deriveNames(tableName).kebabName;
+}
 
 /**
  * Generate Drizzle pgTable schema definition.
  */
 export function generateSchema(dto: AutoCodeDto): string {
+  // A unique column must carry a value: otherwise the generated partial unique
+  // index (`idx_<table>_<col>_active WHERE deleted_at IS NULL`) collides on the
+  // column's empty default (`.default('')`). Normalize unique→required before
+  // generating columns. generateSchema bypasses activeFields (it keeps removed
+  // columns), so enforce it here too.
+  dto = { ...dto, fields: enforceUniqueRequired(dto.fields) };
   const n = deriveNames(dto.tableName);
   const fieldLines: string[] = ["    id: uuid('id').defaultRandom().primaryKey(),"];
 
@@ -28,6 +52,9 @@ export function generateSchema(dto: AutoCodeDto): string {
   for (const field of dto.fields) {
     if (field.type === 'relation' && field.relationType === 'one-to-many') {
       continue;
+    }
+    if (field.type === 'calculated') {
+      continue; // virtual — no physical column
     }
     if (field.name === 'id') {
       continue;
@@ -76,6 +103,7 @@ export function generateSchema(dto: AutoCodeDto): string {
   usedTypes.add('uuid');
   for (const field of dto.fields) {
     if (field.type === 'relation' && field.relationType === 'one-to-many') continue;
+    if (field.type === 'calculated') continue; // virtual — no column import
     usedTypes.add(getDrizzleImportNames(field));
   }
   for (const field of oneToManyFields) {
@@ -105,7 +133,7 @@ export function generateSchema(dto: AutoCodeDto): string {
     if (field.relationTable === dto.tableName) continue;
     if (field.relationTable) {
       const targetNames = deriveNames(field.relationTable);
-      relationImports.push(`import { ${targetNames.schemaVar} } from './${targetNames.kebabName}';`);
+      relationImports.push(`import { ${targetNames.schemaVar} } from './${resolveSchemaFileName(field.relationTable)}';`);
     }
   }
 
@@ -132,6 +160,7 @@ export function generateSchema(dto: AutoCodeDto): string {
     for (const df of field.detailFields) {
       if (!df.name || df.name === 'id') continue;
       if (df.type === 'relation' && df.relationType === 'one-to-many') continue;
+      if (df.type === 'calculated') continue; // virtual — no physical column
       const drizzleType = toDrizzleType(df);
       const required = toRequired(df);
       const defaultVal = toDefaultValue(df);
@@ -171,6 +200,7 @@ export type New${childPascalType} = typeof ${childSchemaVar}.$inferInsert;
       for (const gdf of gf.detailFields) {
         if (!gdf.name || gdf.name === 'id') continue;
         if (gdf.type === 'relation' && gdf.relationType === 'one-to-many') continue;
+        if (gdf.type === 'calculated') continue; // virtual — no physical column
         const drizzleType = toDrizzleType(gdf);
         const required = toRequired(gdf);
         const defaultVal = toDefaultValue(gdf);
@@ -221,8 +251,11 @@ ${childTableSchemas}`;
  */
 export function generateCreateDto(dto: AutoCodeDto): string {
   const n = deriveNames(dto.tableName);
-  // 'code' type fields are auto-generated server-side — never user-submitted
-  const creatableFields = dto.fields.filter((f) => f.creatable && f.type !== 'code');
+  // 'code' fields are auto-generated server-side; 'calculated' fields are
+  // virtual (computed on read) — neither is ever user-submitted.
+  const creatableFields = dto.fields.filter(
+    (f) => f.creatable && f.type !== 'code' && f.type !== 'calculated',
+  );
 
   const fieldStrings = creatableFields.map((f) => {
     const swagger = getSwaggerProp(f, true);
@@ -294,7 +327,8 @@ ${fieldStrings.join('\n\n')}
  */
 export function generateQueryDto(dto: AutoCodeDto): string {
   const n = deriveNames(dto.tableName);
-  const searchableFields = dto.fields.filter((f) => f.searchable);
+  // calculated fields are virtual (not stored) — cannot be queried/filtered.
+  const searchableFields = dto.fields.filter((f) => f.searchable && f.type !== 'calculated');
 
   const isNumericType = (f: AutoCodeField) => f.type === 'integer' || f.type === 'bigint' || f.type === 'decimal';
 
@@ -379,15 +413,18 @@ export function generateService(dto: AutoCodeDto): string {
       queryFilters += `    if (${alias}) {\n      conditions.push(like(${n.schemaVar}.${field.name}, \`%\$\{${alias}\}%\`));\n    }\n`;
     } else if (field.type === 'timestamp') {
       queryFilters += `    if (${alias}) {\n      conditions.push(eq(${n.schemaVar}.${field.name}, new Date(${alias})));\n    }\n`;
+    } else if (field.type === 'boolean') {
+      // query params arrive as strings ('true'/'false'); coerce before eq() on a boolean column
+      queryFilters += `    if (${alias} !== undefined && ${alias} !== null && ${alias} !== '') {\n      conditions.push(eq(${n.schemaVar}.${field.name}, ${alias} === 'true'));\n    }\n`;
     } else {
       queryFilters += `    if (${alias}) {\n      conditions.push(eq(${n.schemaVar}.${field.name}, ${alias}));\n    }\n`;
     }
   }
 
-  const updateFields = dto.fields.filter((f) => f.editable && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
+  const updateFields = dto.fields.filter((f) => f.editable && f.type !== 'calculated' && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
   let updateDataBuilder = '';
   for (const field of updateFields) {
-    const valueExpr = field.type === 'decimal' ? `String(dto.${field.name})`
+    const valueExpr = field.type === 'decimal' ? `dto.${field.name} != null ? String(dto.${field.name}) : undefined`
       : field.type === 'timestamp' ? `dto.${field.name} ? new Date(dto.${field.name}) : undefined`
       : (field.type === 'relation' && field.relationType === 'many-to-one') ? `dto.${field.name} ?? undefined`
       : `dto.${field.name}`;
@@ -450,13 +487,17 @@ export function generateService(dto: AutoCodeDto): string {
 `;
   }
 
-  // 'code' fields are auto-generated via EncodingRuleService — never from DTO
-  const creatableFields = dto.fields.filter((f) => f.creatable && !(f.type === 'relation' && (f.relationType === 'one-to-many')) && f.type !== 'code');
+  // 'code' fields are auto-generated via EncodingRuleService — never from DTO;
+  // 'calculated' fields are virtual — never written, only computed on read.
+  const creatableFields = dto.fields.filter((f) => f.creatable && !(f.type === 'relation' && (f.relationType === 'one-to-many')) && f.type !== 'code' && f.type !== 'calculated');
 
   const codeFields = dto.fields.filter((f) => f.type === 'code');
   const hasCodeFields = codeFields.length > 0;
 
-  const editableFields = dto.fields.filter((f) => f.editable && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
+  const calculatedFields = dto.fields.filter((f) => f.type === 'calculated');
+  const hasCalculatedFields = calculatedFields.length > 0;
+
+  const editableFields = dto.fields.filter((f) => f.editable && f.type !== 'calculated' && !(f.type === 'relation' && (f.relationType === 'one-to-many')));
   let childImports = '';
   let childMethods = '';
   for (const field of oneToManyFields) {
@@ -763,7 +804,7 @@ ${oneToManyFields.map((field) => `        await this.remove${toPascalCase(field.
     }
     const targetNames = deriveNames(f.relationTable);
     const displayField = f.relationDisplayField || 'id';
-    manyToOneSchemaImports += `import { ${targetNames.schemaVar} } from '../../db/schema/${targetNames.kebabName}';\n`;
+    manyToOneSchemaImports += `import { ${targetNames.schemaVar} } from '../../db/schema/${resolveSchemaFileName(f.relationTable)}';\n`;
     manyToOneSelectFields += `\n      ${f.name}_display: ${targetNames.schemaVar}.${displayField},`;
     manyToOneJoins += `\n        .leftJoin(${targetNames.schemaVar}, eq(${n.schemaVar}.${f.name}, ${targetNames.schemaVar}.id))`;
   }
@@ -778,6 +819,7 @@ import { eq, and, isNull, like, sql, count, inArray, gte, lte, desc${hasManyToOn
 ${hasSelfRef ? "import { alias } from 'drizzle-orm/pg-core';\n" : ''}import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import { OwnershipHelper } from '../../common/ownership/ownership.helper';
 import { ${n.schemaVar}, ${n.schemaType} } from '../../db/schema/${n.kebabName}';
+${hasCalculatedFields ? "import { evaluateFormula } from '../autocode/formula-evaluator';" : ''}
 ${manyToOneSchemaImports}${childImports}${hasCodeFields ? "import { EncodingRuleService } from '../encoding-rule/encoding-rule.service.js';\n" : ''}import { Create${n.pascalSingular}Dto } from './dto/create-${n.kebabSingular}.dto';
 import { Update${n.pascalSingular}Dto } from './dto/update-${n.kebabSingular}.dto';
 import { Query${n.pascalSingular}Dto } from './dto/query-${n.kebabSingular}.dto';
@@ -832,7 +874,8 @@ ${hasSelfRef ? `    const parent_alias = alias(${n.schemaVar}, 'parent_alias');\
 
     const total = totalRows[0]?.count ?? 0;
 ${oneToManyAttachInFindAll}
-    return { list: rows, total, page, pageSize };
+    const list = ${hasCalculatedFields ? 'rows.map((r) => this.attachCalculated(r))' : 'rows'};
+    return { list, total, page, pageSize };
   }
 
   async findOne(id: string, userId?: string, isAdmin: boolean = false): Promise<${n.schemaType}> {
@@ -855,8 +898,20 @@ ${hasSelfRef ? `    const parent_alias = alias(${n.schemaVar}, 'parent_alias');\
       });
     }
 ${oneToManyAttachInFindOne}
-    return rows[0]!;
+    return ${hasCalculatedFields ? 'this.attachCalculated(rows[0]!)' : 'rows[0]!'};
   }
+${hasCalculatedFields ? `
+  /**
+   * Attach virtual calculated-field values to a row. Computed on read via the
+   * shared, sandboxed evaluateFormula — never user-submitted, never stored.
+   * Errors per-field degrade to null rather than failing the whole read.
+   */
+  private attachCalculated(row: any): any {
+    if (!row) return row;
+${calculatedFields.map((f) => `    try { row.${f.name} = evaluateFormula(${JSON.stringify(f.formula || '')}, row); } catch { row.${f.name} = null; }`).join('\n')}
+    return row;
+  }
+` : ''}
 
   async create(dto: Create${n.pascalSingular}Dto, userId?: string): Promise<${n.schemaType}> {
 ${uniqueChecks}${hasCodeFields ? codeFields.map(f => `    const ${f.name} = await this.encodingRuleService.generateNext('${f.ruleId ?? ''}');`).join('\n') + '\n' : ''}${oneToManyFields.length > 0 ? `
@@ -865,7 +920,7 @@ ${uniqueChecks}${hasCodeFields ? codeFields.map(f => `    const ${f.name} = awai
         .insert(${n.schemaVar})
         .values({
           ownerId: userId,
-${creatableFields.map(f => f.type === 'decimal' ? `          ${f.name}: String(dto.${f.name}),` : f.type === 'timestamp' ? `          ${f.name}: dto.${f.name} ? new Date(dto.${f.name}) : ${f.required ? 'new Date()' : 'null'},` : `          ${f.name}: dto.${f.name},`).join('\n')}${hasCodeFields ? '\n' + codeFields.map(f => `          ${f.name},`).join('\n') : ''}
+${creatableFields.map(f => f.type === 'decimal' ? `          ${f.name}: dto.${f.name} != null ? String(dto.${f.name}) : ${f.required ? `'0'` : 'undefined'},` : f.type === 'timestamp' ? `          ${f.name}: dto.${f.name} ? new Date(dto.${f.name}) : ${f.required ? 'new Date()' : 'null'},` : `          ${f.name}: dto.${f.name},`).join('\n')}${hasCodeFields ? '\n' + codeFields.map(f => `          ${f.name},`).join('\n') : ''}
         })
         .returning();
       const created = rows[0]!;
@@ -897,7 +952,7 @@ ${manyToManyFields.map((f) => `      if (dto.${f.name} && dto.${f.name}.length >
       .insert(${n.schemaVar})
       .values({
         ownerId: userId,
-${creatableFields.map(f => f.type === 'decimal' ? `        ${f.name}: String(dto.${f.name}),` : f.type === 'timestamp' ? `        ${f.name}: dto.${f.name} ? new Date(dto.${f.name}) : ${f.required ? 'new Date()' : 'null'},` : `        ${f.name}: dto.${f.name},`).join('\n')}${hasCodeFields ? '\n' + codeFields.map(f => `        ${f.name},`).join('\n') : ''}
+${creatableFields.map(f => f.type === 'decimal' ? `        ${f.name}: dto.${f.name} != null ? String(dto.${f.name}) : ${f.required ? `'0'` : 'undefined'},` : f.type === 'timestamp' ? `        ${f.name}: dto.${f.name} ? new Date(dto.${f.name}) : ${f.required ? 'new Date()' : 'null'},` : `        ${f.name}: dto.${f.name},`).join('\n')}${hasCodeFields ? '\n' + codeFields.map(f => `        ${f.name},`).join('\n') : ''}
       })
       .returning();
 ${manyToManyFields.length > 0 ? `
@@ -1002,7 +1057,37 @@ ${manyToManyFields.map((f) => `      try {
 
     return { count: rows.length };
   }
-${childMethods}
+${hasSelfRef ? (() => {
+  const selfRefField = manyToOneFields.find(f => f.relationTable === dto.tableName)!;
+  const parentField = selfRefField.name; // e.g. parent_id
+  return `
+  async findTree(userId?: string, isAdmin: boolean = false): Promise<(${n.schemaType} & { children: any[] })[]> {
+    const conditions = [isNull(${n.schemaVar}.deletedAt)];
+    if (!isAdmin && userId) {
+      conditions.push(eq(${n.schemaVar}.ownerId, userId));
+    }
+    const allRows = await this.db
+      .select()
+      .from(${n.schemaVar})
+      .where(and(...conditions))
+      .orderBy(${n.schemaVar}.id);
+
+    const map = new Map<string, ${n.schemaType} & { children: any[] }>();
+    for (const row of allRows) map.set(row.id, { ...row, children: [] });
+    const roots: (${n.schemaType} & { children: any[] })[] = [];
+    for (const row of allRows) {
+      const node = map.get(row.id)!;
+      const pid = (row as any).${toCamelCase(parentField)};
+      if (pid && map.has(pid)) {
+        map.get(pid)!.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    }
+    return roots;
+  }
+`;
+})() : ''}${childMethods}
 }
 `;
 }
@@ -1012,6 +1097,9 @@ ${childMethods}
  */
 export function generateController(dto: AutoCodeDto): string {
   const n = deriveNames(dto.tableName);
+  const hasSelfRef = dto.fields.some(
+    (f) => f.type === 'relation' && f.relationType === 'many-to-one' && f.relationTable === dto.tableName,
+  );
 
   return `import {
   Controller,
@@ -1059,7 +1147,17 @@ export class ${n.pascalSingular}Controller {
     return { code: 0, msg: 'success', data };
   }
 
-  @Get(':id')
+${hasSelfRef ? `  @Get('tree')
+  @ApiOperation({ summary: 'Get ${n.kebabName} as nested tree' })
+  @ApiResponse({ status: 200, description: 'Returns nested tree of ${n.kebabName}' })
+  async findTree(@CurrentUser() user: { sub: string; roles: string[] }): Promise<ApiResp<any[]>> {
+    const roles = user?.roles ?? [];
+    const isAdmin = roles.includes('super_admin') || roles.includes('admin');
+    const data = await this.${n.camelSingular}Service.findTree(user?.sub, isAdmin);
+    return { code: 0, msg: 'success', data };
+  }
+
+` : ''}  @Get(':id')
   @ApiOperation({ summary: 'Get ${n.kebabSingular} by id' })
   @ApiResponse({ status: 200, description: 'Returns the ${n.kebabSingular}' })
   @ApiResponse({ status: 404, description: '${n.pascalSingular} not found' })

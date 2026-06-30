@@ -13,11 +13,19 @@ export interface StreamCallbacks {
  * 用 fetch + ReadableStream 接收后端 SSE(因需带自定义 header:Authorization +
  * X-AI-*,不能用 EventSource)。逐行解析 data: {json},按 kind 分发回调。
  */
+export interface AiChatContext {
+  approvalEnabled?: boolean;
+  approvalChain?: string;
+  pageType?: 'list' | 'document';
+  visibilityStrategy?: 'private' | 'department' | 'shared' | 'public';
+}
+
 export async function streamAiChat(
   messages: Array<{ role: string; content: string }>,
   config: AiConfig,
   cb: StreamCallbacks,
   signal?: AbortSignal,
+  context?: AiChatContext,
 ): Promise<void> {
   const { accessToken } = useUserStore.getState();
   let resp: Response;
@@ -31,7 +39,7 @@ export async function streamAiChat(
         'X-AI-Base-URL': config.baseUrl,
         'X-AI-Model': config.model,
       },
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({ messages, ...(context ? { context } : {}) }),
       signal,
     });
   } catch (e: any) {

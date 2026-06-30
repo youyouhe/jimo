@@ -1,7 +1,9 @@
 import { sql } from 'drizzle-orm';
 import {
   pgTable,
-  text,
+  boolean,
+  integer,
+  jsonb,
   timestamp,
   uuid,
   varchar,
@@ -13,15 +15,17 @@ export const departments = pgTable(
   'lc_departments',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    code: varchar('code', { length: 32 }).notNull(),
     name: varchar('name', { length: 100 }).notNull(),
-    code: varchar('code', { length: 50 }).notNull(),
-    description: text('description').default(''),
-    parent_id: uuid('parent_id'),
+    sort_order: integer('sort_order').default(0),
+    is_enabled: boolean('is_enabled').default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdBy: uuid('created_by'),
     updatedBy: uuid('updated_by'),
+    ownerId: uuid('owner_id'),
+    sharedWith: jsonb('shared_with'),
   },
   (t) => [
     uniqueIndex('idx_departments_code_active')

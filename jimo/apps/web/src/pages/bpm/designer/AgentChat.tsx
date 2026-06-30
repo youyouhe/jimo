@@ -1,26 +1,57 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type RefObject } from 'react';
 import {
   Input,
   Button,
-  Modal,
-  Form,
   message,
   Spin,
   Typography,
   Space,
+  Drawer,
+  List,
+  Popconfirm,
+  Tooltip,
 } from 'antd';
-import { SendOutlined, SettingOutlined, RobotOutlined } from '@ant-design/icons';
+import {
+  SendOutlined, SettingOutlined, RobotOutlined,
+  HistoryOutlined, CopyOutlined, ClearOutlined, PlusOutlined,
+} from '@ant-design/icons';
 import { useUserStore } from '@/stores/user';
+import { useBpmDesignerStore } from '@/stores/bpm-designer';
+import { loadAiConfig } from '@/pages/autocode/AiGenerator/key-config';
+import { KeySettingModal } from '@/pages/autocode/AiGenerator/KeySettingModal';
 import type LogicFlow from '@logicflow/core';
+import type { DesignerCanvasHandle } from './DesignerCanvas';
 
 const { Text } = Typography;
 
-const STORAGE_KEY = 'bpm_agent_config';
+const HISTORY_KEY = 'bpm_agent_history';
+const MAX_HISTORY = 20;
 
-interface AiConfig {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
+interface SavedSession {
+  id: string;
+  title: string;
+  savedAt: string;
+  messages: ChatMessage[];
+}
+
+function loadHistory(): SavedSession[] {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+  } catch { return []; }
+}
+
+function saveToHistory(msgs: ChatMessage[]): void {
+  if (msgs.length === 0) return;
+  const first = msgs.find((m) => m.role === 'user');
+  const title = first ? first.content.slice(0, 40) : '对话记录';
+  const session: SavedSession = {
+    id: Date.now().toString(),
+    title,
+    savedAt: new Date().toLocaleString(),
+    messages: msgs,
+  };
+  const history = [session, ...loadHistory()].slice(0, MAX_HISTORY);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
 }
 
 interface ChatMessage {
@@ -32,6 +63,7 @@ interface ChatMessage {
 
 interface Props {
   lf: LogicFlow | null;
+  canvasRef: RefObject<DesignerCanvasHandle | null>;
   definitionId: string | null;
 }
 
@@ -39,34 +71,20 @@ function msgId(): string {
   return Math.random().toString(36).slice(2);
 }
 
-function loadConfig(): AiConfig | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const c = JSON.parse(raw) as Partial<AiConfig>;
-    if (c.apiKey && c.baseUrl && c.model) return c as AiConfig;
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
-
-function saveConfig(c: AiConfig): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(c));
-}
-
 /**
  * BPM Designer Agent Chat Panel.
  *
  * Sends messages to POST /api/v1/bpm/agent/chat with SSE streaming.
- * On canvas_update events, calls lf.render() to update the canvas.
+ * On canvas_update events, writes to store.pendingRender; DesignerCanvas
+ * picks it up and calls lf.render() + fitView() since it always holds a valid lf.
  */
-export default function AgentChat({ lf, definitionId }: Props) {
+export default function AgentChat({ lf, canvasRef, definitionId }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [form] = Form.useForm<AiConfig>();
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<SavedSession[]>(() => loadHistory());
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -76,19 +94,23 @@ export default function AgentChat({ lf, definitionId }: Props) {
   }, [messages]);
 
   const getLfJson = useCallback(() => {
-    if (!lf) return undefined;
-    try {
-      return (lf as any).getGraphData?.() ?? undefined;
-    } catch {
-      return undefined;
+    // Read from LF instance (source of truth — includes manually dragged nodes)
+    if (lf) {
+      try {
+        const raw = (lf as any).getGraphRawData?.();
+        if (raw && (raw.nodes?.length > 0 || raw.edges?.length > 0)) return raw;
+      } catch { /* ignore */ }
     }
+    // Fallback to store
+    const stored = useBpmDesignerStore.getState().lfJson;
+    return stored ?? { nodes: [], edges: [] };
   }, [lf]);
 
   const send = async () => {
     const text = input.trim();
     if (!text || loading) return;
 
-    const cfg = loadConfig();
+    const cfg = loadAiConfig();
     if (!cfg) {
       setSettingsOpen(true);
       return;
@@ -177,14 +199,42 @@ export default function AgentChat({ lf, definitionId }: Props) {
               );
               break;
 
+            case 'node_add': {
+              const payload = evt.data as { node?: any; message?: string };
+              if (payload?.node) {
+                if (lf) {
+                  try {
+                    (lf as any).addNode(payload.node);
+                    const raw = (lf as any).getGraphRawData?.();
+                    if (raw) useBpmDesignerStore.getState().setLfJson(raw);
+                  } catch (err) {
+                    console.error('[BpmAgent] lf.addNode failed:', err);
+                  }
+                }
+              }
+              break;
+            }
+
+            case 'edge_add': {
+              const payload = evt.data as { edge?: any; message?: string };
+              if (payload?.edge) {
+                if (lf) {
+                  try {
+                    (lf as any).addEdge(payload.edge);
+                    const raw = (lf as any).getGraphRawData?.();
+                    if (raw) useBpmDesignerStore.getState().setLfJson(raw);
+                  } catch (err) {
+                    console.error('[BpmAgent] lf.addEdge failed:', err);
+                  }
+                }
+              }
+              break;
+            }
+
             case 'canvas_update': {
               const payload = evt.data as { lfJson?: any; message?: string };
-              if (payload?.lfJson && lf) {
-                try {
-                  (lf as any).render(payload.lfJson);
-                } catch (err) {
-                  console.error('[BpmAgent] lf.render failed:', err);
-                }
+              if (payload?.lfJson) {
+                canvasRef.current?.applyGraph(payload.lfJson);
               }
               break;
             }
@@ -248,22 +298,52 @@ export default function AgentChat({ lf, definitionId }: Props) {
     }
   };
 
-  const handleSettingsSave = async () => {
-    const v = await form.validateFields();
-    saveConfig(v);
-    message.success('AI 配置已保存');
-    setSettingsOpen(false);
-  };
+  const configured = !!loadAiConfig();
 
-  const openSettings = () => {
-    const c = loadConfig();
-    form.setFieldsValue(
-      c || { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', apiKey: '' },
-    );
-    setSettingsOpen(true);
-  };
+  const handleCopy = useCallback(() => {
+    if (messages.length === 0) { message.info('暂无对话内容'); return; }
+    const text = messages.map((m) => `${m.role === 'user' ? '我' : 'AI'}: ${m.content}`).join('\n\n');
+    // Clipboard API requires HTTPS or localhost; fallback to textarea execCommand
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => message.success('已复制到剪贴板'),
+        () => message.error('复制失败'),
+      );
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        message.success('已复制到剪贴板');
+      } catch {
+        message.error('复制失败，请手动选择文本');
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+  }, [messages]);
 
-  const configured = !!loadConfig();
+  const handleClean = useCallback(() => {
+    if (messages.length > 0) saveToHistory(messages);
+    setMessages([]);
+    setHistory(loadHistory());
+  }, [messages]);
+
+  const handleRestoreHistory = useCallback((session: SavedSession) => {
+    if (messages.length > 0) saveToHistory(messages);
+    setMessages(session.messages);
+    setHistoryOpen(false);
+    setHistory(loadHistory());
+  }, [messages]);
+
+  const handleDeleteHistory = useCallback((id: string) => {
+    const updated = loadHistory().filter((s) => s.id !== id);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+    setHistory(updated);
+  }, []);
 
   return (
     <div
@@ -287,25 +367,35 @@ export default function AgentChat({ lf, definitionId }: Props) {
       >
         <Space size={6}>
           <RobotOutlined style={{ color: '#1677ff' }} />
-          <Text strong style={{ fontSize: 13 }}>
-            AI 设计助手
-          </Text>
+          <Text strong style={{ fontSize: 13 }}>AI 设计助手</Text>
         </Space>
-        <Button
-          size="small"
-          type="text"
-          icon={<SettingOutlined />}
-          onClick={openSettings}
-          title="配置 AI"
-          style={{ color: configured ? '#1677ff' : '#faad14' }}
-        />
+        <Space size={2}>
+          <Tooltip title="新对话">
+            <Button size="small" type="text" icon={<PlusOutlined />} onClick={() => { if (messages.length > 0) saveToHistory(messages); setMessages([]); setHistory(loadHistory()); }} />
+          </Tooltip>
+          <Tooltip title="历史记录">
+            <Button size="small" type="text" icon={<HistoryOutlined />} onClick={() => { setHistory(loadHistory()); setHistoryOpen(true); }} />
+          </Tooltip>
+          <Tooltip title="复制对话">
+            <Button size="small" type="text" icon={<CopyOutlined />} onClick={handleCopy} />
+          </Tooltip>
+          <Tooltip title="清空对话">
+            <Popconfirm title="清空当前对话？（会自动保存到历史）" okText="清空" cancelText="取消" onConfirm={handleClean}>
+              <Button size="small" type="text" icon={<ClearOutlined />} />
+            </Popconfirm>
+          </Tooltip>
+          <Tooltip title="配置 AI（与代码生成器共享）">
+            <Button size="small" type="text" icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)} style={{ color: configured ? '#1677ff' : '#faad14' }} />
+          </Tooltip>
+        </Space>
       </div>
 
-      {/* Messages */}
+      {/* Messages — minHeight:0 is required to make flex child scrollable */}
       <div
         ref={scrollRef}
         style={{
           flex: 1,
+          minHeight: 0,
           overflowY: 'auto',
           padding: '8px 12px',
           display: 'flex',
@@ -382,31 +472,41 @@ export default function AgentChat({ lf, definitionId }: Props) {
         )}
       </div>
 
-      {/* Settings Modal */}
-      <Modal
-        title="配置 AI (OpenAI 兼容)"
-        open={settingsOpen}
-        onOk={handleSettingsSave}
-        onCancel={() => setSettingsOpen(false)}
-        okText="保存"
-        cancelText="取消"
-        destroyOnClose
+      {/* History Drawer */}
+      <Drawer
+        title="历史对话"
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        width={320}
+        bodyStyle={{ padding: 0 }}
       >
-        <Form form={form} layout="vertical">
-          <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true }]}>
-            <Input placeholder="https://api.openai.com/v1" />
-          </Form.Item>
-          <Form.Item name="apiKey" label="API Key" rules={[{ required: true }]}>
-            <Input.Password placeholder="sk-..." />
-          </Form.Item>
-          <Form.Item name="model" label="Model" rules={[{ required: true }]}>
-            <Input placeholder="gpt-4o-mini" />
-          </Form.Item>
-        </Form>
-        <div style={{ color: '#8c8c8c', fontSize: 12, lineHeight: 1.6 }}>
-          Key 存于浏览器 localStorage，后端不落盘。支持任意 OpenAI 兼容服务。
-        </div>
-      </Modal>
+        {history.length === 0 ? (
+          <div style={{ textAlign: 'center', color: '#bbb', padding: 32 }}>暂无历史记录</div>
+        ) : (
+          <List
+            dataSource={history}
+            renderItem={(session) => (
+              <List.Item
+                style={{ padding: '10px 16px', cursor: 'pointer' }}
+                actions={[
+                  <Popconfirm key="del" title="删除此记录？" okText="删除" cancelText="取消" onConfirm={() => handleDeleteHistory(session.id)}>
+                    <Button size="small" type="text" danger>删除</Button>
+                  </Popconfirm>,
+                ]}
+                onClick={() => handleRestoreHistory(session)}
+              >
+                <List.Item.Meta
+                  title={<Text ellipsis style={{ maxWidth: 180 }}>{session.title}</Text>}
+                  description={<Text type="secondary" style={{ fontSize: 11 }}>{session.savedAt} · {session.messages.length} 条</Text>}
+                />
+              </List.Item>
+            )}
+          />
+        )}
+      </Drawer>
+
+      {/* 复用代码生成器的 AI 配置 Modal（同一份 sessionStorage 配置） */}
+      <KeySettingModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

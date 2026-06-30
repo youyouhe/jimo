@@ -5,8 +5,15 @@ import {
   StopOutlined,
   UserOutlined,
   CodeOutlined,
+  ApiOutlined,
   BranchesOutlined,
   MergeCellsOutlined,
+  ToolOutlined,
+  ApartmentOutlined,
+  AppstoreOutlined,
+  ClockCircleOutlined,
+  NotificationOutlined,
+  NodeIndexOutlined,
 } from '@ant-design/icons';
 
 /**
@@ -17,10 +24,12 @@ interface NodePaletteItem {
   label: string;
   icon: React.ReactNode;
   category: 'events' | 'tasks' | 'gateways';
+  /** Extra BPMN properties to merge when the node is dropped on the canvas. */
+  properties?: Record<string, unknown>;
 }
 
 /**
- * Node type definitions for the 7 BPMN node types available in the palette.
+ * Node type definitions for the BPMN node types available in the palette.
  */
 const NODE_PALETTE: NodePaletteItem[] = [
   {
@@ -36,6 +45,19 @@ const NODE_PALETTE: NodePaletteItem[] = [
     category: 'events',
   },
   {
+    type: 'bpmn:intermediateCatchEvent',
+    label: 'Timer Event',
+    icon: <ClockCircleOutlined style={{ color: '#faad14' }} />,
+    category: 'events',
+    properties: { definitionType: 'bpmn:timerEventDefinition' },
+  },
+  {
+    type: 'bpmn:intermediateThrowEvent',
+    label: 'Throw Event',
+    icon: <NotificationOutlined style={{ color: '#1677ff' }} />,
+    category: 'events',
+  },
+  {
     type: 'bpmn:userTask',
     label: 'User Task',
     icon: <UserOutlined style={{ color: '#1677ff' }} />,
@@ -44,7 +66,31 @@ const NODE_PALETTE: NodePaletteItem[] = [
   {
     type: 'bpmn:scriptTask',
     label: 'Script Task',
-    icon: <CodeOutlined style={{ color: '#1677ff' }} />,
+    icon: <CodeOutlined style={{ color: '#fa8c16' }} />,
+    category: 'tasks',
+  },
+  {
+    type: 'bpmn:serviceTask',
+    label: 'Service Task',
+    icon: <ApiOutlined style={{ color: '#52c41a' }} />,
+    category: 'tasks',
+  },
+  {
+    type: 'bpmn:manualTask',
+    label: 'Manual Task',
+    icon: <ToolOutlined style={{ color: '#fa8c16' }} />,
+    category: 'tasks',
+  },
+  {
+    type: 'bpmn:callActivity',
+    label: 'Call Activity',
+    icon: <ApartmentOutlined style={{ color: '#722ed1' }} />,
+    category: 'tasks',
+  },
+  {
+    type: 'bpmn:subProcess',
+    label: 'Sub Process',
+    icon: <AppstoreOutlined style={{ color: '#13c2c2' }} />,
     category: 'tasks',
   },
   {
@@ -57,6 +103,12 @@ const NODE_PALETTE: NodePaletteItem[] = [
     type: 'bpmn:parallelGateway',
     label: 'Parallel Gateway',
     icon: <MergeCellsOutlined style={{ color: '#fa8c16' }} />,
+    category: 'gateways',
+  },
+  {
+    type: 'bpmn:inclusiveGateway',
+    label: 'Inclusive Gateway',
+    icon: <NodeIndexOutlined style={{ color: '#fa8c16' }} />,
     category: 'gateways',
   },
 ];
@@ -73,8 +125,14 @@ const CATEGORY_LABELS: Record<string, string> = {
  */
 export default function NodePanel() {
   const handleDragStart = useCallback(
-    (e: React.DragEvent<HTMLDivElement>, nodeType: string) => {
-      e.dataTransfer.setData('application/bpmn-node-type', nodeType);
+    (e: React.DragEvent<HTMLDivElement>, item: NodePaletteItem) => {
+      e.dataTransfer.setData('application/bpmn-node-type', item.type);
+      if (item.properties) {
+        e.dataTransfer.setData(
+          'application/bpmn-node-properties',
+          JSON.stringify(item.properties),
+        );
+      }
       e.dataTransfer.effectAllowed = 'copy';
     },
     [],
@@ -95,7 +153,7 @@ export default function NodePanel() {
           <div
             key={item.type}
             draggable
-            onDragStart={(e) => handleDragStart(e, item.type)}
+            onDragStart={(e) => handleDragStart(e, item)}
             style={{
               display: 'flex',
               alignItems: 'center',

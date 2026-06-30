@@ -83,10 +83,15 @@ function singularize(word) {
   return word;
 }
 function deriveNames(tableName) {
-  const kebabName     = toKebabCase(tableName);
-  const kebabSingular = toKebabCase(singularize(tableName));
-  const pascalSingular = toPascalCase(singularize(tableName));
-  return { tableName, kebabName, kebabSingular, pascalSingular };
+  const kebabName          = toKebabCase(tableName);
+  const kebabSingular      = toKebabCase(singularize(tableName));
+  const pascalSingular     = toPascalCase(singularize(tableName));
+  const pascalName         = toPascalCase(tableName);
+  const routePath          = `/lc/${kebabName}`;
+  const pageDir            = `lc/${kebabName}`;
+  const pageComponentPath  = `./lc/${kebabName}/index`;
+  const pageMapComponentPath = `./lc/${kebabName}/map`;
+  return { tableName, kebabName, kebabSingular, pascalSingular, pascalName, routePath, pageDir, pageComponentPath, pageMapComponentPath };
 }
 
 // ── file helpers ─────────────────────────────────────────────────────────────
@@ -308,7 +313,7 @@ const DELETE_STEPS = [
   { key: 'history',      label: '正在清理历史记录...' },
 ];
 
-async function writeJobFile(jobsDir, jobId, status, currentLabel, extraSteps, error) {
+async function writeJobFile(jobsDir, jobId, status, currentLabel, extraSteps, error, result) {
   try {
     await fs.promises.mkdir(jobsDir, { recursive: true });
     const steps = (extraSteps || DELETE_STEPS).map(s => ({
@@ -324,6 +329,7 @@ async function writeJobFile(jobsDir, jobId, status, currentLabel, extraSteps, er
       currentStepLabel: currentLabel,
       completedAt: status === 'completed' ? new Date().toISOString() : undefined,
       error: error || undefined,
+      result: result || undefined,
     };
     await fs.promises.writeFile(
       path.join(jobsDir, `${jobId}.json`),
@@ -331,6 +337,143 @@ async function writeJobFile(jobsDir, jobId, status, currentLabel, extraSteps, er
       'utf-8',
     );
   } catch { /* best-effort */ }
+}
+
+// ── entrypoints job handler ───────────────────────────────────────────────────
+
+const ENTRYPOINTS_STEPS = [
+  { key: 'schema-index', label: '正在更新 Schema 索引...' },
+  { key: 'app-module',   label: '正在注册模块...' },
+  { key: 'umi-routes',   label: '正在更新路由...' },
+];
+
+function extractMenuName(description, fallback) {
+  if (!description) return fallback;
+  const paren = description.indexOf('（');
+  if (paren > 0) return description.slice(0, paren).trim();
+  const parenAscii = description.indexOf('(');
+  if (parenAscii > 0) return description.slice(0, parenAscii).trim();
+  return description;
+}
+
+async function processEntrypointsJob(sql, job, jobsDir) {
+  const p = job.payload || {};
+  const nestJobId = p.jobId;
+  const n = deriveNames(p.tableName);
+
+  const stepsState = ENTRYPOINTS_STEPS.map(s => ({ ...s, stepStatus: 'pending' }));
+  const writeProgress = async (stepIdx, label) => {
+    stepsState.forEach((s, i) => {
+      s.stepStatus = i < stepIdx ? 'completed' : i === stepIdx ? 'running' : 'pending';
+    });
+    if (nestJobId) await writeJobFile(jobsDir, nestJobId, 'processing', label, stepsState, null);
+  };
+
+  // 1. updateSchemaIndex
+  await writeProgress(0, ENTRYPOINTS_STEPS[0].label);
+  await editFile(SCHEMA_INDEX, content => {
+    const exportLine = `export * from './${n.kebabName}.js';`;
+    if (content.includes(exportLine)) return content;
+    return content.trimEnd() + '\n' + exportLine + '\n';
+  });
+  console.log(`[cleanup-worker] entrypoints: schema-index updated for '${p.tableName}'`);
+
+  // 2. updateAppModule
+  await writeProgress(1, ENTRYPOINTS_STEPS[1].label);
+  await editFile(APP_MODULE, content => {
+    const importLine = `import { ${n.pascalSingular}Module } from './modules/${n.kebabSingular}/${n.kebabSingular}.module';`;
+    const moduleLine = `    ${n.pascalSingular}Module,`;
+    if (!content.includes(importLine)) {
+      const lastImportMatch = content.match(/^import .+;$/gm);
+      if (lastImportMatch && lastImportMatch.length > 0) {
+        const lastImport = lastImportMatch[lastImportMatch.length - 1];
+        content = content.replace(lastImport, `${lastImport}\n${importLine}`);
+      }
+      content = content.replace(/(\s+)(OperationRecordModule,)/, `$1$2\n${moduleLine}`);
+    }
+    if (p.agentEnabled) {
+      const agentImportLine = `import { ${n.pascalSingular}AgentModule } from './modules/${n.kebabSingular}/agent/${n.kebabSingular}.agent.module';`;
+      const agentModuleLine = `    ${n.pascalSingular}AgentModule,`;
+      if (!content.includes(agentImportLine)) {
+        const lastImportMatch2 = content.match(/^import .+;$/gm);
+        if (lastImportMatch2 && lastImportMatch2.length > 0) {
+          const lastImport2 = lastImportMatch2[lastImportMatch2.length - 1];
+          content = content.replace(lastImport2, `${lastImport2}\n${agentImportLine}`);
+        }
+        const moduleLineEsc = moduleLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        content = content.replace(
+          new RegExp(`(\\s+)(${moduleLineEsc})`),
+          `$1$2\n${agentModuleLine}`,
+        );
+      }
+    }
+    return content;
+  });
+  console.log(`[cleanup-worker] entrypoints: app.module.ts updated for '${p.tableName}'`);
+
+  // 3. updateUmiRoutes + updateUmiRoutesMap
+  await writeProgress(2, ENTRYPOINTS_STEPS[2].label);
+  if (p.generateWeb !== false) {
+    const menuName = extractMenuName(p.description, n.pascalName);
+
+    await editFile(UMIRC, content => {
+      const routePath = n.routePath;
+      const escapedPath = routePath.replace(/\//g, '\\/');
+      const existingBlock = new RegExp(`\\s*\\{[^{}]*path:\\s*'${escapedPath}'[^{}]*\\},?`, 'gs');
+      content = content.replace(existingBlock, '');
+
+      let routeEntry;
+      if (p.pageType === 'document') {
+        routeEntry = `    {
+      path: '${routePath}',
+      name: '${menuName}',
+      icon: 'TableOutlined',
+      component: '${n.pageComponentPath}',
+    },
+    {
+      path: '${routePath}/create',
+      component: '${n.pageDir}/detail',
+      layout: false,
+    },
+    {
+      path: '${routePath}/:id',
+      component: '${n.pageDir}/detail',
+      layout: false,
+    },`;
+      } else {
+        routeEntry = `    {
+      path: '${routePath}',
+      name: '${menuName}',
+      icon: 'TableOutlined',
+      component: '${n.pageComponentPath}',
+    },`;
+      }
+      return content.replace(
+        /    \{ path: '\/\*', redirect: '\/dashboard' \},?/,
+        `${routeEntry}\n    { path: '/*', redirect: '/dashboard' },`,
+      );
+    });
+
+    if (p.hasPointFields) {
+      const mapRoutePath = `${n.routePath}-map`;
+      await editFile(UMIRC, content => {
+        const escapedMapPath = mapRoutePath.replace(/\//g, '\\/');
+        const existingMapBlock = new RegExp(`\\s*\\{[^{}]*path:\\s*'${escapedMapPath}'[^{}]*\\},?`, 'gs');
+        content = content.replace(existingMapBlock, '');
+        const mapEntry = `    {
+      path: '${mapRoutePath}',
+      name: '${menuName}地图',
+      icon: 'EnvironmentOutlined',
+      component: '${n.pageMapComponentPath}',
+    },`;
+        return content.replace(
+          /    \{ path: '\/\*', redirect: '\/dashboard' \},?/,
+          `${mapEntry}\n    { path: '/*', redirect: '/dashboard' },`,
+        );
+      });
+    }
+  }
+  console.log(`[cleanup-worker] entrypoints: routes updated for '${p.tableName}'`);
 }
 
 // ── poll loop ─────────────────────────────────────────────────────────────────
@@ -387,39 +530,51 @@ async function main() {
     // jobId is stored in payload by NestJS service
     const nestJobId = job.payload?.jobId;
 
-    try {
-      if (nestJobId) {
-        await writeJobFile(jobsDir, nestJobId, 'processing', '正在执行清理...', null, null);
-      }
+    const jobType = job.job_type ?? 'cleanup';
 
-      await processJob(sql, job);
+    try {
+      if (jobType === 'entrypoints') {
+        await processEntrypointsJob(sql, job, jobsDir);
+      } else {
+        if (nestJobId) {
+          await writeJobFile(jobsDir, nestJobId, 'processing', '正在执行清理...', null, null);
+        }
+        await processJob(sql, job);
+      }
 
       await sql`
         UPDATE sys_cleanup_jobs
         SET status = 'done', finished_at = NOW(),
-            result = ${{ deletedAt: new Date().toISOString() }}::jsonb
+            result = ${{ completedAt: new Date().toISOString() }}::jsonb
         WHERE id = ${job.id}
       `;
 
       if (nestJobId) {
-        await writeJobFile(jobsDir, nestJobId, 'completed', '清理完成 ✓',
-          DELETE_STEPS.map(s => ({ ...s, stepStatus: 'completed' })), null);
+        const completedSteps = jobType === 'entrypoints'
+          ? ENTRYPOINTS_STEPS.map(s => ({ ...s, stepStatus: 'completed' }))
+          : DELETE_STEPS.map(s => ({ ...s, stepStatus: 'completed' }));
+        const doneLabel = jobType === 'entrypoints' ? '入口文件更新完成 ✓' : '清理完成 ✓';
+        const jobResult = jobType === 'entrypoints' && job.payload?.createdFiles
+          ? { createdFiles: job.payload.createdFiles }
+          : undefined;
+        await writeJobFile(jobsDir, nestJobId, 'completed', doneLabel, completedSteps, null, jobResult);
         // Auto-delete job file after 5 min
         setTimeout(() => {
           fs.promises.unlink(path.join(jobsDir, `${nestJobId}.json`)).catch(() => {});
         }, 5 * 60 * 1000);
       }
 
-      console.log(`[cleanup-worker] ✅ Job ${job.id} done (nestJobId=${nestJobId})`);
+      console.log(`[cleanup-worker] ✅ Job ${job.id} (${jobType}) done (nestJobId=${nestJobId})`);
     } catch (e) {
-      console.error(`[cleanup-worker] ❌ Job ${job.id} failed:`, e.message);
+      console.error(`[cleanup-worker] ❌ Job ${job.id} (${jobType}) failed:`, e.message);
       await sql`
         UPDATE sys_cleanup_jobs
         SET status = 'failed', finished_at = NOW(), error = ${e.message}
         WHERE id = ${job.id}
       `;
       if (nestJobId) {
-        await writeJobFile(jobsDir, nestJobId, 'failed', `清理失败: ${e.message}`, null, e.message);
+        const failLabel = jobType === 'entrypoints' ? `入口文件更新失败: ${e.message}` : `清理失败: ${e.message}`;
+        await writeJobFile(jobsDir, nestJobId, 'failed', failLabel, null, e.message);
       }
     }
 

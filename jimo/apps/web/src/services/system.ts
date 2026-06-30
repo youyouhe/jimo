@@ -140,3 +140,24 @@ export async function saveMinioConfig(dto: SaveMinioConfigDto): Promise<MinioCon
 export async function getDatabaseConfig(): Promise<DatabaseInfo> {
   return request.get('/system/config/database');
 }
+
+export interface CleanupJobItem {
+  id: string;
+  tableName: string;
+  jobType: string;
+  createdAt: string;
+  error?: string | null;
+}
+
+export interface CleanupQueueStatus {
+  pending: number;
+  running: number;
+  failed: number;
+  done: number;
+  pendingJobs: CleanupJobItem[];
+  failedJobs: CleanupJobItem[];
+}
+
+export async function getCleanupQueueStatus(): Promise<CleanupQueueStatus> {
+  return request.get('/system/cleanup-queue-status');
+}

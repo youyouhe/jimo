@@ -1,31 +1,29 @@
-import { IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsNumber, IsBoolean, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateDepartmentDto {
+  @ApiProperty({ description: '部门编码', maxLength: 32 })
+  @IsNotEmpty()
+  @IsString()
+  @MaxLength(32)
+  code!: string;
+
   @ApiProperty({ description: '部门名称', maxLength: 100 })
   @IsNotEmpty()
   @IsString()
   @MaxLength(100)
   name!: string;
 
-  @ApiProperty({ description: '部门编码', maxLength: 50 })
-  @IsNotEmpty()
-  @IsString()
-  @MaxLength(50)
-  code!: string;
-
-  @ApiPropertyOptional({ description: '部门描述' })
+  @ApiPropertyOptional({ description: '排序' })
   @IsOptional()
-  @IsString()
-  description: string = '';
+  @IsNumber()
+  @Type(() => Number)
+  sort_order?: number | undefined;
 
-  @ApiPropertyOptional({ description: '上级部门 (sys_departments.id)' })
+  @ApiPropertyOptional({ description: '是否启用' })
   @IsOptional()
-  @IsUUID()
-  parentId: string | null = null;
-
-  @ApiPropertyOptional({ description: '部门负责人 (sys_users.id)' })
-  @IsOptional()
-  @IsUUID()
-  leadId: string | null = null;
+  @IsBoolean()
+  @Type(() => Boolean)
+  is_enabled?: boolean | undefined;
 }

@@ -1,6 +1,6 @@
-import { IsArray, IsString, IsIn, IsOptional, ValidateNested } from 'class-validator';
+import { IsArray, IsString, IsIn, IsOptional, ValidateNested, IsBoolean } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class ChatMessageDto {
   @ApiProperty({ enum: ['user', 'assistant', 'system'] })
@@ -11,6 +11,28 @@ export class ChatMessageDto {
   @ApiProperty()
   @IsString()
   content: string = '';
+}
+
+export class AiChatContextDto {
+  @ApiPropertyOptional({ description: '审批流是否已启用' })
+  @IsOptional()
+  @IsBoolean()
+  approvalEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: '审批链规则名，逗号分隔，如 deptHead,ceo' })
+  @IsOptional()
+  @IsString()
+  approvalChain?: string;
+
+  @ApiPropertyOptional({ enum: ['list', 'document', 'grid'], description: '前端页面类型' })
+  @IsOptional()
+  @IsIn(['list', 'document', 'grid'])
+  pageType?: 'list' | 'document' | 'grid';
+
+  @ApiPropertyOptional({ enum: ['private', 'department', 'shared', 'public'], description: '数据可见性策略' })
+  @IsOptional()
+  @IsIn(['private', 'department', 'shared', 'public'])
+  visibilityStrategy?: string;
 }
 
 export class AiChatRequestDto {
@@ -27,4 +49,10 @@ export class AiChatRequestDto {
   @IsOptional()
   @IsString()
   businessType?: string;
+
+  @ApiPropertyOptional({ description: '当前代码生成器配置上下文，帮助 AI 感知外部约束（审批流、页面类型、可见性策略）' })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => AiChatContextDto)
+  context?: AiChatContextDto;
 }

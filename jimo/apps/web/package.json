@@ -7,6 +7,8 @@
     "dev": "HOST=0.0.0.0 max dev",
     "build": "max build",
     "lint": "eslint src --ext .tsx,.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
     "clean": "rm -rf dist .umi"
   },
   "dependencies": {
@@ -26,6 +28,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/leaflet": "^1.9.21",
     "@types/react": "^19.2.16",
     "@types/react-dom": "^19.2.3",

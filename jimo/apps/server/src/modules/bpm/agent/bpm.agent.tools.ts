@@ -5,7 +5,7 @@ export type LfNode = {
   type: string;
   x: number;
   y: number;
-  text?: { value: string } | string;
+  text?: { x?: number; y?: number; value: string } | string;
   properties?: Record<string, unknown>;
 };
 
@@ -43,7 +43,7 @@ function makeNode(
     type,
     x,
     y,
-    text: { value: label },
+    text: { x, y, value: label },
     properties,
   };
 }
@@ -258,10 +258,18 @@ export function buildBpmAgentTools(config: ConfigService): Record<string, any> {
               'bpmn:endEvent',
               'bpmn:userTask',
               'bpmn:scriptTask',
+              'bpmn:serviceTask',
+              'bpmn:manualTask',
+              'bpmn:callActivity',
+              'bpmn:subProcess',
               'bpmn:exclusiveGateway',
               'bpmn:parallelGateway',
+              'bpmn:inclusiveGateway',
+              'bpmn:intermediateCatchEvent',
+              'bpmn:intermediateThrowEvent',
             ],
-            description: 'BPMN节点类型',
+            description:
+              'BPMN节点类型。bpmn:intermediateCatchEvent 可通过 properties.definitionType="bpmn:timerEventDefinition" 配置为计时器事件，可额外传 properties.timerType("duration"|"cycle"|"date") 和 properties.timerValue（如 "PT1H"）',
           },
           x: { type: 'number', description: '节点X坐标' },
           y: { type: 'number', description: '节点Y坐标' },
@@ -300,14 +308,49 @@ export function buildBpmAgentTools(config: ConfigService): Record<string, any> {
           args.properties.name,
           nodeProps,
         );
-        const updatedGraph: LfGraphData = {
-          nodes: [...(current.nodes ?? []), newNode],
-          edges: current.edges ?? [],
-        };
         return {
-          type: 'canvas_update',
-          lfJson: updatedGraph,
+          type: 'node_add',   // frontend uses lf.addNode() — more reliable than lf.render()
+          node: newNode,
           message: `已添加节点: ${args.properties.name} (${args.type})`,
+        };
+      },
+    },
+
+    add_edge: {
+      description: '在画布上两个节点之间添加一条连线（sequenceFlow）',
+      parameters: {
+        type: 'object',
+        properties: {
+          sourceNodeId: { type: 'string', description: '起点节点ID' },
+          targetNodeId: { type: 'string', description: '终点节点ID' },
+          label: { type: 'string', description: '连线标签（可选，如"通过"/"驳回"）' },
+          conditionExpression: {
+            type: 'string',
+            description: '条件表达式（可选，如 ${approved == true}）',
+          },
+        },
+        required: ['sourceNodeId', 'targetNodeId'],
+      },
+      execute: async (args: {
+        sourceNodeId: string;
+        targetNodeId: string;
+        label?: string;
+        conditionExpression?: string;
+      }) => {
+        const properties: Record<string, unknown> = {};
+        if (args.conditionExpression) {
+          properties.conditionExpression = args.conditionExpression;
+        }
+        const edge = makeEdge(
+          args.sourceNodeId,
+          args.targetNodeId,
+          args.label ?? '',
+          properties,
+        );
+        return {
+          type: 'edge_add',
+          edge,
+          message: `已添加连线: ${args.sourceNodeId} → ${args.targetNodeId}${args.label ? ` (${args.label})` : ''}`,
         };
       },
     },

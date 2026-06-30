@@ -8,30 +8,51 @@ node_modules/
 **/*.tsbuildinfo
 
 # ── Autocode-generated source files ──────────────────────────────────────────
-# These files are generated at runtime via the autocode engine and tracked in
-# sys_auto_code_histories. They should NOT be committed to git.
+# Files generated at runtime by the autocode engine (sys_auto_code_histories).
+# The engine writes to predictable paths based on the table name.
+# These are runtime artifacts — do NOT commit them.
 #
-# Frontend: all generated pages and services live exclusively under lc/
+# Rule: all user-defined business tables must use the lc_ prefix.
+# deriveNames() maps:
+#   lc_products  →  schema: lc-products.ts
+#                   module: modules/lc-product/   (singular kebab)
+#                   page:   pages/lc/lc-products/
+#                   svc:    services/lc/lc-product.ts
+#
+# ── Frontend (all generated pages and services live under lc/) ────────────────
 jimo/apps/web/src/pages/lc/
 jimo/apps/web/src/services/lc/
 #
-# Backend: generated files are spread across db/schema/ and modules/.
-# The autocode engine always appends all generated paths to .autocode-generated
-# (see autocode.service.ts → writeGeneratedPaths). Commit that index file,
-# and git will use it via the pattern below to ignore the actual generated files.
-# Until that mechanism is in place, the paths below are maintained manually.
+# ── Backend schema (all lc_-prefixed business tables) ────────────────────────
+jimo/apps/server/src/db/schema/lc-*.ts
 #
-# db/schema — generated table schemas (business tables, not system tables)
+# ── Backend modules (all lc_-prefixed business modules) ──────────────────────
+jimo/apps/server/src/modules/lc-*/
+#
+# ── Legacy: old-style modules built before the lc_ prefix convention ─────────
+# These were generated without a prefix and are kept here for history.
+# Once cleared via autocode they will disappear from disk naturally.
 jimo/apps/server/src/db/schema/suppliers.ts
 jimo/apps/server/src/db/schema/procurement-contracts.ts
-#
-# modules — fully-generated business modules (no hand-written logic inside)
 jimo/apps/server/src/modules/supplier/
 jimo/apps/server/src/modules/procurement-contract/
 jimo/apps/server/src/modules/contract/
 jimo/apps/server/src/modules/material/
 jimo/apps/server/src/modules/stock-in-order/
 jimo/apps/server/src/modules/warehous/
+jimo/apps/server/src/modules/purchase-order/
+jimo/apps/server/src/modules/calculated-demo/
+jimo/apps/server/src/modules/chart-of-account/
+jimo/apps/server/src/modules/region/
+jimo/apps/server/src/modules/student/
+jimo/apps/server/src/modules/account/
+jimo/apps/server/src/modules/voucher/
+jimo/apps/server/src/modules/announcement/
+jimo/apps/server/src/modules/employee/
+jimo/apps/server/src/modules/product/
+jimo/apps/server/src/modules/project/
+jimo/apps/server/src/modules/salary-item/
+jimo/apps/server/src/modules/org-unit/
 
 # Logs
 *.log

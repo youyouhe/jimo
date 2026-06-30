@@ -17,6 +17,7 @@ const RESERVED: Set<string> = new Set([
   'autocode', 'export-templates', 'versions', 'authority-btns', 'api-tokens',
   'encoding-rules', 'operation-records', 'login-logs', 'errors', 'profile',
   'about', 'approvals',
+  'bpm',
 ]);
 
 export const RESERVED_TABLE_NAMES: ReadonlySet<string> = RESERVED;

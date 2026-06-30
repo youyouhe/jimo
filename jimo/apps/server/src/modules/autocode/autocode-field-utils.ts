@@ -55,6 +55,8 @@ export function toTsType(field: AutoCodeField): string {
     case 'code':
     case 'point':
       return 'string';
+    case 'calculated':
+      return field.resultType === 'number' ? 'number' : 'string';
     case 'integer':
     case 'bigint':
       return 'number';
@@ -94,6 +96,8 @@ export function toDrizzleType(field: AutoCodeField): string {
     case 'uuid':
     case 'relation':
       return `uuid('${field.name}')`;
+    case 'calculated':
+      return ''; // virtual — no physical column
     default:
       return `varchar('${field.name}')`;
   }
@@ -130,12 +134,68 @@ export function toRequired(field: AutoCodeField): string {
 }
 
 /**
+ * A unique column must carry a value: the generated partial unique index
+ * `idx_<table>_<col>_active WHERE deleted_at IS NULL` collides on the column's
+ * empty default (`.default('')`) whenever two non-deleted rows share it. Force
+ * required=true for any field that will get a unique index, so the column is
+ * NOT NULL with no empty default, and the create DTO validates it as @IsNotEmpty.
+ *
+ * Filter condition mirrors unique-index generation (generateSchema in
+ * autocode-backend-generators.ts): one-to-many relations are excluded (they
+ * don't produce a unique index), so they are left untouched here.
+ */
+export function enforceUniqueRequired(fields: AutoCodeField[]): AutoCodeField[] {
+  return fields.map((f) =>
+    f.unique && !(f.type === 'relation' && f.relationType === 'one-to-many') && !f.required
+      ? { ...f, required: true }
+      : f,
+  );
+}
+
+/**
  * Filter out removed fields for business code generation.
  * Removed fields are kept in schema (DB column preserved) but excluded from
- * DTOs, services, controllers, and frontend code.
+ * DTOs, services, controllers, and frontend code. Also enforces unique→required
+ * (see enforceUniqueRequired) so generated business code treats unique columns
+ * as mandatory.
  */
 export function activeFields(fields: AutoCodeField[]): AutoCodeField[] {
-  return fields.filter((f) => !f.removed);
+  return enforceUniqueRequired(fields).filter((f) => !f.removed);
+}
+
+/**
+ * Build a deterministic JSON-literal sample value for a field, as a snippet of
+ * source code (e.g. `'SAMPLE_NAME'` / `1` / `true`) for embedding in a generated
+ * spec's create/update body. Stable (no faker/ctx) so the generated assertions
+ * can hard-code the same value. Callers should exclude relation/calculated/code
+ * fields first. Spec generators override this with a per-case token for unique
+ * fields (see generateServiceContractSpec/generateHttpContractSpec).
+ */
+export function buildSpecSampleValue(field: AutoCodeField): string {
+  switch (field.type) {
+    case 'varchar':
+    case 'text':
+    case 'image':
+    case 'file':
+      return `'SAMPLE_${field.name.toUpperCase()}'`;
+    case 'integer':
+    case 'bigint':
+      return '1';
+    case 'decimal':
+      return `'10.00'`;
+    case 'boolean':
+      return 'true';
+    case 'timestamp':
+      return `'2025-01-01T00:00:00.000Z'`;
+    case 'uuid':
+      return `'00000000-0000-0000-0000-0000000000aa'`;
+    case 'dict':
+      return `'sample'`;
+    case 'point':
+      return `'{"type":"Point","coordinates":[116.39,39.91]}'`;
+    default:
+      return `''`;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +203,7 @@ export function activeFields(fields: AutoCodeField[]): AutoCodeField[] {
 // ---------------------------------------------------------------------------
 
 export function toSqlColumnDef(field: AutoCodeField): string {
+  if (field.type === 'calculated') return ''; // virtual — no physical column
   let colType: string;
   switch (field.type) {
     case 'varchar':
@@ -192,7 +253,7 @@ export function toSqlColumnDef(field: AutoCodeField): string {
 export function buildCreateTableSql(tableName: string, fields: AutoCodeField[], fkName?: string, fkRef?: string): string {
   const cols: string[] = [`  "id" uuid DEFAULT gen_random_uuid() PRIMARY KEY`];
   for (const f of fields) {
-    if (f.removed || f.type === 'relation') continue;
+    if (f.removed || f.type === 'relation' || f.type === 'calculated') continue;
     const colDef = toSqlColumnDef(f);
     if (colDef) cols.push(colDef);
   }
@@ -286,6 +347,7 @@ export function getDrizzleImportNames(field: AutoCodeField): string {
     case 'timestamp': return 'timestamp';
     case 'uuid': return 'uuid';
     case 'relation': return 'uuid';
+    case 'calculated': return ''; // virtual — no column, no import
     default: return 'varchar';
   }
 }
@@ -498,6 +560,11 @@ export function generateMockValue(
         ],
       });
       break;
+    case 'calculated':
+      // Virtual field — never stored; computed on read by the generated service.
+      // Mock inserts exclude calculated columns, so this branch is defensive.
+      value = null;
+      break;
     default: {
       // Unknown type: warn via console (this module has no logger) and fall
       // back to a safe default derived from toDefaultValue semantics.
@@ -551,6 +618,9 @@ export function getProFormComponent(field: AutoCodeField): string {
       return 'ProFormText';
     case 'point':
       return 'GeoField';
+    case 'calculated':
+      // Read-only computed value; excluded from create/edit forms (like 'code').
+      return 'ProFormText';
     default:
       return 'ProFormText';
   }
@@ -574,6 +644,8 @@ export function getValueType(field: AutoCodeField): string {
       return 'text';
     case 'point':
       return 'geo';
+    case 'calculated':
+      return field.resultType === 'number' ? 'digit' : 'text';
     default:
       return 'text';
   }

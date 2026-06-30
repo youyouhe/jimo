@@ -8,6 +8,7 @@ import { eq, and, isNull, like, sql, count, inArray } from 'drizzle-orm';
 import * as os from 'os';
 import { DATABASE_CONNECTION, DrizzleDb } from '../../db/connection';
 import { sysSystemConfigs, SysSystemConfig } from '../../db/schema/system-configs';
+import { sysCleanupJobs } from '../../db/schema/cleanup-jobs';
 import { CreateSystemConfigDto } from './dto/create-system-config.dto';
 import { UpdateSystemConfigDto } from './dto/update-system-config.dto';
 import { QuerySystemConfigDto } from './dto/query-system-config.dto';
@@ -301,4 +302,36 @@ export class SystemService {
       loadavg: os.loadavg(),
     };
   }
+
+  async getCleanupQueueStatus(): Promise<CleanupQueueStatus> {
+    try {
+      const [pending, running, failed, done] = await Promise.all([
+        this.db.select({ cnt: count() }).from(sysCleanupJobs).where(eq(sysCleanupJobs.status, 'pending')).then(r => Number(r[0]?.cnt ?? 0)),
+        this.db.select({ cnt: count() }).from(sysCleanupJobs).where(eq(sysCleanupJobs.status, 'running')).then(r => Number(r[0]?.cnt ?? 0)),
+        this.db.select({ cnt: count() }).from(sysCleanupJobs).where(eq(sysCleanupJobs.status, 'failed')).then(r => Number(r[0]?.cnt ?? 0)),
+        this.db.select({ cnt: count() }).from(sysCleanupJobs).where(eq(sysCleanupJobs.status, 'done')).then(r => Number(r[0]?.cnt ?? 0)),
+      ]);
+
+      const pendingJobs = await this.db
+        .select({ id: sysCleanupJobs.id, tableName: sysCleanupJobs.tableName, jobType: sysCleanupJobs.jobType, createdAt: sysCleanupJobs.createdAt })
+        .from(sysCleanupJobs).where(eq(sysCleanupJobs.status, 'pending')).orderBy(sysCleanupJobs.createdAt).limit(20);
+
+      const failedJobs = await this.db
+        .select({ id: sysCleanupJobs.id, tableName: sysCleanupJobs.tableName, jobType: sysCleanupJobs.jobType, error: sysCleanupJobs.error, createdAt: sysCleanupJobs.createdAt })
+        .from(sysCleanupJobs).where(eq(sysCleanupJobs.status, 'failed')).orderBy(sysCleanupJobs.createdAt).limit(10);
+
+      return { pending, running, failed, done, pendingJobs, failedJobs };
+    } catch {
+      return { pending: 0, running: 0, failed: 0, done: 0, pendingJobs: [], failedJobs: [] };
+    }
+  }
+}
+
+export interface CleanupQueueStatus {
+  pending: number;
+  running: number;
+  failed: number;
+  done: number;
+  pendingJobs: { id: string; tableName: string; jobType: string; createdAt: Date }[];
+  failedJobs: { id: string; tableName: string; jobType: string; error: string | null; createdAt: Date }[];
 }

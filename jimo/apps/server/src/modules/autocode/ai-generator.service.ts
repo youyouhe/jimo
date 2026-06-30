@@ -2,7 +2,7 @@ import { Injectable, Logger, Inject } from '@nestjs/common';
 import type { Response } from 'express';
 import { streamText, tool, jsonSchema, type CoreMessage } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
-import { eq, isNull, sql, desc } from 'drizzle-orm';
+import { eq, isNull, sql, desc, and } from 'drizzle-orm';
 import { AI_GENERATOR_SYSTEM_PROMPT } from './ai-generator.prompt';
 import { isReservedTableName } from './reserved-names';
 import {
@@ -22,6 +22,9 @@ import {
   ADD_CUSTOM_BTN_TOOL,
   REMOVE_CUSTOM_BTN_TOOL,
   DROP_ORPHAN_TABLES_TOOL,
+  LIST_SYSTEM_TABLES_TOOL,
+  DESCRIBE_SYSTEM_TABLE_TOOL,
+  DELETE_DICT_TOOL,
 } from './ai-generator.tool';
 import { AuthorityBtnService } from '../authority-btn/authority-btn.service';
 import type { AiChatRequestDto } from './ai-generator.dto';
@@ -128,7 +131,7 @@ export class AiGeneratorService {
 - **审批流**：${ctx.approvalEnabled
   ? `已启用（链：${ctx.approvalChain || 'deptHead'}）— **绝不能**在业务表字段里出现 status / approval_* / approve_* 等审批状态字段，否则生成器报错。审批状态由平台 business_approvals + BPM 全权托管。`
   : '未启用'}
-- **页面类型**：${ctx.pageType === 'document' ? 'document（单据页）' : 'list（标准列表）'}
+- **页面类型**：${ctx.pageType === 'document' ? 'document（单据页）' : ctx.pageType === 'grid' ? 'grid（Excel式可编辑表格，单元格直编、自动保存）' : 'list（标准列表）'}
 - **数据可见性**：${ctx.visibilityStrategy ?? 'private'}` : '';
 
       // 将状态注入为对话开头的 user/assistant 消息对，模型注意力最高
@@ -295,7 +298,16 @@ ${pkgList}${optionsBlock}`,
                   error: `物理表 '${lcTable}' 已存在于数据库,但不在生成历史中(历史遗留/孤儿表)。直接 propose 会导致 drizzle-kit push 与现有结构冲突并静默失败。请先处理: ① 若要复用现有数据/结构,改用 update 流程; ② 若确认无用,请提示用户手动执行 DROP TABLE ${lcTable} 后再 propose。`,
                 };
               }
-              const entityDto = { ...args };
+              // Defense-in-depth: a unique column must be required (else the partial
+              // unique index collides on the empty default). Normalize AI-provided
+              // fields so the proposal card shown to the user already reflects this,
+              // matching the generator-level rule (enforceUniqueRequired).
+              const entityDto = {
+                ...args,
+                fields: Array.isArray(args.fields)
+                  ? args.fields.map((f: any) => (f.unique && !f.required ? { ...f, required: true } : f))
+                  : args.fields,
+              };
               if (entityDto.packageId) {
                 try {
                   const pkg = await this.autocodeService.findOnePackage(entityDto.packageId);
@@ -304,6 +316,39 @@ ${pkgList}${optionsBlock}`,
               }
               write({ kind: 'tool_result', dto: entityDto });
               return { ok: true };
+            },
+          }),
+
+          delete_dict: tool({
+            description: DELETE_DICT_TOOL.function.description,
+            parameters: jsonSchema(DELETE_DICT_TOOL.function.parameters as any),
+            execute: async (args: unknown) => {
+              const { type } = (args as any) ?? {};
+              try {
+                const rows = await this.db
+                  .select({ id: sysDictionaries.id, name: sysDictionaries.name })
+                  .from(sysDictionaries)
+                  .where(and(eq(sysDictionaries.type, type), isNull(sysDictionaries.deletedAt)))
+                  .limit(1);
+                if (rows.length === 0) {
+                  return { ok: false, type, error: `字典 "${type}" 不存在，请先用 list_dicts 确认` };
+                }
+                const { id, name } = rows[0];
+                // Cascade soft-delete details first
+                await this.db
+                  .update(sysDictionaryDetails)
+                  .set({ deletedAt: sql`NOW()` })
+                  .where(and(eq(sysDictionaryDetails.dictId, id), isNull(sysDictionaryDetails.deletedAt)));
+                // Soft-delete the dictionary itself
+                await this.db
+                  .update(sysDictionaries)
+                  .set({ deletedAt: sql`NOW()` })
+                  .where(and(eq(sysDictionaries.id, id), isNull(sysDictionaries.deletedAt)));
+                write({ kind: 'progress', content: `已删除字典 "${name}"(${type}) 及其所有明细项` });
+                return { ok: true, type, message: `字典 "${name}"(${type}) 已删除` };
+              } catch (e: any) {
+                return { ok: false, type, error: e?.message };
+              }
             },
           }),
 
@@ -491,16 +536,17 @@ ${pkgList}${optionsBlock}`,
                   return { ok: true, tableName, source: 'history', fields };
                 }
 
-                // Fallback: sub-tables are never stored in history — read physical schema
+                // Fallback: sub-tables are never stored in history — read physical schema (lc_ prefix only)
+                const lcName = 'lc_' + tableName;
                 const physRows = await this.db.execute(
                   sql`SELECT column_name, data_type, is_nullable
                       FROM information_schema.columns
-                      WHERE table_schema = 'public' AND table_name = ${'lc_' + tableName}
+                      WHERE table_schema = 'public' AND table_name = ${lcName}
                       ORDER BY ordinal_position`
                 );
                 const cols = Array.from(physRows as any[]);
                 if (cols.length === 0) {
-                  return { ok: false, tableName, error: `表 'lc_${tableName}' 不存在，请用 list_tables 确认名称` };
+                  return { ok: false, tableName, error: `表 '${lcName}' 不存在，请用 list_tables 确认名称；如需查询系统表请用 describe_system_table` };
                 }
                 const fields = cols
                   .filter((c: any) => !['id','created_at','updated_at','deleted_at','owner_id','shared_with'].includes(c.column_name))
@@ -509,8 +555,57 @@ ${pkgList}${optionsBlock}`,
                     type: c.data_type,
                     required: c.is_nullable === 'NO',
                   }));
-                write({ kind: 'progress', content: `已获取 '${tableName}' 字段结构（${fields.length} 个字段，来自物理表，为子表）` });
+                write({ kind: 'progress', content: `已获取 '${tableName}' 字段结构（${fields.length} 个字段，来自物理表，子表）` });
                 return { ok: true, tableName, source: 'physical_schema', isSubTable: true, fields };
+              } catch (e: any) {
+                return { ok: false, tableName, error: e?.message };
+              }
+            },
+          }),
+
+          list_system_tables: tool({
+            description: LIST_SYSTEM_TABLES_TOOL.function.description,
+            parameters: jsonSchema(LIST_SYSTEM_TABLES_TOOL.function.parameters as any),
+            execute: async () => {
+              try {
+                const rows = await this.db.execute(
+                  sql`SELECT table_name FROM information_schema.tables
+                      WHERE table_schema = 'public' AND table_name NOT LIKE 'lc_%'
+                      ORDER BY table_name`
+                );
+                const tables = Array.from(rows as any[]).map((r: any) => String(r.table_name));
+                write({ kind: 'progress', content: `已获取系统表列表（${tables.length} 张表）` });
+                return { ok: true, tables };
+              } catch (e: any) {
+                return { ok: false, error: e?.message };
+              }
+            },
+          }),
+
+          describe_system_table: tool({
+            description: DESCRIBE_SYSTEM_TABLE_TOOL.function.description,
+            parameters: jsonSchema(DESCRIBE_SYSTEM_TABLE_TOOL.function.parameters as any),
+            execute: async (args: unknown) => {
+              const { tableName } = (args as any) ?? {};
+              try {
+                const rows = await this.db.execute(
+                  sql`SELECT column_name, data_type, is_nullable
+                      FROM information_schema.columns
+                      WHERE table_schema = 'public' AND table_name = ${tableName}
+                      AND table_name NOT LIKE 'lc_%'
+                      ORDER BY ordinal_position`
+                );
+                const cols = Array.from(rows as any[]);
+                if (cols.length === 0) {
+                  return { ok: false, tableName, error: `系统表 '${tableName}' 不存在，请先用 list_system_tables 确认名称` };
+                }
+                const fields = cols.map((c: any) => ({
+                  name: c.column_name,
+                  type: c.data_type,
+                  required: c.is_nullable === 'NO',
+                }));
+                write({ kind: 'progress', content: `已获取系统表 '${tableName}' 字段结构（${fields.length} 个字段）` });
+                return { ok: true, tableName, fields };
               } catch (e: any) {
                 return { ok: false, tableName, error: e?.message };
               }
@@ -767,19 +862,19 @@ ${pkgList}${optionsBlock}`,
     return true;
   }
 
-  /** create_dict：先查后建，幂等 */
+  /** create_dict：先查后建，幂等；items 支持嵌套 children 实现级联 */
   private async executeCreateDict(args: {
     type: string;
     name: string;
-    items: Array<{ label: string; value: string }>;
+    items: Array<{ label: string; value: string; children?: any[] }>;
   }): Promise<{ ok: boolean; dictType: string; message: string }> {
     const { type, name, items = [] } = args;
     try {
-      // 幂等：若 type 已存在则直接返回
+      // 幂等：若 type 已存在（且未软删除）则直接返回
       const existing = await this.db
         .select({ id: sysDictionaries.id })
         .from(sysDictionaries)
-        .where(eq(sysDictionaries.type, type))
+        .where(and(eq(sysDictionaries.type, type), isNull(sysDictionaries.deletedAt)))
         .limit(1);
       if (existing.length > 0) {
         this.logger.log(`[AiGenerator] create_dict skip (already exists) type="${type}"`);
@@ -791,21 +886,33 @@ ${pkgList}${optionsBlock}`,
         .values({ type, name, status: 1, sort: 0 })
         .returning({ id: sysDictionaries.id });
       const dictId = dictRows[0]?.id;
+
+      let totalInserted = 0;
       if (dictId && items.length > 0) {
-        await this.db.insert(sysDictionaryDetails).values(
-          items.map((item, i) => ({
-            dictId,
-            label: item.label,
-            value: item.value,
-            status: 1,
-            sort: i + 1,
-          })),
-        );
+        const insertItems = async (
+          nodes: Array<{ label: string; value: string; children?: any[] }>,
+          parentId: string | null,
+          sortOffset: number,
+        ) => {
+          for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            const [row] = await this.db
+              .insert(sysDictionaryDetails)
+              .values({ dictId, label: node.label, value: node.value, status: 1, sort: sortOffset + i + 1, parentId })
+              .returning({ id: sysDictionaryDetails.id });
+            totalInserted++;
+            if (node.children?.length) {
+              await insertItems(node.children, row.id, 0);
+            }
+          }
+        };
+        await insertItems(items, null, 0);
       }
+
       this.logger.log(
-        `[AiGenerator] create_dict ✓ type="${type}" name="${name}" items=${items.length}`,
+        `[AiGenerator] create_dict ✓ type="${type}" name="${name}" items=${totalInserted}`,
       );
-      return { ok: true, dictType: type, message: `字典 "${name}"(${type}) 创建成功(${items.length} 项)` };
+      return { ok: true, dictType: type, message: `字典 "${name}"(${type}) 创建成功(${totalInserted} 项)` };
     } catch (e: any) {
       this.logger.error(`[AiGenerator] create_dict ✗ type="${type}": ${e?.message}`);
       return { ok: false, dictType: type, message: `创建字典失败: ${e?.message}` };
@@ -928,9 +1035,15 @@ ${pkgList}${optionsBlock}`,
         // private (default): owner only
         return sql`AND owner_id = ${userId ?? ''}`;
       })();
-      const creatableFields: any[] = agentCfg.creatableFields ?? [];
-      const editableFields: any[] = agentCfg.editableFields ?? [];
-      const searchableFields: any[] = agentCfg.searchableFields ?? [];
+      // Defensive: even if a stale __agent snapshot (pre-fix) included computed
+      // fields, strip them here so the agent never advertises calculated/code as
+      // settable inputs. 'calculated' is virtual (no column); 'code' is immutable.
+      const isAgentSettable = (f: any) => f && f.type !== 'calculated' && f.type !== 'code';
+      const creatableFields: any[] = (agentCfg.creatableFields ?? []).filter(isAgentSettable);
+      const editableFields: any[] = (agentCfg.editableFields ?? []).filter(isAgentSettable);
+      const searchableFields: any[] = (agentCfg.searchableFields ?? []).filter(
+        (f: any) => f && f.type !== 'calculated',
+      );
 
       const tools: Record<string, any> = {};
 
@@ -971,7 +1084,7 @@ ${pkgList}${optionsBlock}`,
           parameters: jsonSchema({ type: 'object', properties: props, required: requiredCols }),
           execute: async (args: any) => {
             const colIdents = colNames.map((n: string) => sql.identifier(n));
-            const vals = colNames.map((n: string) => sql`${args[n] ?? null}`);
+            const vals = colNames.map((n: string) => { const v = args[n]; return sql`${(v === '' || v == null) ? null : v}`; });
             const ownerVal = userId ? sql`${userId}` : sql`gen_random_uuid()`;
             const res = await this.db.execute(sql`
               INSERT INTO ${tbl} (${sql.join(colIdents, sql`, `)}, owner_id)
@@ -999,7 +1112,8 @@ ${pkgList}${optionsBlock}`,
           execute: async (args: any) => {
             const setPairs = colNames.map((n: string) => {
               const col = sql.identifier(n);
-              return sql`${col} = ${args[n] ?? null}`;
+              const v = args[n];
+              return sql`${col} = ${(v === '' || v == null) ? null : v}`;
             });
             const res = await this.db.execute(sql`
               UPDATE ${tbl}

@@ -41,6 +41,7 @@ import {
   executeGenerate,
   getGenerateStatus,
   getTables,
+  getTemplates,
   getLatestVersion,
   startModuleUpdate,
   getUpdateStatus,
@@ -62,7 +63,11 @@ import { AiGeneratorPanel } from './AiGenerator';
 
 const { Text, Title } = Typography;
 
-const FIELD_TYPE_OPTIONS = [
+// Defensive fallback only. The authoritative field-type list is fetched from
+// the server (GET /autocode/templates) into `fieldTypeOptions` on mount, so a
+// type added on the backend (e.g. 'calculated') propagates here automatically.
+// This constant only guarantees the editor is never empty before the fetch.
+const FALLBACK_FIELD_TYPES = [
   { value: 'varchar', label: 'String (varchar)' },
   { value: 'text', label: 'Long Text (text)' },
   { value: 'integer', label: 'Integer (integer)' },
@@ -77,6 +82,7 @@ const FIELD_TYPE_OPTIONS = [
   { value: 'dict', label: '字典 (Dictionary)' },
   { value: 'code', label: '编码规则 (Auto Code)' },
   { value: 'point', label: 'GIS 坐标 (point)' },
+  { value: 'calculated', label: '计算字段 (Calculated)' },
 ];
 
 const DEFAULT_FIELD: AutoCodeField = {
@@ -505,8 +511,8 @@ export default function AutocodePage() {
   const [visibilityStrategy, setVisibilityStrategy] = useState<'private' | 'department' | 'shared' | 'public'>('private');
   // Agent config (opt-in). Enable to create a companion agent for the entity.
   const [agentEnabled, setAgentEnabled] = useState(false);
-  // Page type: list=standard table+modal (default), document=list+detail page
-  const [pageType, setPageType] = useState<'list' | 'document'>('list');
+  // Page type: list=standard table+modal (default), document=list+detail page, grid=Excel-like inline-editable table
+  const [pageType, setPageType] = useState<'list' | 'document' | 'grid'>('list');
 
   // Update mode state
   const [updateMode, setUpdateMode] = useState(false);
@@ -535,6 +541,9 @@ export default function AutocodePage() {
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
   const [dictOptions, setDictOptions] = useState<{ value: string; label: string }[]>([]);
   const [encodingRuleOptions, setEncodingRuleOptions] = useState<{ label: string; value: string }[]>([]);
+  // Authoritative field-type options, fetched from server templates; initialized
+  // from the fallback so the field editor is never empty before the fetch lands.
+  const [fieldTypeOptions, setFieldTypeOptions] = useState(FALLBACK_FIELD_TYPES);
   const [quickCreateRuleModalOpen, setQuickCreateRuleModalOpen] = useState(false);
   const [searchParams] = useSearchParams();
 
@@ -559,6 +568,17 @@ export default function AutocodePage() {
         console.error('[autocode] 获取表列表失败，请确认后端服务是否正常', err);
         message.warning('获取表列表失败，请刷新页面重试');
       });
+  }, []);
+
+  // Fetch authoritative field-type templates on mount (single source of truth).
+  useEffect(() => {
+    getTemplates()
+      .then((tpl) => {
+        if (tpl.fieldTypes?.length) {
+          setFieldTypeOptions(tpl.fieldTypes.map((ft) => ({ value: ft.value, label: ft.label })));
+        }
+      })
+      .catch(() => { /* non-critical — keep fallback */ });
   }, []);
 
   // Fetch package list on mount
@@ -682,6 +702,10 @@ export default function AutocodePage() {
       fields: dto.fields,
       generateWeb: dto.generateWeb,
       force: dto.force,
+      pageType,
+      ...(approvalEnabled ? { approvalFlow: { enabled: true, defaultChain: approvalChain.split(',').map((s) => s.trim()).filter(Boolean) } } : {}),
+      ...(agentEnabled ? { agentConfig: { enabled: true } } : {}),
+      visibilityStrategy,
     });
     // No navigation path for update — user stays on same module
     saveActiveJob(jobId, dto.tableName, 'update');
@@ -928,6 +952,7 @@ export default function AutocodePage() {
           onGenerate={handleAiGenerate}
           onGenerateBatch={handleAiGenerateBatch}
           onFillForm={handleAiFillForm}
+          context={{ approvalEnabled, approvalChain, pageType, visibilityStrategy }}
         />
       </Card>
       {/* Single Form wrapping the entire page */}
@@ -1116,13 +1141,14 @@ export default function AutocodePage() {
               </Form.Item>
             </Col>
             <Col span={6}>
-              <Form.Item label="页面类型" tooltip="list=标准列表+弹窗编辑；document=单据页（列表+独立详情页，适合凭证/单据类业务）">
+              <Form.Item label="页面类型" tooltip="list=标准列表+弹窗编辑；document=单据页（列表+独立详情页，适合凭证/单据类业务）；grid=Excel式表格，单元格直接编辑、自动保存">
                 <Segmented
                   value={pageType}
-                  onChange={(v) => setPageType(v as 'list' | 'document')}
+                  onChange={(v) => setPageType(v as 'list' | 'document' | 'grid')}
                   options={[
                     { label: '标准列表', value: 'list' },
                     { label: '单据页', value: 'document' },
+                    { label: '表格(Excel)', value: 'grid' },
                   ]}
                 />
               </Form.Item>
@@ -1205,7 +1231,7 @@ export default function AutocodePage() {
                           label="Type"
                           rules={[{ required: true }]}
                         >
-                          <Select options={FIELD_TYPE_OPTIONS} />
+                          <Select options={fieldTypeOptions} />
                         </Form.Item>
                       </Col>
                       <Col span={4}>
@@ -1513,7 +1539,7 @@ export default function AutocodePage() {
                                               <Form.Item {...dRest} name={[dName, 'type']} style={{ marginBottom: 0 }}>
                                                 <Select
                                                   style={{ width: 150 }}
-                                                  options={FIELD_TYPE_OPTIONS.filter(o => o.value !== 'code')}
+                                                  options={fieldTypeOptions.filter(o => o.value !== 'code')}
                                                   onChange={() => {
                                                     form.setFieldValue(['fields', name, 'detailFields', dName, 'relationType'], undefined);
                                                     form.setFieldValue(['fields', name, 'detailFields', dName, 'relationTable'], undefined);
@@ -1647,7 +1673,7 @@ export default function AutocodePage() {
                                                                   <Form.Item {...gRest} name={[gName, 'type']} style={{ marginBottom: 0 }}>
                                                                     <Select
                                                                       style={{ width: 130 }}
-                                                                      options={FIELD_TYPE_OPTIONS.filter(o => o.value !== 'relation' && o.value !== 'code')}
+                                                                      options={fieldTypeOptions.filter(o => o.value !== 'relation' && o.value !== 'code')}
                                                                       onChange={() => {
                                                                         form.setFieldValue(['fields', name, 'detailFields', dName, 'detailFields', gName, 'dictType'], undefined);
                                                                       }}
