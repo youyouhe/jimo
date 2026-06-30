@@ -240,7 +240,7 @@ async function processJob(sql, job) {
     } catch { /* ignore */ }
   }
   const n = deriveNames(table_name, packageSlug);
-  const dbTableName = `lc_${table_name}`;
+  const dbTableName = table_name.startsWith('lc_') ? table_name : `lc_${table_name}`;
 
   console.log(`[cleanup-worker] Processing job ${id} — table: ${table_name}`);
 

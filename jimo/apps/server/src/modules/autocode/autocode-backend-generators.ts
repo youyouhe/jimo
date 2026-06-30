@@ -247,7 +247,7 @@ ${uniqueIndexImport}} from 'drizzle-orm/pg-core';
 ${relationImportBlock}
 
 export const ${n.schemaVar} = pgTable(
-  'lc_${dto.tableName}',
+  '${n.tableName}',
   {
 ${fieldLines.join('\n')}
   },${extraClause}

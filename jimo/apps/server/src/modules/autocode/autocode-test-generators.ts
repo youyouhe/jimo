@@ -81,7 +81,7 @@ function selectFields(dto: AutoCodeDto) {
 export function generateServiceContractSpec(dto: AutoCodeDto): string {
   const { n, requiredFields, hasUnique, repField, partialField } = selectFields(dto);
   const Service = `${n.pascalSingular}Service`;
-  const table = `lc_${n.tableName}`;
+  const table = n.tableName;
   const rep = repField?.name ?? 'id';
 
   const its: string[] = [];
@@ -210,7 +210,7 @@ export function generateHttpContractSpec(dto: AutoCodeDto): string {
   const { n, requiredFields, repField, partialField } = selectFields(dto);
   const Service = `${n.pascalSingular}Service`;
   const Controller = `${n.pascalSingular}Controller`;
-  const table = `lc_${n.tableName}`;
+  const table = n.tableName;
   const urlSeg = `lc/${n.kebabName}`;
   const rep = repField?.name ?? 'id';
 
