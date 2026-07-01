@@ -295,3 +295,34 @@ describe('[H] grid page — column freeze', () => {
     expect(src).not.toMatch(/fixed: 'left'/);
   });
 });
+
+// =============================================================================
+// [H] grid page — action column + editable.onChange no-op
+//     delete/save must render on every row; editableKeys fully self-managed
+//     (actionRender was unreliable for non-active rows; onChange let
+//     EditableProTable drop rows out of edit mode on focus change)
+// =============================================================================
+describe('[H] grid page — action column + editable no-op', () => {
+  const dto = () => baseDto('lc_items', { fields: [f('name', 'varchar', { required: true })] });
+
+  it('renders an explicit valueType:option action column so delete is always visible', () => {
+    const src = generateFrontendGridPage(dto());
+    expect(src).toMatch(/valueType:\s*'option'/);
+    expect(src).toContain('删除');
+  });
+
+  it('does NOT rely on editable.actionRender', () => {
+    const src = generateFrontendGridPage(dto());
+    expect(src).not.toMatch(/actionRender/);
+  });
+
+  it('editable.onChange is a no-op (editableKeys fully self-managed)', () => {
+    const src = generateFrontendGridPage(dto());
+    expect(src).toMatch(/onChange:\s*\(\)\s*=>\s*\{\s*\}/);
+  });
+
+  it('uses stable __key as rowKey', () => {
+    const src = generateFrontendGridPage(dto());
+    expect(src).toContain('rowKey="__key"');
+  });
+});

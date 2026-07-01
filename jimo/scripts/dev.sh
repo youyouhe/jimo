@@ -272,10 +272,12 @@ cleanup_zombies() {
   # 核心策略：端口上正在监听的进程 + 其父进程树 都不杀
   local active_pids=""
 
-  # 1. 从 PID 文件中收集
+  # 1. 从 PID 文件中收集（含 worker 进程）
   local p
-  if p=$(read_pid "$backend_pid_file");  then active_pids="$active_pids $p"; fi
-  if p=$(read_pid "$frontend_pid_file"); then active_pids="$active_pids $p"; fi
+  if p=$(read_pid "$backend_pid_file");     then active_pids="$active_pids $p"; fi
+  if p=$(read_pid "$frontend_pid_file");    then active_pids="$active_pids $p"; fi
+  if p=$(read_pid "$worker_pid_file");      then active_pids="$active_pids $p"; fi
+  if p=$(read_pid "$gen_worker_pid_file");  then active_pids="$active_pids $p"; fi
 
   # 2. 从端口上收集实际监听的进程
   local port_pid
@@ -354,6 +356,41 @@ cleanup_zombies() {
     count=$(echo "$umi_pids" | wc -l)
     warn "发现 $count 个残留 umi 进程，正在清理..."
     echo "$umi_pids" | xargs kill -9 2>/dev/null || true
+    cleaned=1
+  fi
+
+  # 3. 清理孤儿 cleanup-worker 进程（本项目 tools/ 下的）
+  # stop_service 只杀 PID 文件里的进程，不在 PID 文件里的旧实例会继续运行旧代码
+  local cw_pids
+  cw_pids=$(ps aux 2>/dev/null \
+    | grep "cleanup-worker.mjs" \
+    | grep -v grep \
+    | grep "$PROJECT_ROOT" \
+    | awk '{print $2}' \
+    | _filter_zombies \
+    || true)
+  if [ -n "$cw_pids" ]; then
+    local count
+    count=$(echo "$cw_pids" | wc -l)
+    warn "发现 $count 个残留 cleanup-worker 进程，正在清理..."
+    echo "$cw_pids" | xargs kill -9 2>/dev/null || true
+    cleaned=1
+  fi
+
+  # 4. 清理孤儿 generate-worker 进程（本项目 tools/ 下的）
+  local gw_pids
+  gw_pids=$(ps aux 2>/dev/null \
+    | grep "generate-worker.ts" \
+    | grep -v grep \
+    | grep "$PROJECT_ROOT" \
+    | awk '{print $2}' \
+    | _filter_zombies \
+    || true)
+  if [ -n "$gw_pids" ]; then
+    local count
+    count=$(echo "$gw_pids" | wc -l)
+    warn "发现 $count 个残留 generate-worker 进程，正在清理..."
+    echo "$gw_pids" | xargs kill -9 2>/dev/null || true
     cleaned=1
   fi
 

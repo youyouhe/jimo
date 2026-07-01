@@ -181,7 +181,8 @@ export class HistoryService {
     await this.entrypointService.removeDanglingSchemaImports(n);
     await this.entrypointService.removeModuleRegistration(n);
 
-    const dbTableName = `lc_${tableName}`;
+    // tableName in history is already lc_-prefixed (normalized at generate time)
+    const dbTableName = tableName;
     const componentPath = `${n.pageComponentPath}`;
     const menuRows = await this.db
       .select({ id: sysMenus.id, name: sysMenus.name, path: sysMenus.path })
@@ -406,7 +407,7 @@ export class HistoryService {
       if (visited.has(ref.table)) continue;
       visited.add(ref.table);
 
-      const autocodeTable = ref.table.startsWith('lc_') ? ref.table.slice(3) : ref.table;
+      const autocodeTable = ref.table;
 
       try {
         const childImpact = await this.computeSingleTableImpact(autocodeTable);
@@ -534,7 +535,8 @@ export class HistoryService {
     files: string[];
     hasHistory: boolean;
   }> {
-    const dbTableName = `lc_${tableName}`;
+    // tableName from history is already lc_-prefixed
+    const dbTableName = tableName.startsWith('lc_') ? tableName : `lc_${tableName}`;
     const n = deriveNames(tableName);
 
     let recordCount = 0;

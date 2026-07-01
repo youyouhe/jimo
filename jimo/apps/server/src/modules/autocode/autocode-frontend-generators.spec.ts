@@ -125,7 +125,7 @@ describe('L0 generator contract: grid page', () => {
     expect(on).toContain('EntityAgentPanel');
     expect(on).toContain('RobotOutlined');
     expect(on).toContain('AI 助手');
-    expect(on).toContain('businessType="g_full"');
+    expect(on).toContain('businessType="lc_g_full"');
 
     const off = generateFrontendGridPage(gridSimple as any);
     expect(off).not.toContain('EntityAgentPanel');

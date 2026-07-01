@@ -30,3 +30,6 @@ export * from './sys-approval-flows.js';
 export * from './bpm-process-definitions.js';
 export * from './bpm-process-versions.js';
 export * from './departments.js';
+export * from './lc-contracts.js';
+export * from './lc-courses.js';
+export * from './lc-t1.js';
