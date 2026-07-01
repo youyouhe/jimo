@@ -59,4 +59,9 @@ export class CreateUserDto {
   @IsOptional()
   @IsUUID()
   deptId?: string;
+
+  @ApiPropertyOptional({ description: '关联员工 (sys_employees.id)' })
+  @IsOptional()
+  @IsUUID()
+  employeeId?: string;
 }

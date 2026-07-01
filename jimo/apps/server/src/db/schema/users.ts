@@ -9,6 +9,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sysDepartments } from './sys-departments.js';
+import { sysEmployees } from './sys-employees.js';
 
 export const UserRole = {
   SUPER_ADMIN: 'super_admin',
@@ -37,6 +38,7 @@ export const sysUsers = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     deptId: uuid('dept_id').references(() => sysDepartments.id, { onDelete: 'set null' }),
+    employeeId: uuid('employee_id').references(() => sysEmployees.id, { onDelete: 'set null' }),
     bpmUserId: varchar('bpm_user_id', { length: 32 }),
   },
   (t) => [

@@ -35,7 +35,7 @@ export default defineConfig({
       name: '系统管理',
       icon: 'SettingOutlined',
       routes: [
-        { path: '/system/users', name: '用户管理', icon: 'TeamOutlined', component: './users/index' },
+        { path: '/system/users', name: '账号管理', icon: 'TeamOutlined', component: './users/index' },
         { path: '/system/roles', name: '角色管理', icon: 'SafetyCertificateOutlined', component: './roles/index' },
         { path: '/system/menus', name: '菜单管理', icon: 'MenuOutlined', component: './menus/index' },
         { path: '/system/apis', name: 'API管理', icon: 'ApiOutlined', component: './apis/index' },
@@ -44,7 +44,8 @@ export default defineConfig({
         { path: '/system/jwt-blacklist', name: 'JWT黑名单', icon: 'StopOutlined', component: './jwt-blacklist/index' },
         { path: '/system/config', name: '系统配置', icon: 'ControlOutlined', component: './system/index' },
         { path: '/system/init', name: '系统初始化', icon: 'ThunderboltOutlined', component: './init/index' },
-        { path: '/system/departments', name: '部门管理', icon: 'ApartmentOutlined', component: './departments/index' },
+        { path: '/system/departments', name: '组织管理', icon: 'ApartmentOutlined', component: './departments/index' },
+        { path: '/system/employees', name: '员工管理', icon: 'IdcardOutlined', component: './employees/index' },
       ],
     },
     // ── System Tools (directory) ──

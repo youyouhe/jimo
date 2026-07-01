@@ -149,11 +149,26 @@ ${tableList}
 ${dictList}
 
 ### 现有 Package（✅ 优先匹配这些 id。用户没明确要求建 package 时一律不要 create_package，表可留空 packageId 落入未分类）
-${pkgList}${optionsBlock}`,
+${pkgList}${optionsBlock}
+
+### 平台支持的页面类型（pageType）
+用户生成实体后可为它选择以下任一页面类型（在前端代码生成器表单切换），你只需按业务设计字段，不需要在 propose_entity 里指定 pageType：
+
+- **list（标准列表）**：ProTable + 搜索/分页 + 弹窗 CRUD，最通用，适合绝大多数实体。
+- **document（单据页）**：列表 + 独立详情/编辑页，适合合同、凭证、入库单等字段多的单据。
+- **grid（Excel 式可编辑表格）**：单元格直接编辑、自动保存，适合批量维护基础数据。
+- **calendar（日历视图）**：按月将记录以事件 chip 挂载到日期格上，按可选的起止日期跨天。
+
+  **日历类型的字段设计指引**（用户让你「建一个日历/日程/排班/时间表」时遵循）：
+  - 至少一个 \`timestamp\` 字段（作为「开始日期」——用户在生成后手动标记）。
+  - 如需跨天事件，再给一个 \`timestamp\` 字段（作为「结束日期」——同样由用户标记）。
+  - 给一个 \`varchar\` 字段（名称/标题/内容），作为日历 chip 上的显示文字（多个可拼接）。
+  - 其他业务字段（类型、状态、备注等）正常设计。
+  ⚠️ 你只需要像正常建表一样设计字段；开始/结束/标题由用户在生成器里通过开关手动指定，不需要你在 propose_entity 里特殊处理。`,
       };
       const stateAck: CoreMessage = {
         role: 'assistant',
-        content: `已收到系统状态，我会在本次对话中：① 不重复提议已存在的表；② 优先复用现有字典和 Package；③ 需要时用 list_tables/list_dicts/list_packages 实时查询最新状态；④ 用户没明确要求时不创建 Package，绝不为单张表硬建同名 Package，表可留空 packageId。${ctx?.approvalEnabled ? '⑤ 审批流已启用，设计字段时绝不出现 status/approval_*/approve_* 等审批状态字段，这些由平台托管。' : ''}`,
+        content: `已收到系统状态，我会在本次对话中：① 不重复提议已存在的表；② 优先复用现有字典和 Package；③ 需要时用 list_tables/list_dicts/list_packages 实时查询最新状态；④ 用户没明确要求时不创建 Package，绝不为单张表硬建同名 Package，表可留空 packageId。⑤ 平台支持 list（标准列表）/ document（单据页）/ grid（Excel 可编辑表格）/ calendar（日历视图）四种页面类型——用户说「日历/日程/排班/时间表」时，我会按日历字段指引设计：至少一个 timestamp 字段作开始日期，可选结束日期，一个显示标题的 varchar 字段。${ctx?.approvalEnabled ? '⑥ 审批流已启用，设计字段时绝不出现 status/approval_*/approve_* 等审批状态字段，这些由平台托管。' : ''}`,
       };
 
       const userMessages = dto.messages.map((m) => ({

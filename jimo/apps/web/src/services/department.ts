@@ -101,7 +101,14 @@ export async function batchDeleteDepartments(ids: string[]): Promise<{ count: nu
 /**
  * Get department options for select dropdowns (parent picker).
  */
+export interface DepartmentTreeNode extends Department {
+  children?: DepartmentTreeNode[];
+}
+
+export async function getDepartmentTree(): Promise<DepartmentTreeNode[]> {
+  return request.get('/departments/tree');
+}
+
 export async function getDepartmentOptions(): Promise<DepartmentOption[]> {
-  const res = await request.get('/departments', { params: { pageSize: 200 } });
-  return res.list || res.data || [];
+  return request.get('/departments/options');
 }

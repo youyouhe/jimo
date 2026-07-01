@@ -446,6 +446,7 @@ function buildRouteTree(
       node = {
         name: menu.name,
         key: menu.id,
+        path: menu.path ?? undefined,
         icon: resolveIconString(menu.icon ?? undefined),
         component: emptyComponent,
         id: nodeId,

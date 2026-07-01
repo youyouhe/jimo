@@ -124,6 +124,21 @@ export class AutoCodeField {
   @IsBoolean()
   fixed?: boolean = false;
 
+  @ApiProperty({ description: 'Mark this timestamp field as the calendar start date (calendar page only)', default: false })
+  @IsOptional()
+  @IsBoolean()
+  calendarStart?: boolean = false;
+
+  @ApiProperty({ description: 'Mark this timestamp field as the calendar end date (calendar page only, optional)', default: false })
+  @IsOptional()
+  @IsBoolean()
+  calendarEnd?: boolean = false;
+
+  @ApiProperty({ description: 'Mark this varchar/text field as the calendar event title (calendar page only)', default: false })
+  @IsOptional()
+  @IsBoolean()
+  calendarTitle?: boolean = false;
+
   // ── Relation-specific fields (only used when type === 'relation') ──
 
   @ApiPropertyOptional({
@@ -421,11 +436,11 @@ export class AutoCodeDto {
   agentConfig?: AgentConfigDto;
 
   @ApiPropertyOptional({
-    description: '前端页面类型：list=标准列表弹窗编辑（默认），document=单据页（列表+独立详情页），grid=Excel式可编辑表格（单元格直编）',
-    enum: ['list', 'document', 'grid'],
+    description: '前端页面类型：list=标准列表弹窗编辑（默认），document=单据页（列表+独立详情页），grid=Excel式可编辑表格（单元格直编），calendar=日历视图（按日期挂载记录）',
+    enum: ['list', 'document', 'grid', 'calendar'],
     default: 'list',
   })
   @IsOptional()
-  @IsIn(['list', 'document', 'grid'])
-  pageType?: 'list' | 'document' | 'grid';
+  @IsIn(['list', 'document', 'grid', 'calendar'])
+  pageType?: 'list' | 'document' | 'grid' | 'calendar';
 }

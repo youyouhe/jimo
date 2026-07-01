@@ -97,6 +97,9 @@ const DEFAULT_FIELD: AutoCodeField = {
   creatable: true,
   editable: true,
   fixed: false,
+  calendarStart: false,
+  calendarEnd: false,
+  calendarTitle: false,
   removed: false,
 };
 
@@ -522,7 +525,7 @@ export default function AutocodePage() {
   // Agent config (opt-in). Enable to create a companion agent for the entity.
   const [agentEnabled, setAgentEnabled] = useState(false);
   // Page type: list=standard table+modal (default), document=list+detail page, grid=Excel-like inline-editable table
-  const [pageType, setPageType] = useState<'list' | 'document' | 'grid'>('list');
+  const [pageType, setPageType] = useState<'list' | 'document' | 'grid' | 'calendar'>('list');
 
   // Update mode state
   const [updateMode, setUpdateMode] = useState(false);
@@ -1151,14 +1154,15 @@ export default function AutocodePage() {
               </Form.Item>
             </Col>
             <Col span={6}>
-              <Form.Item label="页面类型" tooltip="list=标准列表+弹窗编辑；document=单据页（列表+独立详情页，适合凭证/单据类业务）；grid=Excel式表格，单元格直接编辑、自动保存">
+              <Form.Item label="页面类型" tooltip="list=标准列表+弹窗编辑；document=单据页（列表+独立详情页，适合凭证/单据类业务）；grid=Excel式表格，单元格直接编辑、自动保存；calendar=日历视图，按日期挂载记录">
                 <Segmented
                   value={pageType}
-                  onChange={(v) => setPageType(v as 'list' | 'document' | 'grid')}
+                  onChange={(v) => setPageType(v as 'list' | 'document' | 'grid' | 'calendar')}
                   options={[
                     { label: '标准列表', value: 'list' },
                     { label: '单据页', value: 'document' },
                     { label: '表格(Excel)', value: 'grid' },
+                    { label: '日历', value: 'calendar' },
                   ]}
                 />
               </Form.Item>
@@ -1279,6 +1283,19 @@ export default function AutocodePage() {
                               <Form.Item {...rest} name={[name, 'fixed']} valuePropName="checked" noStyle>
                                 <Switch checkedChildren="冻结" unCheckedChildren="不冻结" size="small" />
                               </Form.Item>
+                            )}
+                            {pageType === 'calendar' && (
+                              <>
+                                <Form.Item {...rest} name={[name, 'calendarStart']} valuePropName="checked" noStyle>
+                                  <Switch checkedChildren="开始日期" unCheckedChildren="Start" size="small" />
+                                </Form.Item>
+                                <Form.Item {...rest} name={[name, 'calendarEnd']} valuePropName="checked" noStyle>
+                                  <Switch checkedChildren="结束日期" unCheckedChildren="End" size="small" />
+                                </Form.Item>
+                                <Form.Item {...rest} name={[name, 'calendarTitle']} valuePropName="checked" noStyle>
+                                  <Switch checkedChildren="显示标题" unCheckedChildren="Title" size="small" />
+                                </Form.Item>
+                              </>
                             )}
                             {updateMode && (
                               <Form.Item noStyle shouldUpdate={(prev, cur) => prev.fields?.[name]?.removed !== cur.fields?.[name]?.removed}>

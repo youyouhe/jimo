@@ -37,6 +37,7 @@ import {
 import {
   generateFrontendService, generateFrontendPage, generateFrontendGridPage,
   generateFrontendDocumentListPage, generateFrontendDocumentPage, generateFrontendMapPage,
+  generateFrontendCalendarPage,
 } from '../apps/server/src/modules/autocode/autocode-frontend-generators';
 import { generateServiceContractSpec, generateHttpContractSpec } from '../apps/server/src/modules/autocode/autocode-test-generators';
 import { isReservedTableName } from '../apps/server/src/modules/autocode/reserved-names';
@@ -108,6 +109,8 @@ function preview(dto: AutoCodeDto): Record<string, string> {
       files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto);
     } else if (dto.pageType === 'grid') {
       files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto);
+    } else if (dto.pageType === 'calendar') {
+      files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendCalendarPage(activeDto);
     } else {
       files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto);
     }

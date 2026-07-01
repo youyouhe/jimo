@@ -13,6 +13,7 @@ import { sysUsers, SysUser } from '../../db/schema/users';
 import { sysUserRoles } from '../../db/schema/user-roles';
 import { sysRoles } from '../../db/schema/roles';
 import { sysDepartments } from '../../db/schema/sys-departments';
+import { sysEmployees } from '../../db/schema/sys-employees';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -30,6 +31,8 @@ export type UserWithRoles = SafeUser & {
   roles: string[];
   /** The user's department name (resolved from sys_departments). */
   deptName?: string | null;
+  /** The linked employee name (resolved from sys_employees). */
+  employeeName?: string | null;
 };
 
 @Injectable()
@@ -130,23 +133,45 @@ export class UserService {
 
     const total = totalRows[0]?.count ?? 0;
 
-    // Resolve department names for users that have a deptId.
-    const deptIds = [...new Set(rows.map((r) => r.deptId).filter(Boolean))] as string[];
-    const deptMap = new Map<string, string>();
+    // Resolve employees for users that have an employeeId.
+    // employee → departmentId → department.name (single source of truth for deptName)
+    const empIds = [...new Set(rows.map((r) => r.employeeId).filter(Boolean))] as string[];
+    const empNameMap = new Map<string, string>();
+    const empDeptMap = new Map<string, string>(); // employeeId → departmentId
+    if (empIds.length) {
+      const emps = await this.db
+        .select({ id: sysEmployees.id, name: sysEmployees.name, departmentId: sysEmployees.departmentId })
+        .from(sysEmployees)
+        .where(and(inArray(sysEmployees.id, empIds), isNull(sysEmployees.deletedAt)));
+      for (const e of emps) {
+        empNameMap.set(e.id, e.name);
+        if (e.departmentId) empDeptMap.set(e.id, e.departmentId);
+      }
+    }
+    // Resolve department names from employee's departmentId
+    const deptIds = [...new Set(empDeptMap.values())];
+    const deptNameMap = new Map<string, string>();
     if (deptIds.length) {
       const depts = await this.db
         .select({ id: sysDepartments.id, name: sysDepartments.name })
         .from(sysDepartments)
         .where(and(inArray(sysDepartments.id, deptIds), isNull(sysDepartments.deletedAt)));
-      for (const d of depts) deptMap.set(d.id, d.name);
+      for (const d of depts) deptNameMap.set(d.id, d.name);
     }
 
     const rolesMap = await this.rolesByUser(rows.map((r) => r.id));
-    const list: UserWithRoles[] = rows.map(({ passwordHash: _omit, ...user }) => ({
-      ...user,
-      deptName: (user.deptId && deptMap.get(user.deptId)) ?? null,
-      roles: rolesMap.get(user.id) ?? [],
-    }));
+    const list: UserWithRoles[] = rows.map(({ passwordHash: _omit, ...user }) => {
+      const employeeName = (user.employeeId && empNameMap.get(user.employeeId)) ?? null;
+      // deptName comes from employee → department, NOT from user.deptId
+      const empDeptId = user.employeeId ? empDeptMap.get(user.employeeId) : undefined;
+      const deptName = empDeptId ? (deptNameMap.get(empDeptId) ?? null) : null;
+      return {
+        ...user,
+        deptName,
+        employeeName,
+        roles: rolesMap.get(user.id) ?? [],
+      };
+    });
 
     return { list, total, page, pageSize };
   }
@@ -167,15 +192,25 @@ export class UserService {
 
     const { passwordHash: _omit, ...user } = rows[0]!;
     let deptName: string | null = null;
-    if (user.deptId) {
-      const d = await this.db
-        .select({ name: sysDepartments.name })
-        .from(sysDepartments)
-        .where(and(eq(sysDepartments.id, user.deptId), isNull(sysDepartments.deletedAt)))
+    let employeeName: string | null = null;
+    if (user.employeeId) {
+      // Resolve employee → department (single source of truth for deptName)
+      const e = await this.db
+        .select({ name: sysEmployees.name, departmentId: sysEmployees.departmentId })
+        .from(sysEmployees)
+        .where(and(eq(sysEmployees.id, user.employeeId), isNull(sysEmployees.deletedAt)))
         .limit(1);
-      deptName = d[0]?.name ?? null;
+      employeeName = e[0]?.name ?? null;
+      if (e[0]?.departmentId) {
+        const d = await this.db
+          .select({ name: sysDepartments.name })
+          .from(sysDepartments)
+          .where(and(eq(sysDepartments.id, e[0].departmentId), isNull(sysDepartments.deletedAt)))
+          .limit(1);
+        deptName = d[0]?.name ?? null;
+      }
     }
-    return { ...user, deptName, roles: await this.getRoleCodes(user.id) };
+    return { ...user, deptName, employeeName, roles: await this.getRoleCodes(user.id) };
   }
 
   async findById(id: string): Promise<SysUser | null> {
@@ -219,6 +254,7 @@ export class UserService {
         phone: dto.phone,
         status: dto.status !== undefined ? (dto.status as 1 | 2) : 1,
         deptId: dto.deptId,
+        employeeId: dto.employeeId,
       })
       .returning();
 
@@ -248,6 +284,7 @@ export class UserService {
       phone?: string | null;
       status?: 1 | 2;
       deptId?: string | null;
+      employeeId?: string | null;
       updatedAt?: Date;
     };
 
@@ -260,6 +297,7 @@ export class UserService {
     if (dto.phone !== undefined) updateData.phone = dto.phone;
     if (dto.status !== undefined) updateData.status = dto.status as 1 | 2;
     if (dto.deptId !== undefined) updateData.deptId = dto.deptId ?? null;
+    if (dto.employeeId !== undefined) updateData.employeeId = dto.employeeId ?? null;
 
     const rows = await this.db
       .update(sysUsers)
@@ -277,8 +315,22 @@ export class UserService {
     return { ...safeUser, roles: await this.getRoleCodes(id) };
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, operatorId?: string): Promise<void> {
     const existing = await this.findOne(id);
+
+    // Prevent self-deletion
+    if (operatorId && operatorId === id) {
+      throw new BadRequestException('不能删除自己的账号');
+    }
+
+    // Prevent deleting the last super_admin
+    const roles = await this.getRoleCodes(id);
+    if (roles.includes('super_admin')) {
+      const superAdminCount = await this.countByRole('super_admin');
+      if (superAdminCount <= 1) {
+        throw new BadRequestException('不能删除最后一个超级管理员');
+      }
+    }
 
     await this.db
       .update(sysUsers)
@@ -286,6 +338,16 @@ export class UserService {
       .where(and(eq(sysUsers.id, id), isNull(sysUsers.deletedAt)));
 
     await this.bpmSync.deleteUser(existing.bpmUserId);
+  }
+
+  private async countByRole(roleCode: string): Promise<number> {
+    const rows = await this.db
+      .select({ count: count() })
+      .from(sysUserRoles)
+      .innerJoin(sysRoles, eq(sysRoles.id, sysUserRoles.roleId))
+      .innerJoin(sysUsers, eq(sysUsers.id, sysUserRoles.userId))
+      .where(and(eq(sysRoles.code, roleCode), isNull(sysUsers.deletedAt)));
+    return rows[0]?.count ?? 0;
   }
 
   async getProfile(userId: string): Promise<UserWithRoles> {
@@ -304,13 +366,21 @@ export class UserService {
 
     const { passwordHash: _omit, ...safeUser } = rows[0]!;
     let deptName: string | null = null;
-    if (safeUser.deptId) {
-      const d = await this.db
-        .select({ name: sysDepartments.name })
-        .from(sysDepartments)
-        .where(and(eq(sysDepartments.id, safeUser.deptId), isNull(sysDepartments.deletedAt)))
+    if (safeUser.employeeId) {
+      // deptName comes from employee → department
+      const e = await this.db
+        .select({ departmentId: sysEmployees.departmentId })
+        .from(sysEmployees)
+        .where(and(eq(sysEmployees.id, safeUser.employeeId), isNull(sysEmployees.deletedAt)))
         .limit(1);
-      deptName = d[0]?.name ?? null;
+      if (e[0]?.departmentId) {
+        const d = await this.db
+          .select({ name: sysDepartments.name })
+          .from(sysDepartments)
+          .where(and(eq(sysDepartments.id, e[0].departmentId), isNull(sysDepartments.deletedAt)))
+          .limit(1);
+        deptName = d[0]?.name ?? null;
+      }
     }
     return { ...safeUser, deptName, roles: await this.getRoleCodes(userId) };
   }
@@ -343,6 +413,16 @@ export class UserService {
 
     const { passwordHash: _omit, ...safeUser } = rows[0]!;
     return { ...safeUser, roles: await this.getRoleCodes(userId) };
+  }
+
+  async listOptions(): Promise<{ id: string; label: string }[]> {
+    const rows = await this.db
+      .select({ id: sysUsers.id, nickname: sysUsers.nickname, username: sysUsers.username })
+      .from(sysUsers)
+      .where(isNull(sysUsers.deletedAt))
+      .orderBy(sysUsers.nickname)
+      .limit(500);
+    return rows.map((r) => ({ id: r.id, label: r.nickname || r.username }));
   }
 
   async changePassword(userId: string, dto: ChangePasswordDto): Promise<void> {

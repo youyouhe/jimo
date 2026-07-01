@@ -26,4 +26,19 @@ export class CreateDepartmentDto {
   @IsBoolean()
   @Type(() => Boolean)
   is_enabled?: boolean | undefined;
+
+  @ApiPropertyOptional({ description: '描述' })
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @ApiPropertyOptional({ description: '上级部门 ID (sys_departments only)' })
+  @IsOptional()
+  @IsString()
+  parentId?: string;
+
+  @ApiPropertyOptional({ description: '负责人 ID (sys_departments only)' })
+  @IsOptional()
+  @IsString()
+  leadId?: string;
 }

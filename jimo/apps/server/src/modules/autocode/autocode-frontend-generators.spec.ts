@@ -92,9 +92,9 @@ describe('L0 generator contract: grid page', () => {
     const src = generateFrontendGridPage(gridSimple as any);
     expect(src).toContain('scheduleCreate');
     expect(src).toContain('scheduleCreate(record)');
-    // onValuesChange must route NEW rows to scheduleCreate (the bug was that new
-    // rows were skipped, so they never POSTed and vanished on refresh).
-    expect(src).toMatch(/if \(newIds\.has\(record\.id\)\)\s*scheduleCreate/);
+    // onValuesChange must route NEW rows to scheduleCreate (uses stable __key to
+    // avoid EditableProTable edit-state desync when the server id is assigned).
+    expect(src).toMatch(/if \(newIds\.has\(record\.__key\)\)\s*scheduleCreate/);
   });
 
   it('imports + converts dayjs for timestamp fields', () => {

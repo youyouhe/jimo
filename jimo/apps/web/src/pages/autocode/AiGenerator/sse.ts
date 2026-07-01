@@ -16,7 +16,7 @@ export interface StreamCallbacks {
 export interface AiChatContext {
   approvalEnabled?: boolean;
   approvalChain?: string;
-  pageType?: 'list' | 'document';
+  pageType?: 'list' | 'document' | 'grid' | 'calendar';
   visibilityStrategy?: 'private' | 'department' | 'shared' | 'public';
 }
 

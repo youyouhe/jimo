@@ -87,6 +87,13 @@ export class UserController {
 
   // ═══ Parameterized routes ═══
 
+  @Get('options')
+  @ApiOperation({ summary: 'List all users as dropdown options' })
+  async options() {
+    const rows = await this.userService.listOptions();
+    return { code: 0, msg: 'success', data: rows };
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get user by id' })
   @ApiResponse({ status: 200, description: 'Returns the user' })
@@ -126,8 +133,11 @@ export class UserController {
   @ApiOperation({ summary: 'Soft delete user by id' })
   @ApiResponse({ status: 200, description: 'User deleted successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async remove(@Param('id') id: string): Promise<ApiResp<null>> {
-    await this.userService.remove(id);
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user?: JwtPayload,
+  ): Promise<ApiResp<null>> {
+    await this.userService.remove(id, user?.sub);
     return { code: 0, msg: 'success', data: null };
   }
 }

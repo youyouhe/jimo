@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import { Button, message, Popconfirm, Space, Tag } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import { ActionType, ProColumns, ProTable } from '@ant-design/pro-components';
 import {
   ModalForm,
@@ -19,6 +19,8 @@ import {
   type UpdateUserDto,
 } from '@/services/user';
 import { getRoles, type Role } from '@/services/role';
+import { getEmployeeOptions, type EmployeeOption } from '@/services/employee';
+import SystemAgentPanel from '@/components/SystemAgentPanel';
 
 const ROLE_COLOR_MAP: Record<string, string> = {
   super_admin: 'red',
@@ -41,6 +43,7 @@ export default function UsersPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<EditableUser | null>(null);
   const [allRoles, setAllRoles] = useState<Role[]>([]);
+  const [agentOpen, setAgentOpen] = useState(false);
 
   useEffect(() => {
     getRoles({ page: 1, pageSize: 50 })
@@ -115,6 +118,13 @@ export default function UsersPage() {
       render: (_, record) => record.deptName || '-',
     },
     {
+      title: 'Employee',
+      dataIndex: 'employeeName',
+      width: 120,
+      search: false,
+      render: (_, record) => record.employeeName || '-',
+    },
+    {
       title: 'Status',
       dataIndex: 'status',
       width: 100,
@@ -177,6 +187,7 @@ export default function UsersPage() {
           phone: values.phone || null,
           roleIds,
           status: values.status ? 1 : 2,
+          employeeId: values.employeeId || null,
         };
         await updateUser(editingUser.id, dto);
         message.success('User updated');
@@ -189,6 +200,7 @@ export default function UsersPage() {
           phone: values.phone || undefined,
           roleIds,
           status: values.status ? 1 : 2,
+          employeeId: values.employeeId || undefined,
         };
         await createUser(dto);
         message.success('User created');
@@ -231,6 +243,13 @@ export default function UsersPage() {
           >
             New User
           </Button>,
+          <Button
+            key="agent"
+            icon={<RobotOutlined />}
+            onClick={() => setAgentOpen(true)}
+          >
+            AI 助手
+          </Button>,
         ]}
       />
 
@@ -252,6 +271,7 @@ export default function UsersPage() {
                 phone: editingUser.phone,
                 roleIds: editingUser.roleIds ?? [],
                 status: editingUser.status === 1,
+                employeeId: editingUser.employeeId,
               }
             : { status: true, roleIds: [] }
         }
@@ -297,6 +317,17 @@ export default function UsersPage() {
           placeholder="e.g. +86 13800138000"
         />
         <ProFormSelect
+          name="employeeId"
+          label="Employee"
+          placeholder="Select employee (optional)"
+          fieldProps={{ allowClear: true, showSearch: true, optionFilterProp: 'label' }}
+          debounceTime={300}
+          request={async (params) => {
+            const list = await getEmployeeOptions(params.keyWords);
+            return (list || []).map((e) => ({ label: `${e.name} (${e.employeeNo})`, value: e.id }));
+          }}
+        />
+        <ProFormSelect
           name="roleIds"
           label="Roles"
           options={roleIdOptions}
@@ -309,6 +340,12 @@ export default function UsersPage() {
         />
         <ProFormSwitch name="status" label="Active" />
       </ModalForm>
+
+      <SystemAgentPanel
+        open={agentOpen}
+        agentType="users"
+        onClose={() => setAgentOpen(false)}
+      />
     </>
   );
 }

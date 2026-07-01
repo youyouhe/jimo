@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, message, Popconfirm, Select, Space, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   ModalForm,
   ProFormText,
@@ -19,6 +19,7 @@ import {
   type CreateMenuDto,
   type UpdateMenuDto,
 } from '@/services/menu';
+import SystemAgentPanel from '@/components/SystemAgentPanel';
 
 const MENU_TYPE_OPTIONS = [
   { label: 'Directory', value: 1 },
@@ -65,6 +66,7 @@ export default function MenusPage() {
   const [editingMenu, setEditingMenu] = useState<MenuItem | null>(null);
   const [defaultParentId, setDefaultParentId] = useState<string | null>(null);
   const [parentOptions, setParentOptions] = useState<FlatMenuOption[]>([]);
+  const [agentOpen, setAgentOpen] = useState(false);
   const hasLoaded = useRef(false);
 
   const loadData = async () => {
@@ -287,6 +289,9 @@ export default function MenusPage() {
           <Button icon={<ReloadOutlined />} onClick={loadData}>
             Refresh
           </Button>
+          <Button icon={<RobotOutlined />} onClick={() => setAgentOpen(true)}>
+            AI 助手
+          </Button>
         </Space>
       </div>
 
@@ -387,6 +392,11 @@ export default function MenusPage() {
         />
         <ProFormSwitch name="is_visible" label="Visible" />
       </ModalForm>
+      <SystemAgentPanel
+        open={agentOpen}
+        agentType="menus"
+        onClose={() => setAgentOpen(false)}
+      />
     </>
   );
 }

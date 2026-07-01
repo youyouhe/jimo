@@ -29,6 +29,8 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { AuthzGuard } from './common/guards/authz.guard';
 import { DepartmentModule } from './modules/department/department.module';
+import { EmployeeModule } from './modules/employee/employee.module';
+import { SystemAgentModule } from './modules/system-agent/system-agent.module';
 import { ApprovalModule } from './modules/approval/approval.module';
 import { BpmSyncModule } from './modules/bpm-sync/bpm-sync.module';
 import { BpmModule } from './modules/bpm/bpm.module';
@@ -58,6 +60,8 @@ import { GeneratedModule } from './generated.module';
     BpmRulesModule,
     OwnershipModule,
     DepartmentModule,
+    EmployeeModule,
+    SystemAgentModule,
     ApiModule,
     AutocodeModule,
     JwtBlacklistModule,

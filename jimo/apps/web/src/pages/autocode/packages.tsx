@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { history } from '@umijs/max';
 import { Button, Drawer, message, Popconfirm, Space, Typography, Tabs, Input, Tag, Switch } from 'antd';
-import { PlusOutlined, EyeOutlined, RocketOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, EyeOutlined, RocketOutlined, DeleteOutlined, RobotOutlined } from '@ant-design/icons';
 import { ActionType, ProColumns, ProTable, ModalForm, ProFormText, ProFormTextArea } from '@ant-design/pro-components';
 import {
   getAutoCodePackages,
@@ -13,6 +13,7 @@ import {
   type CreateAutoCodePackageDto,
   type UpdateAutoCodePackageDto,
 } from '@/services/autocode';
+import SystemAgentPanel from '@/components/SystemAgentPanel';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -40,6 +41,7 @@ export default function AutocodePackagesPage() {
 
   // Detail drawer state
   const [detailOpen, setDetailOpen] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState<AutoCodePackage | null>(null);
   const [detailFiles, setDetailFiles] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState('');
@@ -298,6 +300,13 @@ export default function AutocodePackagesPage() {
           >
             Create Package
           </Button>,
+          <Button
+            key="agent"
+            icon={<RobotOutlined />}
+            onClick={() => setAgentOpen(true)}
+          >
+            AI 助手
+          </Button>,
         ]}
       />
 
@@ -394,6 +403,12 @@ export default function AutocodePackagesPage() {
           <Text type="secondary">No templates stored in this package.</Text>
         )}
       </Drawer>
+
+      <SystemAgentPanel
+        open={agentOpen}
+        agentType="packages"
+        onClose={() => setAgentOpen(false)}
+      />
     </div>
   );
 }

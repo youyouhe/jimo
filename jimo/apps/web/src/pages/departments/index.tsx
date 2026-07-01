@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react';
-import { Button, message, Popconfirm, Space } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
-import { ActionType, ProColumns, ProTable } from '@ant-design/pro-components';
+import { useEffect, useState } from 'react';
+import { Button, message, Popconfirm, Space, Table, Card } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import { PlusOutlined, RobotOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   ModalForm,
   ProFormText,
@@ -9,76 +9,76 @@ import {
   ProFormSelect,
 } from '@ant-design/pro-components';
 import {
-  getDepartmentsList,
+  getDepartmentTree,
   createDepartment,
   updateDepartment,
   deleteDepartment,
   getDepartmentOptions,
-  type Department,
+  type DepartmentTreeNode,
   type CreateDepartmentDto,
   type UpdateDepartmentDto,
 } from '@/services/department';
-import { getUsers } from '@/services/user';
+import { getUserOptions } from '@/services/user';
+import SystemAgentPanel from '@/components/SystemAgentPanel';
 
 /**
- * Native system page: department management (sys_departments).
- * Hand-written (not autocode-generated), mounted at /system/departments.
+ * Department management — tree table (hierarchical display like dictionary details).
  */
 export default function DepartmentsPage() {
-  const actionRef = useRef<ActionType>(undefined);
+  const [treeData, setTreeData] = useState<DepartmentTreeNode[]>([]);
+  const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<Department | null>(null);
+  const [editing, setEditing] = useState<DepartmentTreeNode | null>(null);
+  const [agentOpen, setAgentOpen] = useState(false);
 
-  const columns: ProColumns<Department>[] = [
-    { title: '部门名称', dataIndex: 'name', width: 180 },
-    { title: '部门编码', dataIndex: 'code', width: 160, copyable: true },
-    {
-      title: '上级部门',
-      dataIndex: 'parent_id_display',
-      width: 160,
-      search: false,
-      render: (_, r) => r.parent_id_display || '-',
-    },
+  const loadTree = async () => {
+    setLoading(true);
+    try {
+      const data = await getDepartmentTree();
+      setTreeData(data);
+    } catch { /* ignore */ } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadTree(); }, []);
+
+  const columns: ColumnsType<DepartmentTreeNode> = [
+    { title: '部门名称', dataIndex: 'name', width: 200 },
+    { title: '部门编码', dataIndex: 'code', width: 140 },
     {
       title: '负责人',
-      dataIndex: 'lead_display',
-      width: 140,
-      search: false,
-      render: (_, r) => r.lead_display || '-',
+      dataIndex: 'leadId',
+      width: 120,
+      render: (_, r) => (r as any).lead_display || '-',
     },
-    { title: '描述', dataIndex: 'description', ellipsis: true, search: false },
+    { title: '描述', dataIndex: 'description', ellipsis: true },
     {
       title: '创建时间',
       dataIndex: 'createdAt',
-      valueType: 'dateTime',
-      width: 180,
-      search: false,
+      width: 170,
+      render: (_, r) => r.createdAt ? new Date(r.createdAt).toLocaleString() : '-',
     },
     {
       title: '操作',
       key: 'action',
-      width: 150,
-      search: false,
+      width: 140,
       render: (_, record) => (
-        <Space>
+        <Space size={0}>
           <Button
             type="link"
             size="small"
-            onClick={() => {
-              setEditing(record);
-              setModalOpen(true);
-            }}
-          >
-            编辑
-          </Button>
+            icon={<EditOutlined />}
+            onClick={() => { setEditing(record); setModalOpen(true); }}
+          />
           <Popconfirm
             title="确认删除该部门？"
-            description="删除后无法恢复。"
+            description="子部门不会被自动删除。"
             onConfirm={async () => {
               try {
                 await deleteDepartment(record.id);
                 message.success('删除成功');
-                actionRef.current?.reload();
+                loadTree();
               } catch (err: any) {
                 message.error(err.message || '删除失败');
               }
@@ -86,9 +86,7 @@ export default function DepartmentsPage() {
             okText="确认"
             cancelText="取消"
           >
-            <Button type="link" size="small" danger>
-              删除
-            </Button>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
       ),
@@ -105,17 +103,15 @@ export default function DepartmentsPage() {
         leadId: values.leadId || null,
       };
       if (editing) {
-        const dto: UpdateDepartmentDto = payload;
-        await updateDepartment(editing.id, dto);
+        await updateDepartment(editing.id, payload as UpdateDepartmentDto);
         message.success('更新成功');
       } else {
-        const dto: CreateDepartmentDto = payload;
-        await createDepartment(dto);
+        await createDepartment(payload as CreateDepartmentDto);
         message.success('创建成功');
       }
       setModalOpen(false);
       setEditing(null);
-      actionRef.current?.reload();
+      loadTree();
       return true;
     } catch (err: any) {
       message.error(err.message || '操作失败');
@@ -125,30 +121,42 @@ export default function DepartmentsPage() {
 
   return (
     <>
-      <ProTable<Department>
-        headerTitle="部门管理"
-        actionRef={actionRef}
-        rowKey="id"
-        columns={columns}
-        request={async (params) => {
-          const { current: page, pageSize, name, code } = params;
-          const result = await getDepartmentsList({ page, pageSize, name, code });
-          return { data: result.list, total: result.total, success: true };
-        }}
-        toolBarRender={() => [
-          <Button
-            key="create"
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => {
-              setEditing(null);
-              setModalOpen(true);
-            }}
-          >
-            新建部门
-          </Button>,
-        ]}
-      />
+      <Card
+        title="部门管理"
+        extra={
+          <Space>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => { setEditing(null); setModalOpen(true); }}
+            >
+              新建部门
+            </Button>
+            <Button icon={<RobotOutlined />} onClick={() => setAgentOpen(true)}>
+              AI 助手
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={loadTree} loading={loading} />
+          </Space>
+        }
+      >
+        <Table<DepartmentTreeNode>
+          rowKey="id"
+          loading={loading}
+          dataSource={treeData}
+          pagination={false}
+          size="small"
+          columns={columns}
+          expandable={{}}
+          rowClassName={(record) => record.parentId ? 'dept-row-child' : 'dept-row-root'}
+        />
+      </Card>
+
+      <style>{`
+        .dept-row-root td { background: #f0f5ff !important; font-weight: 500; }
+        .dept-row-child td { background: #fff !important; }
+        .dept-row-root:hover td { background: #d6e4ff !important; }
+        .dept-row-child:hover td { background: #f5f5f5 !important; }
+      `}</style>
 
       <ModalForm
         title={editing ? '编辑部门' : '新建部门'}
@@ -206,14 +214,17 @@ export default function DepartmentsPage() {
           allowClear
           showSearch
           request={async () => {
-            const res = await getUsers({ pageSize: 999 });
-            return (res.list || []).map((u) => ({
-              label: u.nickname || u.username,
-              value: u.id,
-            }));
+            const res = await getUserOptions();
+            return res.map((u) => ({ label: u.label, value: u.id }));
           }}
         />
       </ModalForm>
+
+      <SystemAgentPanel
+        open={agentOpen}
+        agentType="departments"
+        onClose={() => setAgentOpen(false)}
+      />
     </>
   );
 }

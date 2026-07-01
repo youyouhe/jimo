@@ -13,6 +13,10 @@ export interface UserInfo {
   deptId?: string | null;
   /** Department name (resolved from sys_departments when listing users). */
   deptName?: string | null;
+  /** Employee UUID (FK to sys_employees). */
+  employeeId?: string | null;
+  /** Employee name (resolved from sys_employees when listing users). */
+  employeeName?: string | null;
   status: number;
   lastLoginAt: string | null;
   lastLoginIp: string | null;
@@ -82,6 +86,8 @@ export interface CreateUserDto {
   phone?: string;
   roleIds?: string[];
   status?: number;
+  deptId?: string;
+  employeeId?: string;
 }
 
 export interface UpdateUserDto {
@@ -91,6 +97,8 @@ export interface UpdateUserDto {
   /** Full-replace role assignment (sys_user_roles). */
   roleIds?: string[];
   status?: number;
+  deptId?: string | null;
+  employeeId?: string | null;
 }
 
 /**
@@ -141,4 +149,13 @@ export async function getUserRoleIds(userId: string): Promise<string[]> {
  */
 export async function assignUserRoles(userId: string, roleIds: string[]): Promise<void> {
   return request.post('/roles/assign', { userId, roleIds });
+}
+
+export interface UserOption {
+  id: string;
+  label: string;
+}
+
+export async function getUserOptions(): Promise<UserOption[]> {
+  return request.get('/users/options');
 }
