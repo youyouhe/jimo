@@ -2296,6 +2296,13 @@ export default function ${n.pascalName}GridPage() {
 
   const columns: ProColumns<any>[] = [
 ${readOnlyColumns.length > 0 ? readOnlyColumns.join('\n') + '\n' : ''}${editableColumns.join('\n')}
+    { title: '操作', valueType: 'option', width: 120, fixed: 'right', align: 'center', render: (_: any, row: any) => {
+      const isNew = !!(row.__key && newIds.has(row.__key));
+      return [
+        isNew && btnPerms.has('add') ? <a key="save" onClick={() => handleSaveNew(row)}>保存</a> : null,
+        (isNew ? btnPerms.has('add') : btnPerms.has('delete')) ? <a key="del" style={{ color: '#ff4d4f' }} onClick={() => handleDelete(row)}>{isNew ? '取消' : '删除'}</a> : null,
+      ].filter(Boolean) as React.ReactNode[];
+    } },
   ];
 
   return (
@@ -2314,21 +2321,10 @@ ${readOnlyColumns.length > 0 ? readOnlyColumns.join('\n') + '\n' : ''}${editable
       editable={{
         type: 'multiple',
         editableKeys,
-        onChange: setEditableKeys,
+        onChange: () => {},
         onValuesChange: (record: any) => {
           if (!record || !record.__key) return;
           if (newIds.has(record.__key)) scheduleCreate(record); else schedulePatch(record);
-        },
-        actionRender: (row: any) => {
-          const isNew = newIds.has(row.__key);
-          const nodes: React.ReactNode[] = [];
-          if (isNew) {
-            if (btnPerms.has('add')) nodes.push(<a key="save" onClick={() => handleSaveNew(row)}>保存</a>);
-            if (btnPerms.has('add')) nodes.push(<a key="cancel" style={{ color: '#ff4d4f' }} onClick={() => handleDelete(row)}>取消</a>);
-          } else {
-            if (btnPerms.has('delete')) nodes.push(<a key="del" style={{ color: '#ff4d4f' }} onClick={() => handleDelete(row)}>删除</a>);
-          }
-          return nodes;
         },
       }}
       columns={columns}
