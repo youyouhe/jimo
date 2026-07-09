@@ -50,3 +50,21 @@ pnpm-debug.log*
 .idea/
 .vscode/
 *.swp
+
+# Playwright (e2e) — output & caches; the config file (playwright.config.ts) stays tracked
+test-results/
+playwright-report/
+blob-report/
+**/playwright/.cache/
+
+# Local AI / tooling config (machine-specific, not shared)
+.mcp.json
+.playwright-mcp/
+
+# Turborepo cache & test coverage
+.turbo/
+coverage/
+
+# Java / BPM (Spring Boot + Maven build output)
+target/
+*.class
