@@ -30,4 +30,3 @@ export * from './business-approvals.js';
 export * from './sys-approval-flows.js';
 export * from './bpm-process-definitions.js';
 export * from './bpm-process-versions.js';
-export * from './lc-shifts.js';
