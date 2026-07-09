@@ -7,11 +7,13 @@ import { buildDepartmentAgentTools } from './tools/department.tools';
 import { buildEmployeeAgentTools } from './tools/employee.tools';
 import { buildMenuAgentTools } from './tools/menu.tools';
 import { buildPackageAgentTools } from './tools/package.tools';
+import { buildRoleAgentTools } from './tools/role.tools';
 import { USER_AGENT_PROMPT } from './prompts/user.prompt';
 import { DEPARTMENT_AGENT_PROMPT } from './prompts/department.prompt';
 import { EMPLOYEE_AGENT_PROMPT } from './prompts/employee.prompt';
 import { MENU_AGENT_PROMPT } from './prompts/menu.prompt';
 import { PACKAGE_AGENT_PROMPT } from './prompts/package.prompt';
+import { ROLE_AGENT_PROMPT } from './prompts/role.prompt';
 import type { SystemAgentChatDto } from './system-agent.dto';
 import { DATABASE_CONNECTION, type DrizzleDb } from '../../db/connection';
 
@@ -270,7 +272,7 @@ export class SystemAgentService {
     }
   }
 
-  private loadAgent(agentType: 'users' | 'departments' | 'employees' | 'menus' | 'packages'): {
+  private loadAgent(agentType: 'users' | 'departments' | 'employees' | 'menus' | 'packages' | 'roles'): {
     rawTools: Record<string, any>;
     systemPrompt: string;
   } {
@@ -285,6 +287,8 @@ export class SystemAgentService {
         return { rawTools: buildMenuAgentTools(this.db), systemPrompt: MENU_AGENT_PROMPT };
       case 'packages':
         return { rawTools: buildPackageAgentTools(this.db), systemPrompt: PACKAGE_AGENT_PROMPT };
+      case 'roles':
+        return { rawTools: buildRoleAgentTools(this.db), systemPrompt: ROLE_AGENT_PROMPT };
       default:
         throw new Error(`Unknown agentType: ${agentType}`);
     }

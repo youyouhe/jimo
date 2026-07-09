@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { Button, Drawer, message, Popconfirm, Space, Spin, Tag, Tree } from 'antd';
 import type { DataNode } from 'antd/es/tree';
-import { PlusOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { PlusOutlined, SafetyCertificateOutlined, RobotOutlined } from '@ant-design/icons';
 import { ActionType, ProColumns, ProTable } from '@ant-design/pro-components';
 import { ModalForm, ProFormText, ProFormTextArea, ProFormSwitch } from '@ant-design/pro-components';
 import {
@@ -16,6 +16,7 @@ import {
   type UpdateRoleDto,
 } from '@/services/role';
 import { getMenuTree, type MenuItem } from '@/services/menu';
+import SystemAgentPanel from '@/components/SystemAgentPanel';
 
 const { DirectoryTree } = Tree;
 
@@ -48,6 +49,7 @@ export default function RolesPage() {
   const [permRole, setPermRole] = useState<Role | null>(null);
   const [menuTree, setMenuTree] = useState<DataNode[]>([]);
   const [checkedMenuIds, setCheckedMenuIds] = useState<string[]>([]);
+  const [agentOpen, setAgentOpen] = useState(false);
   const [halfCheckedMenuIds, setHalfCheckedMenuIds] = useState<React.Key[]>([]);
   const [permLoading, setPermLoading] = useState(false);
   const [permSaving, setPermSaving] = useState(false);
@@ -259,6 +261,13 @@ export default function RolesPage() {
           >
             新建角色
           </Button>,
+          <Button
+            key="agent"
+            icon={<RobotOutlined />}
+            onClick={() => setAgentOpen(true)}
+          >
+            AI 助手
+          </Button>,
         ]}
       />
 
@@ -366,6 +375,12 @@ export default function RolesPage() {
           </>
         )}
       </Drawer>
+
+      <SystemAgentPanel
+        open={agentOpen}
+        agentType="roles"
+        onClose={() => setAgentOpen(false)}
+      />
     </>
   );
 }

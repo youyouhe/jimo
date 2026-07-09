@@ -17,7 +17,7 @@ import {
 
 export interface SystemAgentPanelProps {
   open: boolean;
-  agentType: 'users' | 'departments' | 'employees' | 'menus' | 'packages';
+  agentType: 'users' | 'departments' | 'employees' | 'menus' | 'packages' | 'roles';
   onClose: () => void;
 }
 
@@ -34,6 +34,7 @@ const AGENT_LABELS: Record<string, string> = {
   employees: '员工管理',
   menus: '菜单管理',
   packages: '模板包管理',
+  roles: '角色管理',
 };
 
 const AGENT_EXAMPLES: Record<string, string> = {
@@ -42,6 +43,7 @@ const AGENT_EXAMPLES: Record<string, string> = {
   employees: '例如：「查询在职员工」「新员工张三，工号E001，入职技术部」「帮小王改下手机号」',
   menus: '例如：「列出菜单树」「创建新菜单」「把某菜单改为隐藏」「把按钮移到某目录下」',
   packages: '例如：「列出所有包」「创建一个新包」「查看包的菜单分类」「清理孤立菜单」',
+  roles: '例如：「列出所有角色」「创建新角色」「查看角色下有哪些用户」「删除自定义角色」',
 };
 
 function newId(): string {

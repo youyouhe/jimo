@@ -14,10 +14,10 @@ export class ChatMessageDto {
 }
 
 export class SystemAgentChatDto {
-  @ApiProperty({ enum: ['users', 'departments', 'employees', 'menus', 'packages'], description: 'Which system module to load agent tools for' })
+  @ApiProperty({ enum: ['users', 'departments', 'employees', 'menus', 'packages', 'roles'], description: 'Which system module to load agent tools for' })
   @IsString()
-  @IsIn(['users', 'departments', 'employees', 'menus', 'packages'])
-  agentType: 'users' | 'departments' | 'employees' | 'menus' | 'packages' = 'users';
+  @IsIn(['users', 'departments', 'employees', 'menus', 'packages', 'roles'])
+  agentType: 'users' | 'departments' | 'employees' | 'menus' | 'packages' | 'roles' = 'users';
 
   @ApiProperty({ type: [ChatMessageDto], description: 'Conversation history including the latest user message' })
   @IsArray()
