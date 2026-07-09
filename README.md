@@ -1,8 +1,6 @@
 # Jimo Platform
 
-自主构建的低代码管理平台 —— pnpm monorepo（NestJS 后端 + React 前端 + Java BPM 服务 + 共享类型）。
-
-> 本仓库只包含低代码平台本体（原 `release/` 目录），已从 gin-vue-admin 克隆中独立分离。
+自研的低代码管理平台 —— pnpm monorepo（NestJS 后端 + React 前端 + Java BPM 服务 + 共享类型）。
 
 ## 技术栈
 
@@ -19,21 +17,22 @@
 
 ```
 .
-├── jimo/                  # pnpm monorepo（NestJS + React）
-│   ├── apps/server/          # NestJS 后端 (@jimo/server)
-│   ├── apps/web/             # React 前端 (@jimo/web)
-│   ├── packages/shared/      # 共享类型与枚举 (@jimo/shared)
-│   ├── docker/               # Dockerfile（dev + prod）
-│   └── scripts/dev.sh        # 开发启停脚本
-├── bpm/bpm-service/          # Java Spring Boot + Flowable BPM
-├── infrastructure/           # Docker Compose、MySQL 初始化、.env
-├── docs/                     # 设计与测试文档
-└── Makefile
+├── jimo/                     # pnpm monorepo（NestJS + React）
+│   ├── apps/server/            # NestJS 后端 (@jimo/server)
+│   ├── apps/web/               # React 前端 (@jimo/web)
+│   ├── packages/shared/        # 共享类型与枚举 (@jimo/shared)
+│   ├── docker/                 # Dockerfile（dev + prod）
+│   ├── scripts/dev.sh          # 开发启停脚本
+│   └── tools/                  # 代码生成器 / 维护脚本
+├── bpm/bpm-service/            # Java Spring Boot + Flowable BPM
+├── infrastructure/             # Docker Compose、MySQL 初始化、.env
+├── docs/                       # 设计与测试文档
+└── Makefile                    # 仓库根目录快捷命令
 ```
 
 ## 前置要求
 
-- Node ≥ 18.16、pnpm ≥ 8（仓库固定 `pnpm@9.15.9`）
+- Node ≥ 18.16、pnpm 固定为 `9.15.9`（`packageManager` 字段，建议用 Corepack）
 - Docker + Docker Compose
 - Java 17、Maven（仅在需要本地构建/运行 BPM 服务时）
 
@@ -49,6 +48,7 @@ cp jimo/.env.example jimo/.env   # 按需修改数据库密码、JWT 密钥等
 
 # 3. 一键启动全栈（PostgreSQL + MySQL + Redis + MinIO + NestJS + React + BPM）
 docker compose -f infrastructure/docker-compose.dev.yml up -d
+# 或使用 Makefile 快捷方式：make dev
 
 # 4. 等待约 30 秒后验证
 curl http://localhost:8888/api/v1/health
@@ -59,7 +59,7 @@ open http://localhost:8000
 
 ### 本地开发（热重载）
 
-如果只想用 Docker 起基础设施、应用在本地跑热重载：
+只用 Docker 起基础设施、应用在本地跑热重载：
 
 ```bash
 # 仅启动数据库 + 缓存 + 对象存储
@@ -73,13 +73,15 @@ bash scripts/dev.sh logs backend    # 只看后端日志
 bash scripts/dev.sh stop            # 停止全部
 ```
 
+`dev.sh` 自动处理 `.env` 加载、`@jimo/shared` 编译检查、僵尸进程清理；PID/日志写入 `jimo/.tmp/{pids,logs}`。可用 `PORT` / `FRONT_PORT` 环境变量覆盖端口。
+
 ## 端口映射
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
 | React 前端 | 8000 | Umi dev server |
-| NestJS 后端 | 8888 | REST API + Swagger (`/api/docs`) |
-| BPM Service | 8090 | Flowable REST API (`/bpm/api/health`) |
+| NestJS 后端 | 8888 | REST API + Swagger（`/api/docs`） |
+| BPM Service | 8090 | Flowable REST API（`/bpm/api/health`） |
 | PostgreSQL | 5432 | 主数据库（NestJS） |
 | MySQL | 3306 | BPM 数据库（Flowable） |
 | Redis | 6379 | 缓存 / Token 黑名单 |
@@ -87,7 +89,7 @@ bash scripts/dev.sh stop            # 停止全部
 
 ## 常用命令
 
-所有命令默认在 `jimo/` 目录下执行。
+除 Java BPM 与仓库根 Makefile 外，命令均在 `jimo/` 目录下执行。
 
 ```bash
 pnpm install            # 安装所有工作区依赖
@@ -107,6 +109,20 @@ pnpm run db:seed        # 初始数据（管理员、角色、菜单）
 pnpm run db:studio      # 打开 Drizzle Studio
 ```
 
+测试：
+
+```bash
+# 后端（Jest）
+cd jimo/apps/server && pnpm run test                       # 单元
+cd jimo/apps/server && pnpm run test -- -t "name pattern"  # 单个用例
+cd jimo/apps/server && pnpm run test:l2                    # L2 集成（RUN_L2_DB=1，需 Postgres）
+cd jimo/apps/server && pnpm run test:cov                   # 覆盖率
+
+# 前端（Playwright）
+cd jimo/apps/web && pnpm run test:e2e:install              # 首次安装 chromium
+cd jimo/apps/web && pnpm run test:e2e
+```
+
 BPM 服务（Java）：
 
 ```bash
@@ -120,9 +136,9 @@ mvn spring-boot:run               # 直接运行（需本地 MySQL :3306）
 **后端** `Controller → Service → Drizzle ORM → PostgreSQL`
 
 - 全局守卫：`JwtAuthGuard`（`@Public()` 跳过）、`RolesGuard`（`@Roles()`）、`AuthzGuard`（Casbin RBAC）
-- 全局拦截器：`OperationInterceptor`（ mutation 审计写入 `sys_operation_records`）、`ResponseInterceptor`（自动包裹为 `{ code, msg, data }`）
+- 全局拦截器：`OperationInterceptor`（mutation 审计写入 `sys_operation_records`）、`ResponseInterceptor`（自动包裹为 `{ code, msg, data }`）
 - 认证流程：JWT（access 2h / refresh 7d）+ Casbin RBAC，角色层级 `super_admin → admin → editor → viewer`
-- **软删除**：统一用 `deletedAt`，查询必须带 `isNull(deletedAt)`，不硬删
+- **软删除**：统一使用 `deletedAt`，查询必须带 `isNull(deletedAt)`，不硬删
 
 **前端** Umi Max（page → service → API）
 
@@ -141,7 +157,7 @@ mvn spring-boot:run               # 直接运行（需本地 MySQL :3306）
 |------|------|
 | `DATABASE_URL` | PostgreSQL 连接串（Drizzle） |
 | `JWT_SECRET` | access token 签名密钥 |
-| `JWT_REFRESH_SECRET` | refresh token 签名密钥（必须不同于 JWT_SECRET） |
+| `JWT_REFRESH_SECRET` | refresh token 签名密钥（必须不同于 `JWT_SECRET`） |
 | `REDIS_URL` | Redis 连接 |
 | `APP_PORT` | NestJS 端口（默认 8888） |
 | `NODE_ENV` | `development` / `production` |
@@ -158,5 +174,3 @@ mvn spring-boot:run               # 直接运行（需本地 MySQL :3306）
 ## 许可证
 
 MIT，详见 [LICENSE](LICENSE)。
-
-仓库不包含任何 gin-vue-admin（BSL 1.1）源代码；仅在 `about` 页与 BPM 注释中保留对上游的致谢。
