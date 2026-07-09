@@ -157,4 +157,6 @@ mvn spring-boot:run               # 直接运行（需本地 MySQL :3306）
 
 ## 许可证
 
-MIT（LICENSE 文件待补充）。
+MIT，详见 [LICENSE](LICENSE)。
+
+仓库不包含任何 gin-vue-admin（BSL 1.1）源代码；仅在 `about` 页与 BPM 注释中保留对上游的致谢。

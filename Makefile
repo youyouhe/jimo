@@ -3,11 +3,11 @@ SHELL = /bin/bash
 # =============================================================
 # Low-Code Platform Build + Deploy
 # =============================================================
-# Run from repo root: make -f release/Makefile <target>
+# Run from repo root: make <target>
 # =============================================================
 
-LOWCODE_DIR = release/jimo
-INFRA_DIR  = release/infrastructure
+LOWCODE_DIR = jimo
+INFRA_DIR  = infrastructure
 
 # ---- Low-Code Platform ----
 
