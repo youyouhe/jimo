@@ -71,13 +71,13 @@ function resolveProjectRoot(): string {
   let dir = process.cwd();
   const root = path.parse(dir).root;
   while (dir !== root) {
-    if (existsSync(path.join(dir, 'release', 'jimo', 'apps', 'server', 'src'))) return dir;
+    if (existsSync(path.join(dir, 'apps', 'server', 'src'))) return dir;
     dir = path.resolve(dir, '..');
   }
   // fallback from script location
   dir = path.resolve(__dirname, '../..');
   while (dir !== root) {
-    if (existsSync(path.join(dir, 'release', 'jimo', 'apps', 'server', 'src'))) return dir;
+    if (existsSync(path.join(dir, 'apps', 'server', 'src'))) return dir;
     dir = path.resolve(dir, '..');
   }
   throw new Error(`Cannot resolve project root from cwd=${process.cwd()}`);
@@ -87,9 +87,9 @@ function resolveProjectRoot(): string {
 function preview(dto: AutoCodeDto): Record<string, string> {
   const n = deriveNames(dto.tableName, dto._packageSlug ?? '');
   const files: Record<string, string> = {};
-  files[`release/jimo/apps/server/src/db/schema/lc-${n.kebabName}.ts`] = generateSchema(dto);
+  files[`apps/server/src/db/schema/lc-${n.kebabName}.ts`] = generateSchema(dto);
   const activeDto = { ...dto, fields: activeFields(dto.fields) };
-  const mod = `release/jimo/apps/server/src/modules/${n.moduleDir}`;
+  const mod = `apps/server/src/modules/${n.moduleDir}`;
   files[`${mod}/dto/create-${n.lcKebabSingular}.dto.ts`] = generateCreateDto(activeDto);
   files[`${mod}/dto/query-${n.lcKebabSingular}.dto.ts`] = generateQueryDto(activeDto);
   files[`${mod}/dto/update-${n.lcKebabSingular}.dto.ts`] = generateUpdateDto(activeDto);
@@ -103,19 +103,19 @@ function preview(dto: AutoCodeDto): Record<string, string> {
     files[`${mod}/agent/${n.lcKebabSingular}.agent.module.ts`] = generateAgentModule(activeDto);
   }
   if (dto.generateWeb) {
-    files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto);
+    files[`apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto);
     if (dto.pageType === 'document') {
-      files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto);
-      files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto);
+      files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto);
+      files[`apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto);
     } else if (dto.pageType === 'grid') {
-      files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto);
+      files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto);
     } else if (dto.pageType === 'calendar') {
-      files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendCalendarPage(activeDto);
+      files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendCalendarPage(activeDto);
     } else {
-      files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto);
+      files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto);
     }
     if (activeDto.fields.some((f: any) => !f.removed && f.type === 'point')) {
-      files[`release/jimo/apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
+      files[`apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
     }
   }
   return files;
@@ -156,30 +156,30 @@ async function processGenerateJob(sql: any, job: any): Promise<string[]> {
     }
     const n = deriveNames(dto.tableName, dto._packageSlug ?? '');
     const expectedPaths = [
-      `release/jimo/apps/server/src/db/schema/lc-${n.kebabName}.ts`,
-      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`,
-      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`,
-      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`,
-      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`,
-      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.contract.spec.ts`,
-      `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.http.contract.spec.ts`,
-      `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
-      `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
+      `apps/server/src/db/schema/lc-${n.kebabName}.ts`,
+      `apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`,
+      `apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`,
+      `apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`,
+      `apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`,
+      `apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`,
+      `apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`,
+      `apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.contract.spec.ts`,
+      `apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.http.contract.spec.ts`,
+      `apps/web/src/services/${n.serviceRelDir}.ts`,
+      `apps/web/src/pages/${n.pageDir}/index.tsx`,
     ];
     for (const p of expectedPaths) {
       const fp = path.join(projectRoot, p);
       if (existsSync(fp)) await fs.rm(fp, { force: true });
     }
-    const moduleDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/${n.moduleDir}`);
+    const moduleDir = path.join(projectRoot, `apps/server/src/modules/${n.moduleDir}`);
     if (existsSync(moduleDir)) {
       for (const sub of ['dto', 'agent']) {
         try { await fs.rmdir(path.join(moduleDir, sub)); } catch { /* */ }
       }
       try { await fs.rmdir(moduleDir); } catch { /* */ }
     }
-    const pkgDir = path.join(projectRoot, `release/jimo/apps/server/src/modules/lc/${n.packageSlug}`);
+    const pkgDir = path.join(projectRoot, `apps/server/src/modules/lc/${n.packageSlug}`);
     try { await fs.rmdir(pkgDir); } catch { /* */ }
     console.log(`[generate-worker] Force cleanup for '${dto.tableName}'`);
   }
@@ -204,7 +204,7 @@ async function processGenerateJob(sql: any, job: any): Promise<string[]> {
   // drizzle-kit reads schema/index.ts to discover tables, so the export must exist first.
   try {
     const n = deriveNames(dto.tableName, dto._packageSlug ?? '');
-    const schemaIndexPath = path.join(projectRoot, 'release/jimo/apps/server/src/db/schema/index.ts');
+    const schemaIndexPath = path.join(projectRoot, 'apps/server/src/db/schema/index.ts');
     const exportLine = `export * from './lc-${n.kebabName}.js';`;
     let indexContent = await fs.readFile(schemaIndexPath, 'utf-8');
     if (!indexContent.includes(exportLine)) {
@@ -220,7 +220,7 @@ async function processGenerateJob(sql: any, job: any): Promise<string[]> {
   await updateStep(sql, jobId, 2, 'running');
   let pushSucceeded = false;
   try {
-    const serverDir = path.join(projectRoot, 'release', 'jimo', 'apps', 'server');
+    const serverDir = path.join(projectRoot, 'apps', 'server');
     await execAsync('npx --no-install drizzle-kit push --force', {
       cwd: serverDir, timeout: 60000, env: { ...process.env, DRIZZLE_SILENT: '1' },
     });
@@ -353,7 +353,7 @@ async function processUpdateJob(sql: any, job: any): Promise<string[]> {
   // Step 3: drizzle-kit push (ALTER table to match new schema)
   await updateStep(sql, jobId, 2, 'running', UPDATE_STEPS);
   try {
-    const serverDir = path.join(projectRoot, 'release', 'jimo', 'apps', 'server');
+    const serverDir = path.join(projectRoot, 'apps', 'server');
     await execAsync('npx --no-install drizzle-kit push --force', {
       cwd: serverDir, timeout: 60000, env: { ...process.env, DRIZZLE_SILENT: '1' },
     });

@@ -79,7 +79,7 @@ services:
 
   # ---------- MinIO (object storage for file uploads) ----------
   minio:
-    image: quay.io/minio/minio:latest
+    image: minio/minio:latest
     container_name: lowcode-minio
     restart: unless-stopped
     environment:
@@ -103,7 +103,7 @@ services:
 
   # ---------- MinIO bucket init (creates lowcode-dev bucket, sets public read) ----------
   minio-init:
-    image: quay.io/minio/mc:latest
+    image: minio/mc:latest
     container_name: lowcode-minio-init
     depends_on:
       minio:

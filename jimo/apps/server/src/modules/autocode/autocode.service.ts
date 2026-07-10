@@ -136,38 +136,38 @@ export class AutocodeService {
     const n = deriveNames(dto.tableName, dto._packageSlug);
     const files: Record<string, string> = {};
 
-    files[`release/jimo/apps/server/src/db/schema/lc-${n.kebabName}.ts`] = generateSchema(dto);
+    files[`apps/server/src/db/schema/lc-${n.kebabName}.ts`] = generateSchema(dto);
 
     const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
 
-    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`] = generateCreateDto(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`] = generateQueryDto(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`] = generateUpdateDto(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`] = generateService(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`] = generateController(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`] = generateModule(activeDto);
+    files[`apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`] = generateCreateDto(activeDto);
+    files[`apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`] = generateQueryDto(activeDto);
+    files[`apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`] = generateUpdateDto(activeDto);
+    files[`apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`] = generateService(activeDto);
+    files[`apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`] = generateController(activeDto);
+    files[`apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`] = generateModule(activeDto);
 
     // Table-level L2 contract specs (auto-generated; gated by RUN_L2_DB=1 at runtime).
-    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.contract.spec.ts`] = generateServiceContractSpec(activeDto);
-    files[`release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.http.contract.spec.ts`] = generateHttpContractSpec(activeDto);
+    files[`apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.contract.spec.ts`] = generateServiceContractSpec(activeDto);
+    files[`apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.http.contract.spec.ts`] = generateHttpContractSpec(activeDto);
 
     if (dto.agentConfig?.enabled) {
-      files[`release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.service.ts`] = generateAgentService(activeDto);
-      files[`release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module.ts`] = generateAgentModule(activeDto);
+      files[`apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.service.ts`] = generateAgentService(activeDto);
+      files[`apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module.ts`] = generateAgentModule(activeDto);
     }
 
     if (dto.generateWeb) {
-      files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto);
+      files[`apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto);
       if (dto.pageType === 'document') {
-        files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto);
-        files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto);
+        files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto);
+        files[`apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto);
       } else if (dto.pageType === 'grid') {
-        files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto);
+        files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto);
       } else {
-        files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto);
+        files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto);
       }
       if (activeDto.fields.some((f) => !f.removed && f.type === 'point')) {
-        files[`release/jimo/apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
+        files[`apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
       }
     }
 
@@ -238,14 +238,14 @@ export class AutocodeService {
       const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
       const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
       if ([...relationDictTypes.values()].some((v) => v !== null)) {
-        files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto, relationDictTypes);
+        files[`apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto, relationDictTypes);
         if (dto.pageType === 'document') {
-          files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto, relationDictTypes);
-          files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto, relationDictTypes);
+          files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto, relationDictTypes);
+          files[`apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto, relationDictTypes);
         } else if (dto.pageType === 'grid') {
-          files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto, relationDictTypes);
+          files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto, relationDictTypes);
         } else {
-          files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
+          files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
         }
       }
     }
@@ -311,7 +311,7 @@ export class AutocodeService {
       const { exec } = await import('node:child_process');
       const { promisify } = await import('node:util');
       const execAsync = promisify(exec);
-      const serverDir = path.join(projectRoot, 'release', 'jimo', 'apps', 'server');
+      const serverDir = path.join(projectRoot, 'apps', 'server');
       await execAsync('npx --no-install drizzle-kit push --force', {
         cwd: serverDir, timeout: 30000,
         env: { ...process.env, DRIZZLE_SILENT: '1' },
@@ -653,19 +653,19 @@ export class AutocodeService {
         const n = deriveNames(dto.tableName, dto._packageSlug);
         const root = resolveProjectRoot();
         const expectedPaths = [
-          `release/jimo/apps/server/src/db/schema/lc-${n.kebabName}.ts`,
-          `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`,
-          `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`,
-          `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`,
-          `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`,
-          `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`,
-          `release/jimo/apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`,
-          `release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.service.ts`,
-          `release/jimo/apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module.ts`,
-          `release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`,
-          `release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`,
-          `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.contract.spec.ts`,
-          `release/jimo/apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.http.contract.spec.ts`,
+          `apps/server/src/db/schema/lc-${n.kebabName}.ts`,
+          `apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.ts`,
+          `apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.controller.ts`,
+          `apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.module.ts`,
+          `apps/server/src/modules/${n.moduleDir}/dto/create-${n.lcKebabSingular}.dto.ts`,
+          `apps/server/src/modules/${n.moduleDir}/dto/query-${n.lcKebabSingular}.dto.ts`,
+          `apps/server/src/modules/${n.moduleDir}/dto/update-${n.lcKebabSingular}.dto.ts`,
+          `apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.service.ts`,
+          `apps/server/src/modules/${n.moduleDir}/agent/${n.lcKebabSingular}.agent.module.ts`,
+          `apps/web/src/services/${n.serviceRelDir}.ts`,
+          `apps/web/src/pages/${n.pageDir}/index.tsx`,
+          `apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.service.contract.spec.ts`,
+          `apps/server/src/modules/${n.moduleDir}/${n.lcKebabSingular}.http.contract.spec.ts`,
         ];
         const { existsSync } = await import('node:fs');
         for (const p of expectedPaths) {
@@ -673,13 +673,13 @@ export class AutocodeService {
           if (existsSync(fullPath)) await fs.rm(fullPath, { force: true });
         }
         // Remove module dir (including agent/ and dto/ subdirs)
-        const moduleDir = path.join(root, `release/jimo/apps/server/src/modules/${n.moduleDir}`);
+        const moduleDir = path.join(root, `apps/server/src/modules/${n.moduleDir}`);
         if (existsSync(moduleDir)) {
           try { await fs.rm(path.join(moduleDir, 'dto'), { recursive: true, force: true }); } catch { /* */ }
           try { await fs.rm(path.join(moduleDir, 'agent'), { recursive: true, force: true }); } catch { /* */ }
           try { await fs.rmdir(moduleDir); } catch { /* */ }
         }
-        const pageDir = path.join(root, `release/jimo/apps/web/src/pages/${n.pageDir}`);
+        const pageDir = path.join(root, `apps/web/src/pages/${n.pageDir}`);
         if (existsSync(pageDir)) { try { await fs.rm(pageDir, { recursive: true, force: true }); } catch { /* */ } }
         await this.entrypointService.removeSchemaExport(n);
         await this.entrypointService.removeDanglingSchemaImports(n);
@@ -698,18 +698,18 @@ export class AutocodeService {
         const activeDto: AutoCodeDto = { ...dto, fields: activeFields(dto.fields) };
         const relationDictTypes = await this.lookupRelationDisplayDictTypes(activeDto.fields);
         if ([...relationDictTypes.values()].some((v) => v !== null)) {
-          files[`release/jimo/apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto, relationDictTypes);
+          files[`apps/web/src/services/${n.serviceRelDir}.ts`] = generateFrontendService(activeDto, relationDictTypes);
           if (dto.pageType === 'document') {
-            files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto, relationDictTypes);
-            files[`release/jimo/apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto, relationDictTypes);
+            files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto, relationDictTypes);
+            files[`apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto, relationDictTypes);
           } else if (dto.pageType === 'grid') {
-            files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto, relationDictTypes);
+            files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto, relationDictTypes);
           } else {
-            files[`release/jimo/apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
+            files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
           }
         }
         if (activeDto.fields.some((f) => !f.removed && f.type === 'point')) {
-          files[`release/jimo/apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
+          files[`apps/web/src/pages/${n.pageDir}/map.tsx`] = generateFrontendMapPage(activeDto);
         }
       }
       await updateStep(0, 'completed');
@@ -735,7 +735,7 @@ export class AutocodeService {
         const { exec } = await import('node:child_process');
         const { promisify } = await import('node:util');
         const execAsync = promisify(exec);
-        const serverDir = path.join(projectRoot, 'release', 'jimo', 'apps', 'server');
+        const serverDir = path.join(projectRoot, 'apps', 'server');
         await execAsync('npx --no-install drizzle-kit push --force', {
           cwd: serverDir, timeout: 60000,
           env: { ...process.env, DRIZZLE_SILENT: '1' },
@@ -888,14 +888,14 @@ export class AutocodeService {
         const activeDto2: AutoCodeDto = { ...autoCodeDto, fields: activeFields(autoCodeDto.fields) };
         const relationDictTypes2 = await this.lookupRelationDisplayDictTypes(activeDto2.fields);
         if ([...relationDictTypes2.values()].some((v) => v !== null)) {
-          files[`release/jimo/apps/web/src/services/${n2.serviceRelDir}.ts`] = generateFrontendService(activeDto2, relationDictTypes2);
+          files[`apps/web/src/services/${n2.serviceRelDir}.ts`] = generateFrontendService(activeDto2, relationDictTypes2);
           if (autoCodeDto.pageType === 'document') {
-            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto2, relationDictTypes2);
-            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto2, relationDictTypes2);
+            files[`apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendDocumentListPage(activeDto2, relationDictTypes2);
+            files[`apps/web/src/pages/${n2.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto2, relationDictTypes2);
           } else if (autoCodeDto.pageType === 'grid') {
-            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto2, relationDictTypes2);
+            files[`apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto2, relationDictTypes2);
           } else {
-            files[`release/jimo/apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendPage(activeDto2, relationDictTypes2);
+            files[`apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendPage(activeDto2, relationDictTypes2);
           }
         }
       }
@@ -920,7 +920,7 @@ export class AutocodeService {
         const { exec } = await import('node:child_process');
         const { promisify } = await import('node:util');
         const execAsync = promisify(exec);
-        const serverDir = path.join(projectRoot, 'release', 'jimo', 'apps', 'server');
+        const serverDir = path.join(projectRoot, 'apps', 'server');
         await execAsync('npx --no-install drizzle-kit push --force', {
           cwd: serverDir, timeout: 60000,
           env: { ...process.env, DRIZZLE_SILENT: '1' },

@@ -32,7 +32,7 @@ export class EntrypointService {
 
   async updateSchemaIndex(dto: AutoCodeDto, projectRoot: string): Promise<void> {
     const n = deriveNames(dto.tableName, (dto as any)._packageSlug ?? '');
-    const indexPath = path.join(projectRoot, 'release/jimo/apps/server/src/db/schema/index.ts');
+    const indexPath = path.join(projectRoot, 'apps/server/src/db/schema/index.ts');
     const exportLine = `export * from './lc-${n.kebabName}.js';`;
 
     let content = await fs.readFile(indexPath, 'utf-8');
@@ -44,7 +44,7 @@ export class EntrypointService {
 
   async updateAppModule(dto: AutoCodeDto, projectRoot: string): Promise<void> {
     const n = deriveNames(dto.tableName, (dto as any)._packageSlug ?? '');
-    const generatedPath = path.join(projectRoot, 'release/jimo/apps/server/src/generated.module.ts');
+    const generatedPath = path.join(projectRoot, 'apps/server/src/generated.module.ts');
 
     // Ensure the file exists (idempotent bootstrap)
     if (!existsSync(generatedPath)) {
@@ -80,7 +80,7 @@ export class EntrypointService {
 
   async updateUmiRoutes(dto: AutoCodeDto, projectRoot: string): Promise<void> {
     const n = deriveNames(dto.tableName, (dto as any)._packageSlug ?? '');
-    const generatedRoutesPath = path.join(projectRoot, 'release/jimo/apps/web/src/generated-routes.ts');
+    const generatedRoutesPath = path.join(projectRoot, 'apps/web/src/generated-routes.ts');
 
     if (!existsSync(generatedRoutesPath)) {
       await fs.writeFile(generatedRoutesPath,
@@ -112,7 +112,7 @@ export class EntrypointService {
 
   async updateUmiRoutesMap(dto: AutoCodeDto, projectRoot: string): Promise<void> {
     const n = deriveNames(dto.tableName, (dto as any)._packageSlug ?? '');
-    const generatedRoutesPath = path.join(projectRoot, 'release/jimo/apps/web/src/generated-routes.ts');
+    const generatedRoutesPath = path.join(projectRoot, 'apps/web/src/generated-routes.ts');
 
     if (!existsSync(generatedRoutesPath)) return;
 
@@ -144,7 +144,7 @@ export class EntrypointService {
 
   async removeRouteFromUmirc(n: DerivedNames): Promise<void> {
     const projectRoot = resolveProjectRoot();
-    const generatedRoutesPath = path.join(projectRoot, 'release/jimo/apps/web/src/generated-routes.ts');
+    const generatedRoutesPath = path.join(projectRoot, 'apps/web/src/generated-routes.ts');
     if (!existsSync(generatedRoutesPath)) return;
 
     let content = await fs.readFile(generatedRoutesPath, 'utf-8');
@@ -155,7 +155,7 @@ export class EntrypointService {
 
   async removeSchemaExport(n: DerivedNames): Promise<void> {
     const projectRoot = resolveProjectRoot();
-    const indexPath = path.join(projectRoot, 'release/jimo/apps/server/src/db/schema/index.ts');
+    const indexPath = path.join(projectRoot, 'apps/server/src/db/schema/index.ts');
     if (!existsSync(indexPath)) return;
 
     let content = await fs.readFile(indexPath, 'utf-8');
@@ -175,7 +175,7 @@ export class EntrypointService {
    */
   async removeDanglingSchemaImports(n: DerivedNames): Promise<void> {
     const projectRoot = resolveProjectRoot();
-    const serverSrc = path.join(projectRoot, 'release/jimo/apps/server/src');
+    const serverSrc = path.join(projectRoot, 'apps/server/src');
     if (!existsSync(serverSrc)) return;
 
     const patterns = [
@@ -209,7 +209,7 @@ export class EntrypointService {
 
   async removeModuleRegistration(n: DerivedNames): Promise<void> {
     const projectRoot = resolveProjectRoot();
-    const generatedPath = path.join(projectRoot, 'release/jimo/apps/server/src/generated.module.ts');
+    const generatedPath = path.join(projectRoot, 'apps/server/src/generated.module.ts');
     if (!existsSync(generatedPath)) return;
 
     let content = await fs.readFile(generatedPath, 'utf-8');

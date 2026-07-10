@@ -18,7 +18,7 @@ export class ReservedNamesService {
     missing: string[];
   }> {
     const projectRoot = resolveProjectRoot();
-    const pagesDir = path.join(projectRoot, 'release/jimo/apps/web/src/pages');
+    const pagesDir = path.join(projectRoot, 'apps/web/src/pages');
 
     let entries: string[] = [];
     try {
@@ -45,7 +45,7 @@ export class ReservedNamesService {
     const projectRoot = resolveProjectRoot();
     const reservedFile = path.join(
       projectRoot,
-      'release/jimo/apps/server/src/modules/autocode/reserved-names.ts',
+      'apps/server/src/modules/autocode/reserved-names.ts',
     );
 
     const toAdd = names.filter((n) => n && !RESERVED_TABLE_NAMES.has(n));

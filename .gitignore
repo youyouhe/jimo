@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+jimo/.pnpm-store/
 
 # Build / generated artifacts
 **/.umi/
@@ -68,3 +69,6 @@ coverage/
 # Java / BPM (Spring Boot + Maven build output)
 target/
 *.class
+
+# dev.sh runtime state (pids, logs, job queues)
+jimo/.tmp/

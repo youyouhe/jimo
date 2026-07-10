@@ -4,7 +4,7 @@ import { defineConfig } from '@playwright/test';
  * L3 E2E smoke config.
  *
  * Assumes the dev stack is already running (frontend :8000 + backend :8888):
- *   cd release/jimo && bash scripts/dev.sh
+ *   cd jimo && bash scripts/dev.sh
  * Then:  pnpm test:e2e
  *
  * Browser binaries are expected in the system cache (chromium). If missing:
