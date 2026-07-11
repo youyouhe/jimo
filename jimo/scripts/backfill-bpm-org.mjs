@@ -36,12 +36,28 @@ for (const d of depts) {
 }
 
 console.log(`== users ==`);
-const users = await sql`SELECT id, username, nickname, email, role, dept_id, bpm_user_id FROM sys_users WHERE deleted_at IS NULL`;
+// Roles live in sys_user_roles (many-to-many) — there is no denormalized `role`
+// column on sys_users anymore. Derive BPM's cosmetic `title` from role names,
+// mirroring BpmOrgSyncService.syncUser. Also pull the employee position so the
+// Server-side candidate resolver (which reads sys_employees.position) is in
+// sync with whatever BPM stores.
+const users = await sql`
+  SELECT u.id, u.username, u.nickname, u.email, u.dept_id, u.bpm_user_id,
+         COALESCE(string_agg(r.name, '/'), '') AS role_titles,
+         e.position AS employee_position
+  FROM sys_users u
+  LEFT JOIN sys_user_roles ur ON ur.user_id = u.id
+  LEFT JOIN sys_roles r ON r.id = ur.role_id AND r.deleted_at IS NULL
+  LEFT JOIN sys_employees e ON e.id = u.employee_id AND e.deleted_at IS NULL
+  WHERE u.deleted_at IS NULL
+  GROUP BY u.id, e.position
+`;
 for (const u of users) {
   if (!u.dept_id) { console.log('  skip (no dept)', u.username); continue; }
   const dept = deptById.get(u.dept_id);
   if (!dept) { console.warn('  skip (dept missing)', u.username); continue; }
-  const payload = { name: u.nickname || u.username, deptId: dept.code, email: u.email ?? '', title: u.role ?? '' };
+  const title = u.role_titles || u.employee_position || '';
+  const payload = { name: u.nickname || u.username, deptId: dept.code, email: u.email ?? '', title };
   try {
     if (u.bpm_user_id) {
       await bpm('PUT', `users/${u.bpm_user_id}`, payload);
