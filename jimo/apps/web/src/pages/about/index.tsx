@@ -12,37 +12,47 @@ const { Paragraph, Link } = Typography;
 
 const techStack = [
   {
-    category: 'Backend',
+    category: '后端',
     icon: <CloudServerOutlined />,
     items: [
       { name: 'NestJS', version: '11.x', link: 'https://nestjs.com' },
       { name: 'Drizzle ORM', version: 'latest', link: 'https://orm.drizzle.team' },
       { name: 'PostgreSQL', version: '16', link: 'https://www.postgresql.org' },
+      { name: 'Redis', version: '7', link: 'https://redis.io' },
       { name: 'MinIO', version: 'latest', link: 'https://min.io' },
       { name: 'Casbin', version: 'v2', link: 'https://casbin.org' },
     ],
   },
   {
-    category: 'Frontend',
+    category: '前端',
     icon: <ApiOutlined />,
     items: [
       { name: 'React', version: '18.x', link: 'https://react.dev' },
       { name: 'Umi 4', version: '4.x', link: 'https://umijs.org' },
-      { name: 'Ant Design Pro', version: '5.x', link: 'https://pro.ant.design' },
+      { name: 'Ant Design Pro', version: '6.x', link: 'https://pro.ant.design' },
       { name: 'Zustand', version: 'latest', link: 'https://docs.pmnd.rs/zustand' },
     ],
   },
   {
-    category: 'Infrastructure',
+    category: 'BPM / 工作流',
     icon: <DatabaseOutlined />,
     items: [
-      { name: 'Docker', version: 'latest', link: 'https://www.docker.com' },
-      { name: 'pnpm', version: 'latest', link: 'https://pnpm.io' },
-      { name: 'Turborepo', version: 'latest', link: 'https://turbo.build' },
+      { name: 'Spring Boot', version: '2.7', link: 'https://spring.io/projects/spring-boot' },
+      { name: 'Flowable', version: '6.8', link: 'https://www.flowable.com' },
+      { name: 'MySQL', version: '8', link: 'https://www.mysql.com' },
     ],
   },
   {
-    category: 'Security',
+    category: '基础设施',
+    icon: <DatabaseOutlined />,
+    items: [
+      { name: 'Docker', version: '', link: 'https://www.docker.com' },
+      { name: 'pnpm', version: '9.x', link: 'https://pnpm.io' },
+      { name: 'Turborepo', version: '', link: 'https://turbo.build' },
+    ],
+  },
+  {
+    category: '安全',
     icon: <SafetyOutlined />,
     items: [
       { name: 'JWT', version: '', link: 'https://jwt.io' },
@@ -54,14 +64,12 @@ const techStack = [
 
 export default function AboutPage() {
   return (
-    <PageContainer header={{ title: 'About' }}>
+    <PageContainer header={{ title: '关于' }}>
       <ProCard title="Jimo Platform" style={{ marginBottom: 24 }}>
         <Paragraph>
-          A full-stack jimo administration platform built with modern
-          technologies. This platform provides role-based access control,
-          code generation, form building, multi-database support, and a
-          flexible plugin system to accelerate enterprise application
-          development.
+          自研低代码管理平台 —— pnpm monorepo（NestJS + React + Java BPM +
+          共享类型）。内置代码生成器(autocode)、RBAC 权限体系(Casbin)、
+          Flowable 审批流引擎、组织架构管理等企业级能力, 加速后台系统开发。
         </Paragraph>
         <Descriptions column={1} size="small" bordered style={{ marginTop: 16 }}>
           <Descriptions.Item label="Project Name">
@@ -71,14 +79,14 @@ export default function AboutPage() {
             v1.0.0
           </Descriptions.Item>
           <Descriptions.Item label="License">
-            BSL 1.1
+            MIT
           </Descriptions.Item>
           <Descriptions.Item label="Repository">
             <Link
-              href="https://github.com/flipped-aurora/gin-vue-admin"
+              href="https://github.com/youyouhe/jimo"
               target="_blank"
             >
-              <GithubOutlined /> gin-vue-admin
+              <GithubOutlined /> github.com/youyouhe/jimo
             </Link>
           </Descriptions.Item>
         </Descriptions>
