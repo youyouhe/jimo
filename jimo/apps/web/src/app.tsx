@@ -224,11 +224,12 @@ export const layout = ({ initialState }: { initialState: any }) => ({
         React.createElement(
           'span',
           { style: { cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 } },
-          React.createElement('span', { style: {
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: 28, height: 28, borderRadius: '50%', background: '#1677ff',
-            color: '#fff', fontSize: 14, fontWeight: 600,
-          }}, displayName.charAt(0).toUpperCase()),
+          React.createElement('img', {
+            src: 'data:image/svg+xml;base64,' +
+              'PHN2ZyB3aWR0aD0iMjgiIGhlaWdodD0iMjgiIHZpZXdCb3g9IjAgMCAyOCAyOCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMTQiIGN5PSIxNCIgcj0iMTQiIGZpbGw9IiMxNjc3ZmYiLz4KPGNpcmNsZSBjeD0iMTQiIGN5PSIxMCIgcj0iNCIgZmlsbD0id2hpdGUiIG9wYWNpdHk9IjAuOSIvPgo8ZWxsaXBzZSBjeD0iMTQiIGN5PSIyMiIgcng9IjgiIHJ5PSI2IiBmaWxsPSJ3aGl0ZSIgb3BhY2l0eT0iMC45Ii8+Cjwvc3ZnPg==',
+            alt: 'avatar',
+            style: { width: 28, height: 28, borderRadius: '50%', flexShrink: 0 },
+          }),
           React.createElement('span', null, displayName),
         ),
       );
