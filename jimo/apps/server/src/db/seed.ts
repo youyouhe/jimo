@@ -1,8 +1,30 @@
 import { hash } from 'bcryptjs';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { RoleCode } from '@jimo/shared';
 import { createDb } from './connection.js';
 import { sysUsers, sysRoles, sysMenus, sysUserRoles, sysRoleMenus, sysEncodingRules } from './schema/index.js';
+
+/**
+ * Idempotent safety-net for tables added after the initial schema. `drizzle-kit
+ * push` is the canonical way to create tables, but existing dev databases that
+ * were pushed before these tables existed won't pick them up without a re-push
+ * (and push can be interactive). CREATE IF NOT EXISTS here means `db:seed`
+ * guarantees they exist. Keep the columns in sync with db/schema/*.ts.
+ */
+async function ensureTables(db: ReturnType<typeof createDb>): Promise<void> {
+  // sys_candidate_rules — approval candidate-resolution rules (see CONTEXT.md).
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "sys_candidate_rules" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      "name" varchar(100) NOT NULL,
+      "filter" jsonb NOT NULL,
+      "enabled" boolean DEFAULT true NOT NULL,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+      "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+      "deleted_at" timestamp with time zone
+    )`);
+  console.log('[seed] ensured sys_candidate_rules exists');
+}
 
 async function seedAdmin(db: ReturnType<typeof createDb>): Promise<void> {
   const existing = await db
@@ -729,6 +751,7 @@ async function main(): Promise<void> {
   const db = createDb(databaseUrl);
 
   try {
+    await ensureTables(db);
     await seedAdmin(db);
     await seedRoles(db);
     await seedMenus(db);

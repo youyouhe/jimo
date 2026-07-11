@@ -13,6 +13,7 @@
     "lint": "eslint src --ext .ts",
     "clean": "rm -rf dist",
     "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx src/db/seed.ts",
     "db:studio": "drizzle-kit studio"

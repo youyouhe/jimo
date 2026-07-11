@@ -46,16 +46,32 @@ cd jimo
 # 2. 准备环境变量
 cp jimo/.env.example jimo/.env   # 按需修改数据库密码、JWT 密钥等
 
-# 3. 一键启动全栈（PostgreSQL + MySQL + Redis + MinIO + NestJS + React + BPM）
-docker compose -f infrastructure/docker-compose.dev.yml up -d
-# 或使用 Makefile 快捷方式：make dev
+# 3. 启动基础设施（PostgreSQL + MySQL + Redis + MinIO）
+docker compose -f infrastructure/docker-compose.dev.yml up -d postgres mysql redis minio
 
-# 4. 等待约 30 秒后验证
-curl http://localhost:8888/api/v1/health
+# 4. 安装依赖、初始化数据库 schema + 种子数据（管理员 admin/admin123、角色、菜单）
+cd jimo && pnpm install
+cd apps/server
+pnpm run db:push     # 从 Drizzle schema 创建全部表（交互式，回车确认即可）
+pnpm run db:seed     # 种子数据：管理员、角色、菜单（幂等，可重复执行）
+cd ../..
 
-# 5. 浏览器访问前端（默认账号 admin / admin123）
-open http://localhost:8000
+# 5. 启动后端 + 前端（热重载）
+cd jimo && bash scripts/dev.sh        # server → :8888 | web → :8000
+
+# 6. （可选，审批流需要）单独启动 BPM 服务（Java，dev.sh 不管它）
+cd bpm/bpm-service && mvn spring-boot:run   # → :8090
 ```
+
+验证：
+
+```bash
+curl http://localhost:8888/api/v1/health     # NestJS
+curl http://localhost:8090/bpm/api/health    # BPM（若已启动）
+# 浏览器访问 http://localhost:8000 （默认账号 admin / admin123）
+```
+
+> **关于数据库同步**：本项目用 `drizzle-kit push` 同步 schema（**不要用 `db:migrate`**，迁移快照与实际库脱节会报「表已存在」）。新增表后跑一次 `db:push`；`db:seed` 也会幂等补建后续新增的表。
 
 ### 本地开发（热重载）
 
