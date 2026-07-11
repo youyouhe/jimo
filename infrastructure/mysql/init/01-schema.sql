@@ -1,7 +1,7 @@
 -- ============================================================
 -- Combined initialization script for Docker deployment.
 -- Runs automatically on first MySQL container start.
--- Creates both gin-vue-admin system tables and BPM business tables.
+-- Creates BPM service tables (Flowable internal + business tables).
 -- ============================================================
 
 -- ==================== BPM Business Tables ====================

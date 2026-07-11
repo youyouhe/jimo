@@ -26,7 +26,7 @@ bash jimo/scripts/dev-all.sh down      # 停后端/BPM/前端（docker infra 保
 
 **验证**：
 - 列表出现该部门，"负责人"列显示选的人。
-- BPM 侧已镜像：`docker exec lowcode-mysql mysql -uroot -p123456 gin_vue_admin -e "SELECT id,name,lead_id FROM departments WHERE id='RD';"`
+- BPM 侧已镜像：`docker exec lowcode-mysql mysql -uroot -p123456 jimo_bpm -e "SELECT id,name,lead_id FROM departments WHERE id='RD';"`
 
 ---
 
@@ -42,7 +42,7 @@ bash jimo/scripts/dev-all.sh down      # 停后端/BPM/前端（docker infra 保
     "SELECT username, dept_id, bpm_user_id FROM sys_users WHERE username='<你建的用户名>';"
   ```
   `bpm_user_id` 应为 `EMP009+`。
-- BPM 侧有该用户：`docker exec lowcode-mysql mysql -uroot -p123456 gin_vue_admin -e "SELECT id,name,dept_id FROM users WHERE id='<那个EMP号>';"`
+- BPM 侧有该用户：`docker exec lowcode-mysql mysql -uroot -p123456 jimo_bpm -e "SELECT id,name,dept_id FROM users WHERE id='<那个EMP号>';"`
 - ⚠️ 用户**必须有部门**才会同步（BPM 要求 dept）；没部门的用户 `bpm_user_id` 为空。
 
 ---
