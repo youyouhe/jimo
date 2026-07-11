@@ -158,8 +158,8 @@ import { ${Service} } from './${n.lcKebabSingular}.service';
 import { OwnershipHelper } from '${n.srcRelPath}common/ownership/ownership.helper';
 
 const RUN = process.env.RUN_L2_DB === '1';
-const TEST_URL = 'postgresql://lowcode:lowcode123@localhost:5432/lowcode_test';
-const MAINT_URL = 'postgresql://lowcode:lowcode123@localhost:5432/lowcode_db';
+const TEST_URL = process.env.TEST_DATABASE_URL || 'postgresql://lowcode:lowcode123@localhost:5432/lowcode_test';
+const MAINT_URL = process.env.DATABASE_URL || 'postgresql://lowcode:lowcode123@localhost:5432/lowcode_db';
 const TEST_USER = '00000000-0000-0000-0000-000000000001';
 
 (RUN ? describe : describe.skip)('L2 (DB-backed) ${Service} contract', () => {
@@ -286,8 +286,8 @@ import { ${Service} } from './${n.lcKebabSingular}.service';
 import { OwnershipHelper } from '${n.srcRelPath}common/ownership/ownership.helper';
 
 const RUN = process.env.RUN_L2_DB === '1';
-const TEST_URL = 'postgresql://lowcode:lowcode123@localhost:5432/lowcode_test';
-const MAINT_URL = 'postgresql://lowcode:lowcode123@localhost:5432/lowcode_db';
+const TEST_URL = process.env.TEST_DATABASE_URL || 'postgresql://lowcode:lowcode123@localhost:5432/lowcode_test';
+const MAINT_URL = process.env.DATABASE_URL || 'postgresql://lowcode:lowcode123@localhost:5432/lowcode_db';
 const TEST_USER = '00000000-0000-0000-0000-000000000001';
 
 const stubAuthGuard: CanActivate = {

@@ -1,0 +1,39 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # L0 (generator-output contract) + L1 (unit/property) for the NestJS backend.
+  # These are the fast, DB-free, deterministic layers — the enforced baseline.
+  # L2 (needs a Postgres service) and L3 (needs the running stack + browser)
+  # are intentionally NOT here; run them locally / nightly. See
+  # docs/测试框架方案.md.
+  server-unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: jimo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18.20'
+          cache: 'pnpm'
+          cache-dependency-path: jimo/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # @jimo/server imports types from @jimo/shared's dist/, so build shared first.
+      - run: pnpm --filter @jimo/shared build
+
+      - name: L0 + L1 tests
+        run: pnpm --filter @jimo/server test

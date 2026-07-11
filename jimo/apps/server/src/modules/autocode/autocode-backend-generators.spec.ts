@@ -131,7 +131,7 @@ describe('auto-generated L2 contract specs (generateServiceContractSpec / genera
 
   it('generateServiceContractSpec: StudentService spec wired to lc_students, gated by RUN_L2_DB', () => {
     const src = generateServiceContractSpec(studentsDto);
-    expect(src).toContain("import { StudentService } from './student.service'");
+    expect(src).toContain("import { StudentService } from './lc-student.service'");
     expect(src).toContain('lc_students');
     expect(src).toContain('TRUNCATE TABLE lc_students');
     expect(src).toContain("process.env.RUN_L2_DB === '1'");
@@ -145,8 +145,8 @@ describe('auto-generated L2 contract specs (generateServiceContractSpec / genera
 
   it('generateHttpContractSpec: StudentController HTTP spec at /api/v1/lc/students', () => {
     const src = generateHttpContractSpec(studentsDto);
-    expect(src).toContain("import { StudentController } from './student.controller'");
-    expect(src).toContain("import { StudentService } from './student.service'");
+    expect(src).toContain("import { StudentController } from './lc-student.controller'");
+    expect(src).toContain("import { StudentService } from './lc-student.service'");
     expect(src).toContain('/api/v1/lc/students');
     expect(src).toContain("from 'supertest'");
     expect(src).toContain('new ValidationPipe(');
