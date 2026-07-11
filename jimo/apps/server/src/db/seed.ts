@@ -560,6 +560,18 @@ async function seedMenus(db: ReturnType<typeof createDb>): Promise<void> {
       menuType: 2,
       permission: 'system:error:list',
     },
+    // ── Approval Center ──
+    {
+      name: '流程中心',
+      path: '/approvals',
+      component: './approvals/index',
+      icon: 'AuditOutlined',
+      parentId: null,
+      sort: 4,
+      isVisible: 1,
+      menuType: 2,
+      permission: null,
+    },
     // ── Profile (avatar dropdown / sidebar) ──
     {
       name: '个人中心',
