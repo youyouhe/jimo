@@ -28,7 +28,7 @@ if (process.env.NODE_ENV === 'development') {
   };
 }
 import { Dropdown } from 'antd';
-import { LogoutOutlined, AppstoreOutlined, TableOutlined, FolderOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
+import { LogoutOutlined, AppstoreOutlined, TableOutlined, FolderOutlined, UpOutlined, DownOutlined, IdcardOutlined, InfoCircleOutlined } from '@ant-design/icons';
 
 const ICON_MAP: Record<string, React.ReactElement> = {
   AppstoreOutlined: React.createElement(AppstoreOutlined),
@@ -199,6 +199,19 @@ export const layout = ({ initialState }: { initialState: any }) => ({
         {
           menu: {
             items: [
+              {
+                key: 'profile',
+                icon: React.createElement(IdcardOutlined),
+                label: '个人中心',
+                onClick: () => history.push('/profile'),
+              },
+              {
+                key: 'about',
+                icon: React.createElement(InfoCircleOutlined),
+                label: '关于',
+                onClick: () => history.push('/about'),
+              },
+              { type: 'divider' as const },
               {
                 key: 'logout',
                 icon: React.createElement(LogoutOutlined),

@@ -560,6 +560,30 @@ async function seedMenus(db: ReturnType<typeof createDb>): Promise<void> {
       menuType: 2,
       permission: 'system:error:list',
     },
+    // ── Profile (avatar dropdown / sidebar) ──
+    {
+      name: '个人中心',
+      path: '/profile',
+      component: './profile/index',
+      icon: 'IdcardOutlined',
+      parentId: null,
+      sort: 99,
+      isVisible: 1,
+      menuType: 2,
+      permission: null,
+    },
+    // ── About ──
+    {
+      name: '关于',
+      path: '/about',
+      component: './about/index',
+      icon: 'InfoCircleOutlined',
+      parentId: null,
+      sort: 100,
+      isVisible: 1,
+      menuType: 2,
+      permission: null,
+    },
   ];
 
   // Insert parent menus first (directories and menus), track their IDs
