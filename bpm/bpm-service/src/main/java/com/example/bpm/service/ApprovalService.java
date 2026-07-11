@@ -49,7 +49,7 @@ public class ApprovalService {
     }
 
     public Map<String, Object> start(String businessType, String businessKey, String processKey,
-                                     String initiator, List<String> chain) {
+                                     String initiator, List<String> chain, String initialAssignee) {
         if (isBlank(businessType) || isBlank(businessKey)) {
             throw new IllegalArgumentException("businessType and businessKey are required");
         }
@@ -64,6 +64,13 @@ public class ApprovalService {
         vars.put("businessKey", businessKey);
         vars.put("approvalChain", toJsonArray(chain));
         vars.put("chainIndex", 0);
+        // Human-picked assignee for the first step, when chain[0] is a
+        // srv:<ruleId> combined-filter rule (resolved on the NestJS side —
+        // see CONTEXT.md's Candidate List / ADR-0002, ADR-0003). Null/absent
+        // for legacy auto-resolved steps.
+        if (!isBlank(initialAssignee)) {
+            vars.put("pickedAssignee", initialAssignee);
+        }
 
         ProcessInstance pi = runtimeService.startProcessInstanceByKey(pk, vars);
 
@@ -84,7 +91,8 @@ public class ApprovalService {
         );
     }
 
-    public Map<String, Object> approve(String processInstanceId, String userId, boolean approved, String comment) {
+    public Map<String, Object> approve(String processInstanceId, String userId, boolean approved, String comment,
+                                       String nextAssignee) {
         List<Task> tasks = taskService.createTaskQuery()
                 .processInstanceId(processInstanceId)
                 .taskAssignee(userId)
@@ -106,6 +114,13 @@ public class ApprovalService {
             taskService.addComment(t.getId(), processInstanceId, rec);
             runtimeService.setVariable(processInstanceId, "lastApprover", userId);
             runtimeService.setVariable(processInstanceId, "lastApprovalComment", comment == null ? "" : comment);
+            // Overwrite pickedAssignee for whichever step comes next; the
+            // approvalStep listener reads it only when that step's chain
+            // entry is srv:-prefixed (see DynamicAssigneeListener). Harmless
+            // when the next step is a legacy auto-resolved rule.
+            if (!isBlank(nextAssignee)) {
+                runtimeService.setVariable(processInstanceId, "pickedAssignee", nextAssignee);
+            }
 
             Map<String, Object> vars = new HashMap<>();
             if ("approvalStep".equals(t.getTaskDefinitionKey())) {
@@ -124,6 +139,13 @@ public class ApprovalService {
                 .taskAssignee(userId)
                 .orderByTaskCreateTime().desc()
                 .list();
+    }
+
+    /** Current chainIndex for a running process — used by NestJS to preview the
+     *  next chain step (and whether it needs a human pick) before it's reached. */
+    public Integer getChainIndex(String processInstanceId) {
+        Object v = runtimeService.getVariable(processInstanceId, "chainIndex");
+        return v == null ? null : ((Number) v).intValue();
     }
 
     /**

@@ -60,6 +60,22 @@ export class ApprovalController {
     return { code: 0, msg: 'success', data: await this.approvalService.myDrafts(user.sub) };
   }
 
+  @Post('preview-first-step')
+  @ApiOperation({ summary: 'Preview the first chain step before submitting — tells the frontend whether a candidate picker is needed' })
+  async previewFirstStep(
+    @Body() dto: StartApprovalDto,
+    @CurrentUser() user: { sub: string },
+  ) {
+    const data = await this.approvalService.previewFirstStep(dto.businessType, dto.record, user.sub);
+    return { code: 0, msg: 'success', data };
+  }
+
+  @Get(':processInstanceId/next-step')
+  @ApiOperation({ summary: 'Preview the next chain step — tells the frontend whether a candidate picker is needed' })
+  async nextStep(@Param('processInstanceId') processInstanceId: string) {
+    return { code: 0, msg: 'success', data: await this.approvalService.previewNextStep(processInstanceId) };
+  }
+
   @Post(':processInstanceId/approve')
   @ApiOperation({ summary: 'Approve / reject my active task (proxied to BPM)' })
   async approve(
@@ -67,7 +83,13 @@ export class ApprovalController {
     @Body() dto: ApproveDto,
     @CurrentUser() user: { sub: string },
   ) {
-    return await this.approvalService.approve(processInstanceId, user.sub, dto.approved, dto.comment);
+    return await this.approvalService.approve(
+      processInstanceId,
+      user.sub,
+      dto.approved,
+      dto.comment,
+      dto.nextApproverUserId,
+    );
   }
 }
 

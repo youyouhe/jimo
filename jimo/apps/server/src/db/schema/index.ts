@@ -28,5 +28,6 @@ export * from './cleanup-jobs.js';
 export * from './generate-jobs.js';
 export * from './business-approvals.js';
 export * from './sys-approval-flows.js';
+export * from './sys-candidate-rules.js';
 export * from './bpm-process-definitions.js';
 export * from './bpm-process-versions.js';

@@ -29,7 +29,16 @@ public class DynamicAssigneeListener implements TaskListener {
         String initiator = (String) task.getVariable("initiator");
 
         if (rule == null) {
-            // No rule -- do not touch assignee (BPMN may have already set a fixed value)
+            // No auto-resolvable rule for this step. If a human already picked an
+            // assignee for it (srv:<ruleId> combined-filter steps — see
+            // ApprovalService#start/approve on the NestJS side), use that pick.
+            // Otherwise leave the assignee untouched (BPMN may have set a fixed value).
+            String picked = (String) task.getVariable("pickedAssignee");
+            if (picked != null) {
+                task.setAssignee(picked);
+                task.setVariable("resolvedAssignee", picked);
+                task.setVariable("resolvedBy", "picked:" + picked);
+            }
             return;
         }
 

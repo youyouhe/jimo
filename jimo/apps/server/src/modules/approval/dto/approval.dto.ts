@@ -4,6 +4,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  IsUUID,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -24,11 +25,29 @@ export class StartApprovalDto {
   @IsOptional()
   @IsObject()
   record?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    description:
+      'sys_users.id of the picked first-step approver. Required when the chain\'s first step is a ' +
+      "srv:<ruleId> combined-filter rule (see CONTEXT.md's Candidate List) — otherwise ignored.",
+  })
+  @IsOptional()
+  @IsUUID()
+  pickedApproverUserId?: string;
 }
 
 export class ApproveDto {
   @ApiProperty() @IsBoolean() approved!: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() comment?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'sys_users.id of the picked next-step approver. Required when approved=true and the next chain ' +
+      "step is a srv:<ruleId> combined-filter rule — otherwise ignored.",
+  })
+  @IsOptional()
+  @IsUUID()
+  nextApproverUserId?: string;
 }
 
 export class UpsertApprovalFlowDto {

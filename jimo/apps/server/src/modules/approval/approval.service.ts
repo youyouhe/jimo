@@ -14,6 +14,7 @@ import {
   StartApprovalDto,
   UpsertApprovalFlowDto,
 } from './dto/approval.dto';
+import { CandidateResolutionService } from './candidate-resolution.service';
 
 /** Postgres unique-violation error code (for race handling). */
 const PG_UNIQUE_VIOLATION = '23505';
@@ -24,6 +25,16 @@ const PG_UNIQUE_VIOLATION = '23505';
  * Same guard as {@link ../../common/ownership/ownership.service.ts}.
  */
 const TABLE_RE = /^[a-z][a-z0-9_]{0,62}$/;
+
+/** Chain entries referencing a Server-side combined-filter Resolution Rule
+ *  (see CONTEXT.md) look like `srv:<sysCandidateRules.id>`. Everything else
+ *  is a legacy BPM `resolution_rules` name, auto-resolved in BPM. */
+const SRV_RULE_PREFIX = 'srv:';
+
+function parseSrvRuleId(step: string | undefined): string | null {
+  if (!step || !step.startsWith(SRV_RULE_PREFIX)) return null;
+  return step.slice(SRV_RULE_PREFIX.length);
+}
 
 export interface ApplyOutcomeResult {
   id: string;
@@ -51,6 +62,7 @@ export class ApprovalService {
   constructor(
     @Inject(DATABASE_CONNECTION) private readonly db: DrizzleDb,
     private readonly config: ConfigService,
+    private readonly candidateResolution: CandidateResolutionService,
   ) {
     this.bpmUrl = (this.config.get<string>('BPM_SERVICE_URL') || 'http://localhost:8090').replace(/\/$/, '');
     this.syncUserId = this.config.get<string>('BPM_SYNC_USER_ID') || 'EMP008';
@@ -75,6 +87,12 @@ export class ApprovalService {
       throw new BadRequestException(`No approval chain resolved for ${dto.businessType}`);
     }
 
+    const initialAssigneeBpmId = await this.resolvePickedAssignee(
+      chain[0],
+      dto.pickedApproverUserId,
+      initiatorSysUserId,
+    );
+
     const res = await this.callBpm(
       'POST',
       'approvals/start',
@@ -83,6 +101,7 @@ export class ApprovalService {
         businessKey: dto.businessId,
         initiator: initiatorBpmId,
         approvalChain: chain,
+        initialAssignee: initialAssigneeBpmId,
       },
       this.syncUserId,
     );
@@ -107,10 +126,65 @@ export class ApprovalService {
     return { list: await this.enrichRecords(enriched), total: items.length };
   }
 
-  async approve(processInstanceId: string, sysUserId: string, approved: boolean, comment?: string) {
+  /**
+   * Preview the first chain step for a not-yet-submitted business record, so
+   * the submit UI can show a candidate picker before calling startApproval.
+   * Mirrors previewNextStep but works off a resolved chain directly (no
+   * process instance exists yet).
+   */
+  async previewFirstStep(businessType: string, record: Record<string, unknown> | undefined, initiatorSysUserId: string) {
+    const chain = await this.resolveChain(businessType, record);
+    const firstStep = chain[0];
+    const ruleId = parseSrvRuleId(firstStep);
+    if (!ruleId) return { firstStep: firstStep ?? null, ruleId: null, candidates: [] };
+    const candidates = await this.candidateResolution.resolveCandidates(ruleId, initiatorSysUserId);
+    return { firstStep, ruleId, candidates };
+  }
+
+  /**
+   * Preview the next chain step for an in-flight task, so the frontend knows
+   * whether to show a candidate picker before the approver submits their
+   * decision. Returns null candidates when the next step is a legacy
+   * auto-resolved rule (no pick needed) or there is no next step.
+   */
+  async previewNextStep(processInstanceId: string) {
+    const approval = await this.findActiveByProcessInstance(processInstanceId);
+    if (!approval) throw new BadRequestException(`Unknown process instance ${processInstanceId}`);
+
+    const chainIndexRes = await this.callBpm('GET', `approvals/${processInstanceId}/chain-index`, undefined, this.syncUserId);
+    const currentIndex: number | null = chainIndexRes?.data?.chainIndex ?? null;
+    if (currentIndex === null) return { nextStep: null, ruleId: null, candidates: [] };
+
+    const record = await this.loadRecord(approval.businessType, approval.businessId);
+    const chain = await this.resolveChain(approval.businessType, record ?? undefined);
+    const nextStep = chain[currentIndex + 1];
+    const ruleId = parseSrvRuleId(nextStep);
+    if (!ruleId) return { nextStep: nextStep ?? null, ruleId: null, candidates: [] };
+
+    const initiatorSysUserId = await this.sysUserIdForBpmId(approval.initiatorId);
+    if (!initiatorSysUserId) return { nextStep, ruleId, candidates: [] };
+    const candidates = await this.candidateResolution.resolveCandidates(ruleId, initiatorSysUserId);
+    return { nextStep, ruleId, candidates };
+  }
+
+  async approve(processInstanceId: string, sysUserId: string, approved: boolean, comment?: string, nextApproverUserId?: string) {
     const bpmId = await this.bpmIdFor(sysUserId);
     if (!bpmId) throw new BadRequestException('当前用户未同步到 BPM，无法执行审批。管理员账户无需参与审批流程。');
-    return this.callBpm('POST', `approvals/${processInstanceId}/approve`, { approved, comment }, bpmId);
+
+    let nextAssigneeBpmId: string | undefined;
+    if (approved) {
+      const preview = await this.previewNextStep(processInstanceId);
+      if (preview.ruleId) {
+        nextAssigneeBpmId = await this.resolvePickedAssigneeForRule(preview.ruleId, nextApproverUserId, preview.candidates);
+      }
+    }
+
+    return this.callBpm(
+      'POST',
+      `approvals/${processInstanceId}/approve`,
+      { approved, comment, nextAssignee: nextAssigneeBpmId },
+      bpmId,
+    );
   }
 
   /** Approvals I submitted (from business_approvals by initiator). */
@@ -433,11 +507,81 @@ export class ApprovalService {
     return u[0]?.bpmUserId ?? null;
   }
 
+  private async sysUserIdForBpmId(bpmUserId: string | null | undefined): Promise<string | null> {
+    if (!bpmUserId) return null;
+    const u = await this.db
+      .select({ id: sysUsers.id })
+      .from(sysUsers)
+      .where(and(eq(sysUsers.bpmUserId, bpmUserId), isNull(sysUsers.deletedAt)))
+      .limit(1);
+    return u[0]?.id ?? null;
+  }
+
+  /**
+   * Resolve the BPM user id for a chain step's picked approver. If the step
+   * is not a srv:<ruleId> combined-filter rule, returns undefined (legacy
+   * auto-resolved step — nothing for a human to pick). If it is, the pick is
+   * required and validated against the rule's Candidate List — an empty
+   * Candidate List or a pick outside it is a blocking error (see CONTEXT.md).
+   */
+  private async resolvePickedAssignee(
+    step: string,
+    pickedUserId: string | undefined,
+    initiatorSysUserId: string,
+  ): Promise<string | undefined> {
+    const ruleId = parseSrvRuleId(step);
+    if (!ruleId) return undefined;
+    const candidates = await this.candidateResolution.resolveCandidates(ruleId, initiatorSysUserId);
+    return this.resolvePickedAssigneeForRule(ruleId, pickedUserId, candidates);
+  }
+
+  private async resolvePickedAssigneeForRule(
+    ruleId: string,
+    pickedUserId: string | undefined,
+    candidates: Array<{ id: string }>,
+  ): Promise<string> {
+    if (candidates.length === 0) {
+      throw new BadRequestException(
+        `候选人列表为空（规则 srv:${ruleId}），无法继续审批流程，请检查规则配置或组织架构数据。`,
+      );
+    }
+    if (!pickedUserId) {
+      throw new BadRequestException(`该步骤需要从候选人列表中选择审批人（规则 srv:${ruleId}）。`);
+    }
+    if (!candidates.some((c) => c.id === pickedUserId)) {
+      throw new BadRequestException(`所选人员不在候选人列表中（规则 srv:${ruleId}）。`);
+    }
+    const bpmId = await this.bpmIdFor(pickedUserId);
+    if (!bpmId) {
+      throw new BadRequestException('所选审批人未同步到 BPM 系统，无法指定为审批人。');
+    }
+    return bpmId;
+  }
+
+  private async loadRecord(businessType: string, businessId: string): Promise<Record<string, unknown> | null> {
+    if (!TABLE_RE.test(businessType)) return null;
+    const res = await this.db.execute(sql`
+      SELECT * FROM ${sql.raw(`"lc_${businessType}"`)}
+      WHERE id = ${businessId} AND deleted_at IS NULL
+      LIMIT 1`);
+    const rows = this.unwrapRows(res);
+    return rows[0] ?? null;
+  }
+
   private async findActive(businessType: string, businessId: string): Promise<BusinessApproval | undefined> {
     const rows = await this.db
       .select()
       .from(businessApprovals)
       .where(and(eq(businessApprovals.businessType, businessType), eq(businessApprovals.businessId, businessId), isNull(businessApprovals.deletedAt)))
+      .limit(1);
+    return rows[0];
+  }
+
+  private async findActiveByProcessInstance(processInstanceId: string): Promise<BusinessApproval | undefined> {
+    const rows = await this.db
+      .select()
+      .from(businessApprovals)
+      .where(and(eq(businessApprovals.processInstanceId, processInstanceId), isNull(businessApprovals.deletedAt)))
       .limit(1);
     return rows[0];
   }

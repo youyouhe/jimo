@@ -31,7 +31,7 @@ public class ApprovalController {
         this.approvalService = approvalService;
     }
 
-    /** Start an approval flow. Body: { businessType, businessKey, processKey?, initiator, approvalChain: [rule...] }. */
+    /** Start an approval flow. Body: { businessType, businessKey, processKey?, initiator, approvalChain: [rule...], initialAssignee? }. */
     @PostMapping("/start")
     public Result<?> start(@RequestBody Map<String, Object> body, HttpServletRequest request) {
         AuthInterceptor.requirePermission(request, "process:start");
@@ -42,7 +42,8 @@ public class ApprovalController {
                 str(body, "businessKey"),
                 str(body, "processKey"),
                 str(body, "initiator"),
-                chain));
+                chain,
+                str(body, "initialAssignee")));
     }
 
     /** Active tasks assigned to the caller (across all business types). */
@@ -59,6 +60,7 @@ public class ApprovalController {
             m.put("processInstanceId", t.getProcessInstanceId());
             m.put("assignee", t.getAssignee());
             m.put("createTime", t.getCreateTime() == null ? null : t.getCreateTime().getTime());
+            m.put("chainIndex", approvalService.getChainIndex(t.getProcessInstanceId()));
             items.add(m);
         }
         return Result.ok(Map.of("list", items, "total", items.size()));
@@ -73,7 +75,7 @@ public class ApprovalController {
         return Result.ok(Map.of("list", items, "total", items.size()));
     }
 
-    /** Approve or reject the caller's active task in a process. Body: { approved, comment? }. */
+    /** Approve or reject the caller's active task in a process. Body: { approved, comment?, nextAssignee? }. */
     @PostMapping("/{processInstanceId}/approve")
     public Result<?> approve(@PathVariable String processInstanceId,
                              @RequestBody Map<String, Object> body,
@@ -87,7 +89,8 @@ public class ApprovalController {
                 processInstanceId,
                 userId,
                 Boolean.TRUE.equals(body.get("approved")),
-                str(body, "comment")));
+                str(body, "comment"),
+                str(body, "nextAssignee")));
     }
 
     /** Approval status for a business record. */
@@ -97,6 +100,16 @@ public class ApprovalController {
                             HttpServletRequest request) {
         AuthInterceptor.requirePermission(request, "process:view");
         return Result.ok(approvalService.get(businessType, businessKey));
+    }
+
+    /** Current chainIndex for a running process — lets NestJS preview the next
+     *  chain step (and whether it needs a human candidate pick) before it's reached. */
+    @GetMapping("/{processInstanceId}/chain-index")
+    public Result<?> chainIndex(@PathVariable String processInstanceId, HttpServletRequest request) {
+        AuthInterceptor.requirePermission(request, "process:view");
+        Map<String, Object> m = new HashMap<>();
+        m.put("chainIndex", approvalService.getChainIndex(processInstanceId));
+        return Result.ok(m);
     }
 
     private static String str(Map<String, Object> body, String key) {

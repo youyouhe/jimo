@@ -24,9 +24,17 @@
                 def chain = new JsonSlurper().parseText(approvalChain)
                 int idx = chainIndex as int
                 if (idx < chain.size()) {
-                    execution.setVariable("assigneeRule", chain[idx])
-                    execution.setVariable("currentStepLabel", chain[idx])
+                    def step = chain[idx]
+                    execution.setVariable("currentStepLabel", step)
                     execution.setVariable("hasMoreSteps", idx < chain.size() - 1)
+                    if (step != null && step.toString().startsWith("srv:")) {
+                        // Server-side combined-filter rule: the assignee is a human
+                        // pick, already placed in `pickedAssignee` by ApprovalService
+                        // before this task is created. Do not auto-resolve.
+                        execution.setVariable("assigneeRule", null)
+                    } else {
+                        execution.setVariable("assigneeRule", step)
+                    }
                 } else {
                     execution.setVariable("assigneeRule", null)
                     execution.setVariable("hasMoreSteps", false)
