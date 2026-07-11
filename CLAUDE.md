@@ -239,3 +239,17 @@ Optional: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `MYSQL_ROOT_PASSW
 - Frontend `.umirc.ts` proxy directs `/api` to `http://localhost:8888` in dev. In Docker Compose, the web container is a standalone Umi dev server.
 - `pnpm` is pinned via `packageManager: pnpm@9.15.9` — use Corepack (or a matching pnpm) rather than a globally installed different major.
 - A drizzle-kit patch is applied via `pnpm.patchedDependencies` (`patches/drizzle-kit@0.31.10.patch`) — `pnpm install` handles it, but keep the patch in sync if you upgrade drizzle-kit.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Multi-context — a root `CONTEXT-MAP.md` points to per-context `CONTEXT.md` files (`jimo/apps/server/`, `jimo/apps/web/`, `jimo/packages/shared/`, `bpm/bpm-service/`). See `docs/agents/domain.md`.
