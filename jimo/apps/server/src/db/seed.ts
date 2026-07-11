@@ -298,6 +298,30 @@ async function seedMenus(db: ReturnType<typeof createDb>): Promise<void> {
       menuType: 2,
       permission: 'system:init',
     },
+    // ── System > Department (org) Management ──
+    {
+      name: '组织管理',
+      path: '/system/departments',
+      component: './departments/index',
+      icon: 'ApartmentOutlined',
+      parentId: null,
+      sort: 14,
+      isVisible: 1,
+      menuType: 2,
+      permission: 'system:department:list',
+    },
+    // ── System > Employee Management ──
+    {
+      name: '员工管理',
+      path: '/system/employees',
+      component: './employees/index',
+      icon: 'IdcardOutlined',
+      parentId: null,
+      sort: 15,
+      isVisible: 1,
+      menuType: 2,
+      permission: 'system:employee:list',
+    },
     // ── System Tools (directory) ──
     {
       name: '系统工具',
@@ -551,6 +575,8 @@ async function seedMenus(db: ReturnType<typeof createDb>): Promise<void> {
     '创建用户': '用户管理',
     '编辑用户': '用户管理',
     '删除用户': '用户管理',
+    '组织管理': '系统管理',
+    '员工管理': '系统管理',
     '角色管理': '系统管理',
     '创建角色': '角色管理',
     '编辑角色': '角色管理',
