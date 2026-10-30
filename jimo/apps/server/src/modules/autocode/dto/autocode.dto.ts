@@ -139,6 +139,16 @@ export class AutoCodeField {
   @IsBoolean()
   calendarTitle?: boolean = false;
 
+  @ApiProperty({ description: 'Mark this dict field as the kanban grouping column (kanban page only, exactly one field)', default: false })
+  @IsOptional()
+  @IsBoolean()
+  kanbanGroup?: boolean = false;
+
+  @ApiProperty({ description: 'Mark this varchar/text field as part of the kanban card title (kanban page only, multiple allowed)', default: false })
+  @IsOptional()
+  @IsBoolean()
+  kanbanTitle?: boolean = false;
+
   // ── Relation-specific fields (only used when type === 'relation') ──
 
   @ApiPropertyOptional({
@@ -436,11 +446,11 @@ export class AutoCodeDto {
   agentConfig?: AgentConfigDto;
 
   @ApiPropertyOptional({
-    description: '前端页面类型：list=标准列表弹窗编辑（默认），document=单据页（列表+独立详情页），grid=Excel式可编辑表格（单元格直编），calendar=日历视图（按日期挂载记录）',
-    enum: ['list', 'document', 'grid', 'calendar'],
+    description: '前端页面类型：list=标准列表弹窗编辑（默认），document=单据页（列表+独立详情页），grid=Excel式可编辑表格（单元格直编），calendar=日历视图（按日期挂载记录），kanban=看板视图（按 dict 字段分组，拖拽换列）',
+    enum: ['list', 'document', 'grid', 'calendar', 'kanban'],
     default: 'list',
   })
   @IsOptional()
-  @IsIn(['list', 'document', 'grid', 'calendar'])
-  pageType?: 'list' | 'document' | 'grid' | 'calendar';
+  @IsIn(['list', 'document', 'grid', 'calendar', 'kanban'])
+  pageType?: 'list' | 'document' | 'grid' | 'calendar' | 'kanban';
 }

@@ -22,11 +22,15 @@ import {
   generateFrontendPage,
   generateFrontendDocumentListPage,
   generateFrontendGridPage,
+  generateFrontendCalendarPage,
+  generateFrontendKanbanPage,
 } from './autocode-frontend-generators';
 
 function generatePage(dto: any): string {
   if (dto.pageType === 'document') return generateFrontendDocumentListPage(dto);
   if (dto.pageType === 'grid') return generateFrontendGridPage(dto);
+  if (dto.pageType === 'calendar') return generateFrontendCalendarPage(dto);
+  if (dto.pageType === 'kanban') return generateFrontendKanbanPage(dto);
   return generateFrontendPage(dto);
 }
 
@@ -43,8 +47,11 @@ const tableNameArb = fc.tuple(
   fc.constantFrom('', 's', '_log', '_hist', '_draft'),
 ).map(([a, b]) => a + b);
 
+// dict is included so calendar/kanban runs sometimes get a real grouping/dict field —
+// the rest of the matrix (calendarStart/End/Title, kanbanGroup/Title) is meaningless
+// for non-dict/non-timestamp/non-varchar fields and is masked out below.
 const simpleTypeArb = fc.constantFrom(
-  'varchar', 'text', 'integer', 'bigint', 'decimal', 'boolean', 'timestamp', 'code', 'calculated',
+  'varchar', 'text', 'integer', 'bigint', 'decimal', 'boolean', 'timestamp', 'code', 'calculated', 'dict',
 );
 
 const fieldArb = identArb.chain((name) =>
@@ -57,6 +64,15 @@ const fieldArb = identArb.chain((name) =>
     creatable: fc.boolean(),
     searchable: fc.boolean(),
     listable: fc.boolean(),
+    dictType: fc.constant(`${name}_dict`),
+    // Only meaningful when type === 'timestamp'/'varchar'/'text'/'dict' respectively —
+    // the generators themselves guard on field.type, so setting these unconditionally
+    // exercises that guard instead of relying on the fuzzer to correlate type+flag.
+    calendarStart: fc.boolean(),
+    calendarEnd: fc.boolean(),
+    calendarTitle: fc.boolean(),
+    kanbanGroup: fc.boolean(),
+    kanbanTitle: fc.boolean(),
   }),
 );
 
@@ -65,7 +81,7 @@ const fieldsArb = fc.uniqueArray(fieldArb, { minLength: 1, maxLength: 8, selecto
 const dtoArb = fc.record({
   tableName: tableNameArb,
   description: fc.constant('random entity'),
-  pageType: fc.constantFrom('list', 'document', 'grid'),
+  pageType: fc.constantFrom('list', 'document', 'grid', 'calendar', 'kanban'),
   fields: fieldsArb,
   agentConfig: fc.oneof(fc.constant(undefined), fc.constant({ enabled: true })),
 });
@@ -133,6 +149,58 @@ describe('L0+ property: generators across a random DTO matrix', () => {
         if (dto.pageType !== 'grid') return true;
         const src = generatePage(dto);
         expect(src).toContain('scheduleCreate');
+        return true;
+      }),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('calendar page never throws, even with zero timestamp fields (falls back to fields[0])', () => {
+    fc.assert(
+      fc.property(dtoArb, (dto) => {
+        if (dto.pageType !== 'calendar') return true;
+        const src = generatePage(dto);
+        expect(src.length).toBeGreaterThan(200);
+        return true;
+      }),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('kanban page never throws, even with zero dict fields (falls back to fields[0])', () => {
+    fc.assert(
+      fc.property(dtoArb, (dto) => {
+        if (dto.pageType !== 'kanban') return true;
+        const src = generatePage(dto);
+        expect(src.length).toBeGreaterThan(200);
+        return true;
+      }),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('kanban page always drags via @dnd-kit/core and never emits a dedicated move endpoint', () => {
+    fc.assert(
+      fc.property(dtoArb, (dto) => {
+        if (dto.pageType !== 'kanban') return true;
+        const src = generatePage(dto);
+        expect(src).toContain("from '@dnd-kit/core'");
+        expect(src).not.toMatch(/\/move\b/);
+        return true;
+      }),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('kanban page excludes the resolved group field from the edit-modal form', () => {
+    fc.assert(
+      fc.property(dtoArb, (dto) => {
+        if (dto.pageType !== 'kanban') return true;
+        const src = generatePage(dto);
+        const groupField = dto.fields.find((f: any) => f.kanbanGroup && f.type === 'dict')
+          || dto.fields.find((f: any) => f.type === 'dict')
+          || dto.fields[0];
+        expect(src).not.toMatch(new RegExp(`name="${groupField.name}"`));
         return true;
       }),
       { numRuns: RUNS },

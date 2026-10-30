@@ -598,3 +598,4 @@ export { generateFrontendDocumentListPage, generateFrontendDocumentPage } from '
 export { generateFrontendGridPage } from './generators/grid-page-generator';
 export { generateFrontendMapPage } from './generators/map-page-generator';
 export { generateFrontendCalendarPage } from './generators/calendar-page-generator';
+export { generateFrontendKanbanPage } from './generators/kanban-page-generator';

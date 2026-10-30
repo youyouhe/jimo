@@ -24,10 +24,10 @@ export class AiChatContextDto {
   @IsString()
   approvalChain?: string;
 
-  @ApiPropertyOptional({ enum: ['list', 'document', 'grid', 'calendar'], description: '前端页面类型' })
+  @ApiPropertyOptional({ enum: ['list', 'document', 'grid', 'calendar', 'kanban'], description: '前端页面类型' })
   @IsOptional()
-  @IsIn(['list', 'document', 'grid', 'calendar'])
-  pageType?: 'list' | 'document' | 'grid' | 'calendar';
+  @IsIn(['list', 'document', 'grid', 'calendar', 'kanban'])
+  pageType?: 'list' | 'document' | 'grid' | 'calendar' | 'kanban';
 
   @ApiPropertyOptional({ enum: ['private', 'department', 'shared', 'public'], description: '数据可见性策略' })
   @IsOptional()

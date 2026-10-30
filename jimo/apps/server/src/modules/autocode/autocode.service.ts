@@ -57,6 +57,8 @@ import {
   generateFrontendDocumentPage,
   generateFrontendGridPage,
   generateFrontendMapPage,
+  generateFrontendCalendarPage,
+  generateFrontendKanbanPage,
 } from './autocode-frontend-generators';
 
 // Extracted services
@@ -163,6 +165,10 @@ export class AutocodeService {
         files[`apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto);
       } else if (dto.pageType === 'grid') {
         files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto);
+      } else if (dto.pageType === 'calendar') {
+        files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendCalendarPage(activeDto);
+      } else if (dto.pageType === 'kanban') {
+        files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendKanbanPage(activeDto);
       } else {
         files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto);
       }
@@ -213,8 +219,23 @@ export class AutocodeService {
     }
   }
 
+  private assertKanbanGroupField(dto: {
+    fields: { name?: string; removed?: boolean; type?: string; kanbanGroup?: boolean }[];
+    pageType?: string;
+  }): void {
+    if (dto.pageType !== 'kanban') return;
+    const groupFields = dto.fields.filter((f) => !f.removed && f.kanbanGroup && f.type === 'dict');
+    if (groupFields.length === 0) {
+      throw new BadRequestException(
+        '看板（kanban）页面必须指定一个 dict 类型字段作为分组列（kanbanGroup），否则无法确定看板列。请在字段编辑器中为一个 dict 字段勾选"看板分组"。',
+      );
+    }
+  }
+
   async generate(dto: AutoCodeDto): Promise<{ createdFiles: string[] }> {
     this.assertNoApprovalStatusField(dto);
+    this.assertKanbanGroupField(dto);
+
 
     // Normalize tableName and resolve _packageSlug before preview/deriveNames calls
     if (dto.tableName && !dto.tableName.startsWith('lc_')) {
@@ -244,6 +265,10 @@ export class AutocodeService {
           files[`apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto, relationDictTypes);
         } else if (dto.pageType === 'grid') {
           files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto, relationDictTypes);
+        } else if (dto.pageType === 'calendar') {
+          files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendCalendarPage(activeDto, relationDictTypes);
+        } else if (dto.pageType === 'kanban') {
+          files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendKanbanPage(activeDto, relationDictTypes);
         } else {
           files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
         }
@@ -349,6 +374,7 @@ export class AutocodeService {
 
   async startGenerate(dto: AutoCodeDto): Promise<string> {
     this.assertNoApprovalStatusField(dto);
+    this.assertKanbanGroupField(dto);
     const jobId = randomUUID();
     const steps = AutocodeService.GENERATE_STEPS.map((s) => ({
       key: s.key, label: s.label, status: 'pending' as const,
@@ -371,6 +397,7 @@ export class AutocodeService {
     if (!latest) {
       throw new NotFoundException(`No existing version found for table '${dto.tableName}'.`);
     }
+    this.assertKanbanGroupField({ fields: dto.fields, pageType: dto.pageType ?? (latest as any).pageType ?? 'list' });
 
     const oldFields = (latest.fields as AutoCodeField[]) ?? [];
     if (!this.historyService.hasStructuralChange(oldFields, dto.fields) && !dto.force) {
@@ -704,6 +731,10 @@ export class AutocodeService {
             files[`apps/web/src/pages/${n.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto, relationDictTypes);
           } else if (dto.pageType === 'grid') {
             files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto, relationDictTypes);
+          } else if (dto.pageType === 'calendar') {
+            files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendCalendarPage(activeDto, relationDictTypes);
+          } else if (dto.pageType === 'kanban') {
+            files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendKanbanPage(activeDto, relationDictTypes);
           } else {
             files[`apps/web/src/pages/${n.pageDir}/index.tsx`] = generateFrontendPage(activeDto, relationDictTypes);
           }
@@ -894,6 +925,10 @@ export class AutocodeService {
             files[`apps/web/src/pages/${n2.pageDir}/detail.tsx`] = generateFrontendDocumentPage(activeDto2, relationDictTypes2);
           } else if (autoCodeDto.pageType === 'grid') {
             files[`apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendGridPage(activeDto2, relationDictTypes2);
+          } else if (autoCodeDto.pageType === 'calendar') {
+            files[`apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendCalendarPage(activeDto2, relationDictTypes2);
+          } else if (autoCodeDto.pageType === 'kanban') {
+            files[`apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendKanbanPage(activeDto2, relationDictTypes2);
           } else {
             files[`apps/web/src/pages/${n2.pageDir}/index.tsx`] = generateFrontendPage(activeDto2, relationDictTypes2);
           }

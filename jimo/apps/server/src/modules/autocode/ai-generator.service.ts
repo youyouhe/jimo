@@ -134,7 +134,7 @@ export class AiGeneratorService {
 - **审批流**：${ctx.approvalEnabled
   ? `已启用（链：${ctx.approvalChain || 'deptHead'}）— **绝不能**在业务表字段里出现 status / approval_* / approve_* 等审批状态字段，否则生成器报错。审批状态由平台 business_approvals + BPM 全权托管。`
   : '未启用'}
-- **页面类型**：${ctx.pageType === 'document' ? 'document（单据页）' : ctx.pageType === 'grid' ? 'grid（Excel式可编辑表格，单元格直编、自动保存）' : 'list（标准列表）'}
+- **页面类型**：${ctx.pageType === 'document' ? 'document（单据页）' : ctx.pageType === 'grid' ? 'grid（Excel式可编辑表格，单元格直编、自动保存）' : ctx.pageType === 'calendar' ? 'calendar（日历视图）' : ctx.pageType === 'kanban' ? 'kanban（看板视图，按 dict 字段分组）' : 'list（标准列表）'}
 - **数据可见性**：${ctx.visibilityStrategy ?? 'private'}` : '';
 
       // 将状态注入为对话开头的 user/assistant 消息对，模型注意力最高
@@ -158,17 +158,24 @@ ${pkgList}${optionsBlock}
 - **document（单据页）**：列表 + 独立详情/编辑页，适合合同、凭证、入库单等字段多的单据。
 - **grid（Excel 式可编辑表格）**：单元格直接编辑、自动保存，适合批量维护基础数据。
 - **calendar（日历视图）**：按月将记录以事件 chip 挂载到日期格上，按可选的起止日期跨天。
+- **kanban（看板视图）**：按一个 dict 字段的取值分组成看板列，卡片可拖拽换列（自动 PATCH 更新分组字段），适合任务看板、审批队列、商机阶段等有限状态流转的场景。
 
   **日历类型的字段设计指引**（用户让你「建一个日历/日程/排班/时间表」时遵循）：
   - 至少一个 \`timestamp\` 字段（作为「开始日期」——用户在生成后手动标记）。
   - 如需跨天事件，再给一个 \`timestamp\` 字段（作为「结束日期」——同样由用户标记）。
   - 给一个 \`varchar\` 字段（名称/标题/内容），作为日历 chip 上的显示文字（多个可拼接）。
   - 其他业务字段（类型、状态、备注等）正常设计。
-  ⚠️ 你只需要像正常建表一样设计字段；开始/结束/标题由用户在生成器里通过开关手动指定，不需要你在 propose_entity 里特殊处理。`,
+  ⚠️ 你只需要像正常建表一样设计字段；开始/结束/标题由用户在生成器里通过开关手动指定，不需要你在 propose_entity 里特殊处理。
+
+  **看板类型的字段设计指引**（用户让你「建一个看板/任务板/工作流队列」时遵循）：
+  - 必须有至少一个 \`dict\` 字段（如「状态」「阶段」），作为看板分组列——用户在生成后手动标记为「看板分组」，dictType 选一个能覆盖典型状态流转的字典（不存在就先 create_dict）。
+  - 建议给一个 \`varchar\` 字段（名称/标题），作为看板卡片标题——用户在生成后手动标记为「看板标题」。
+  - 其他业务字段正常设计；看板本质是全量拉取展示，不适合超大数据量的表。
+  ⚠️ 分组字段和标题字段由用户在生成器里通过开关手动指定，你不需要在 propose_entity 里特殊处理，但务必确保至少设计了一个 dict 字段，否则用户无法生成看板页。`,
       };
       const stateAck: CoreMessage = {
         role: 'assistant',
-        content: `已收到系统状态，我会在本次对话中：① 不重复提议已存在的表；② 优先复用现有字典和 Package；③ 需要时用 list_tables/list_dicts/list_packages 实时查询最新状态；④ 用户没明确要求时不创建 Package，绝不为单张表硬建同名 Package，表可留空 packageId。⑤ 平台支持 list（标准列表）/ document（单据页）/ grid（Excel 可编辑表格）/ calendar（日历视图）四种页面类型——用户说「日历/日程/排班/时间表」时，我会按日历字段指引设计：至少一个 timestamp 字段作开始日期，可选结束日期，一个显示标题的 varchar 字段。${ctx?.approvalEnabled ? '⑥ 审批流已启用，设计字段时绝不出现 status/approval_*/approve_* 等审批状态字段，这些由平台托管。' : ''}`,
+        content: `已收到系统状态，我会在本次对话中：① 不重复提议已存在的表；② 优先复用现有字典和 Package；③ 需要时用 list_tables/list_dicts/list_packages 实时查询最新状态；④ 用户没明确要求时不创建 Package，绝不为单张表硬建同名 Package，表可留空 packageId。⑤ 平台支持 list（标准列表）/ document（单据页）/ grid（Excel 可编辑表格）/ calendar（日历视图）/ kanban（看板视图）五种页面类型——用户说「日历/日程/排班/时间表」时，我会按日历字段指引设计：至少一个 timestamp 字段作开始日期，可选结束日期，一个显示标题的 varchar 字段；用户说「看板/任务板/工作流队列」时，我会确保设计至少一个 dict 字段作分组依据，并建议一个 varchar 字段作标题。${ctx?.approvalEnabled ? '⑥ 审批流已启用，设计字段时绝不出现 status/approval_*/approve_* 等审批状态字段，这些由平台托管。' : ''}`,
       };
 
       const userMessages = dto.messages.map((m) => ({

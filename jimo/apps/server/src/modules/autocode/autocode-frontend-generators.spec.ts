@@ -23,6 +23,8 @@ import {
   generateFrontendDocumentListPage,
   generateFrontendDocumentPage,
   generateFrontendGridPage,
+  generateFrontendCalendarPage,
+  generateFrontendKanbanPage,
 } from './autocode-frontend-generators';
 import { toPascalCase, singularize } from './autocode-field-utils';
 import type { AutoCodeFieldType } from './dto/autocode.dto';
@@ -44,6 +46,8 @@ const f = (name: string, type: AutoCodeFieldType, extra: Record<string, any> = {
 function generatePage(dto: any): string {
   if (dto.pageType === 'document') return generateFrontendDocumentListPage(dto);
   if (dto.pageType === 'grid') return generateFrontendGridPage(dto);
+  if (dto.pageType === 'calendar') return generateFrontendCalendarPage(dto);
+  if (dto.pageType === 'kanban') return generateFrontendKanbanPage(dto);
   return generateFrontendPage(dto);
 }
 
@@ -146,6 +150,8 @@ describe('L0 generator contract: all pageTypes emit valid source', () => {
     { tableName: 'g_basic', pageType: 'grid', fields: [f('name', 'varchar', { required: true })] },
     { tableName: 'l_basic', pageType: 'list', fields: [f('name', 'varchar', { required: true })] },
     { tableName: 'd_basic', pageType: 'document', fields: [f('name', 'varchar', { required: true })] },
+    { tableName: 'c_basic', pageType: 'calendar', fields: [f('name', 'varchar', { required: true }), f('at', 'timestamp')] },
+    { tableName: 'k_basic', pageType: 'kanban', fields: [f('name', 'varchar', { required: true }), f('stage', 'dict', { dictType: 'k_basic_stage', kanbanGroup: true })] },
   ];
 
   it.each(cases)('$pageType page is non-empty and references its service module', (dto: any) => {
@@ -166,5 +172,100 @@ describe('L0 generator contract: all pageTypes emit valid source', () => {
     const detail = generateFrontendDocumentPage(dto);
     expect(list).toContain('history');
     expect(detail).toContain('useParams');
+  });
+});
+
+describe('L0 generator contract: calendar page', () => {
+  const calendarBasic = {
+    tableName: 'c_basic',
+    description: '日程',
+    pageType: 'calendar',
+    fields: [
+      f('title', 'varchar', { required: true, calendarTitle: true }),
+      f('start_at', 'timestamp', { calendarStart: true }),
+      f('end_at', 'timestamp', { calendarEnd: true }),
+    ],
+  };
+
+  it('resolves the explicitly-marked start/end/title fields, not a heuristic fallback', () => {
+    const src = generateFrontendCalendarPage(calendarBasic as any);
+    expect(src).toContain('r.start_at');
+    expect(src).toContain('r.end_at');
+    expect(src).toContain('r.title');
+  });
+
+  it('falls back to the first timestamp field when no field is marked calendarStart', () => {
+    const dto: any = {
+      tableName: 'c_fallback',
+      description: '无显式开始日期',
+      pageType: 'calendar',
+      fields: [f('name', 'varchar', { required: true }), f('happened_at', 'timestamp')],
+    };
+    const src = generateFrontendCalendarPage(dto);
+    expect(src).toContain('r.happened_at');
+  });
+
+  it('never PATCHes/POSTs any new "move" endpoint — start/end change only via the normal edit modal', () => {
+    const src = generateFrontendCalendarPage(calendarBasic as any);
+    expect(src).not.toMatch(/\/move\b/);
+  });
+});
+
+describe('L0 generator contract: kanban page', () => {
+  const kanbanBasic = {
+    tableName: 'k_basic',
+    description: '任务看板',
+    pageType: 'kanban',
+    fields: [
+      f('title', 'varchar', { required: true, kanbanTitle: true }),
+      f('stage', 'dict', { dictType: 'k_basic_stage', kanbanGroup: true }),
+      f('assignee', 'varchar'),
+    ],
+  };
+
+  it('resolves the kanbanGroup dict field and its dictType for column loading', () => {
+    const src = generateFrontendKanbanPage(kanbanBasic as any);
+    expect(src).toContain("getDictDetailsByType('k_basic_stage')");
+    expect(src).toContain('r.stage');
+  });
+
+  it('drag-drop reuses the existing update API — no dedicated move endpoint', () => {
+    const src = generateFrontendKanbanPage(kanbanBasic as any);
+    expect(src).toContain('updateKBasic(record.id, { stage: targetValue }');
+    expect(src).not.toMatch(/\/move\b/);
+  });
+
+  it('excludes the group field from the edit modal (group changes are drag-only)', () => {
+    const src = generateFrontendKanbanPage(kanbanBasic as any);
+    // The group field must not appear as a ProForm* field in the modal body.
+    expect(src).not.toMatch(/name="stage"/);
+  });
+
+  it('card title reflects kanbanTitle field, and falls back to first listable varchar otherwise', () => {
+    const withTitle = generateFrontendKanbanPage(kanbanBasic as any);
+    expect(withTitle).toContain('r.title');
+
+    const noExplicitTitle: any = {
+      tableName: 'k_fallback',
+      description: '无显式标题',
+      pageType: 'kanban',
+      fields: [
+        f('name', 'varchar', { required: true }),
+        f('stage', 'dict', { dictType: 'k_fallback_stage', kanbanGroup: true }),
+      ],
+    };
+    const src = generateFrontendKanbanPage(noExplicitTitle);
+    expect(src).toContain('r.name');
+  });
+
+  it('renders non-title listable fields on the card body', () => {
+    const src = generateFrontendKanbanPage(kanbanBasic as any);
+    expect(src).toContain('r.assignee');
+  });
+
+  it('uses @dnd-kit/core, not a hand-rolled HTML5 DnD implementation', () => {
+    const src = generateFrontendKanbanPage(kanbanBasic as any);
+    expect(src).toContain("from '@dnd-kit/core'");
+    expect(src).not.toMatch(/onDragOver=|onDrop=/);
   });
 });

@@ -22,6 +22,10 @@ export interface AutoCodeField {
   calendarEnd?: boolean;
   /** Mark this varchar/text field as the calendar event title (calendar page only) */
   calendarTitle?: boolean;
+  /** Mark this dict field as the kanban grouping column (kanban page only, exactly one field) */
+  kanbanGroup?: boolean;
+  /** Mark this varchar/text field as part of the kanban card title (kanban page only, multiple allowed) */
+  kanbanTitle?: boolean;
   // Relation-specific
   relationType?: 'many-to-one' | 'many-to-many' | 'one-to-many';
   relationTable?: string;
@@ -64,7 +68,7 @@ export interface AutoCodeDto {
   // Agent configuration (opt-in). Enables an accompanying agent for the entity.
   agentConfig?: { enabled: boolean; tools?: ('query' | 'create' | 'update' | 'delete' | 'search' | 'mock')[]; systemPrompt?: string };
   // Page type: list=standard table+modal (default), document=list+dedicated detail page
-  pageType?: 'list' | 'document' | 'grid' | 'calendar';
+  pageType?: 'list' | 'document' | 'grid' | 'calendar' | 'kanban';
 }
 
 export interface TemplateMetadata {

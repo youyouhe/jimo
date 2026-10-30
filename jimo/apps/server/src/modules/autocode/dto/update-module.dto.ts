@@ -50,10 +50,10 @@ export class UpdateModuleDto {
   @IsBoolean()
   force?: boolean = false;
 
-  @ApiPropertyOptional({ enum: ['list', 'document', 'grid', 'calendar'], description: '前端页面类型' })
+  @ApiPropertyOptional({ enum: ['list', 'document', 'grid', 'calendar', 'kanban'], description: '前端页面类型' })
   @IsOptional()
-  @IsIn(['list', 'document', 'grid', 'calendar'])
-  pageType?: 'list' | 'document' | 'grid' | 'calendar';
+  @IsIn(['list', 'document', 'grid', 'calendar', 'kanban'])
+  pageType?: 'list' | 'document' | 'grid' | 'calendar' | 'kanban';
 
   @ApiPropertyOptional({ description: '审批流配置' })
   @IsOptional()

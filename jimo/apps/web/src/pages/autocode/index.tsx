@@ -100,6 +100,8 @@ const DEFAULT_FIELD: AutoCodeField = {
   calendarStart: false,
   calendarEnd: false,
   calendarTitle: false,
+  kanbanGroup: false,
+  kanbanTitle: false,
   removed: false,
 };
 
@@ -503,6 +505,16 @@ function checkFieldTableNameCollision(tableName: string, fields: any[]): string[
   return violations;
 }
 
+// Kanban pages require exactly one dict field marked kanbanGroup — without it there's
+// no way to derive board columns. Mirrors the server-side assertKanbanGroupField check
+// so the user sees the error before submitting rather than after a round trip.
+function checkKanbanGroupField(pageType: string, fields: any[]): string[] {
+  if (pageType !== 'kanban') return [];
+  const hasGroup = (fields || []).some((f) => !f.removed && f.kanbanGroup && f.type === 'dict');
+  if (hasGroup) return [];
+  return ['看板页面必须指定一个 dict 类型字段作为分组列（在字段的 Options 里勾选"看板分组"）'];
+}
+
 // ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
@@ -525,7 +537,7 @@ export default function AutocodePage() {
   // Agent config (opt-in). Enable to create a companion agent for the entity.
   const [agentEnabled, setAgentEnabled] = useState(false);
   // Page type: list=standard table+modal (default), document=list+detail page, grid=Excel-like inline-editable table
-  const [pageType, setPageType] = useState<'list' | 'document' | 'grid' | 'calendar'>('list');
+  const [pageType, setPageType] = useState<'list' | 'document' | 'grid' | 'calendar' | 'kanban'>('list');
 
   // Update mode state
   const [updateMode, setUpdateMode] = useState(false);
@@ -643,6 +655,7 @@ export default function AutocodePage() {
       const violations = [
         ...checkReservedWords(values.fields || []),
         ...checkFieldTableNameCollision(values.tableName, values.fields || []),
+        ...checkKanbanGroupField(pageType, values.fields || []),
       ];
       if (violations.length > 0) {
         Modal.error({
@@ -776,6 +789,7 @@ export default function AutocodePage() {
       const violations = [
         ...checkReservedWords(values.fields || []),
         ...checkFieldTableNameCollision(values.tableName, values.fields || []),
+        ...checkKanbanGroupField(pageType, values.fields || []),
       ];
       if (violations.length > 0) {
         Modal.error({
@@ -1154,15 +1168,16 @@ export default function AutocodePage() {
               </Form.Item>
             </Col>
             <Col span={6}>
-              <Form.Item label="页面类型" tooltip="list=标准列表+弹窗编辑；document=单据页（列表+独立详情页，适合凭证/单据类业务）；grid=Excel式表格，单元格直接编辑、自动保存；calendar=日历视图，按日期挂载记录">
+              <Form.Item label="页面类型" tooltip="list=标准列表+弹窗编辑；document=单据页（列表+独立详情页，适合凭证/单据类业务）；grid=Excel式表格，单元格直接编辑、自动保存；calendar=日历视图，按日期挂载记录；kanban=看板视图，按 dict 字段分组，拖拽换列">
                 <Segmented
                   value={pageType}
-                  onChange={(v) => setPageType(v as 'list' | 'document' | 'grid' | 'calendar')}
+                  onChange={(v) => setPageType(v as 'list' | 'document' | 'grid' | 'calendar' | 'kanban')}
                   options={[
                     { label: '标准列表', value: 'list' },
                     { label: '单据页', value: 'document' },
                     { label: '表格(Excel)', value: 'grid' },
                     { label: '日历', value: 'calendar' },
+                    { label: '看板', value: 'kanban' },
                   ]}
                 />
               </Form.Item>
@@ -1296,6 +1311,38 @@ export default function AutocodePage() {
                                   <Switch checkedChildren="显示标题" unCheckedChildren="Title" size="small" />
                                 </Form.Item>
                               </>
+                            )}
+                            {pageType === 'kanban' && (
+                              <Form.Item noStyle shouldUpdate={(prev, cur) => prev.fields?.[name]?.type !== cur.fields?.[name]?.type}>
+                                {({ getFieldValue }) => {
+                                  const fieldType = getFieldValue(['fields', name, 'type']);
+                                  if (fieldType === 'dict') {
+                                    return (
+                                      <Form.Item {...rest} name={[name, 'kanbanGroup']} valuePropName="checked" noStyle>
+                                        <Switch
+                                          checkedChildren="看板分组" unCheckedChildren="Group" size="small"
+                                          onChange={(checked) => {
+                                            if (!checked) return;
+                                            // Exactly one kanbanGroup field per entity — clear it on every other field.
+                                            const allFields: any[] = form.getFieldValue('fields') || [];
+                                            allFields.forEach((_, i) => {
+                                              if (i !== name) form.setFieldValue(['fields', i, 'kanbanGroup'], false);
+                                            });
+                                          }}
+                                        />
+                                      </Form.Item>
+                                    );
+                                  }
+                                  if (fieldType === 'varchar' || fieldType === 'text') {
+                                    return (
+                                      <Form.Item {...rest} name={[name, 'kanbanTitle']} valuePropName="checked" noStyle>
+                                        <Switch checkedChildren="看板标题" unCheckedChildren="Title" size="small" />
+                                      </Form.Item>
+                                    );
+                                  }
+                                  return null;
+                                }}
+                              </Form.Item>
                             )}
                             {updateMode && (
                               <Form.Item noStyle shouldUpdate={(prev, cur) => prev.fields?.[name]?.removed !== cur.fields?.[name]?.removed}>
